@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import DashboardModal from './DashboardModal';
 import StudentDetailsModal from './StudentDetailsModal';
@@ -75,6 +75,7 @@ const generatePdfHeader = (doc, titleOverride = null) => {
 };
 
 const DashboardGeneral = () => {
+    const navigate = useNavigate();
     const [generalData, setGeneralData] = useState(null);
     const [detailedRanking, setDetailedRanking] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -88,18 +89,9 @@ const DashboardGeneral = () => {
     const [selectedStudent, setSelectedStudent] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [isDocModalOpen, setIsDocModalOpen] = useState(false);
-    const [selectedPdf, setSelectedPdf] = useState(null);
     const [ajournementThreshold, setAjournementThreshold] = useState(9.0);
     const [loadingProgress, setLoadingProgress] = useState(0);
-
-    const [isConseilModalOpen, setIsConseilModalOpen] = useState(false);
     const [decisionsSaved, setDecisionsSaved] = useState([]);
-    const [quotas, setQuotas] = useState({ ajour3: 0, ajour6: 0, redouble: 0, radiation: 0 });
-    const [searchStudent, setSearchStudent] = useState('');
-    const [searchResults, setSearchResults] = useState([]);
-    const [selectedType, setSelectedType] = useState('ajournement_3m');
-    const [selectedMotif, setSelectedMotif] = useState('Santé');
-    const [editingDecision, setEditingDecision] = useState(null);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -119,63 +111,6 @@ const DashboardGeneral = () => {
         };
         fetchData();
     }, []);
-
-    const fetchDecisions = async () => {
-        try {
-            const token = localStorage.getItem('token');
-            const res = await axios.get('/api/decisions-conseil', { headers: { Authorization: `Bearer ${token}` } });
-            setDecisionsSaved(res.data);
-        } catch (e) { }
-    };
-
-    const handleSearchEleve = async (query) => {
-        setSearchStudent(query);
-        if (query.length > 1) {
-            try {
-                const token = localStorage.getItem('token');
-                const res = await axios.get(`/api/eleves/recherche?q=${query}`, { headers: { Authorization: `Bearer ${token}` } });
-                setSearchResults(res.data);
-            } catch (e) { }
-        } else setSearchResults([]);
-    };
-
-    const handleSelectFromSearch = async (eleve) => {
-        try {
-            const token = localStorage.getItem('token');
-            await axios.post('/api/decisions-conseil', { eleve_id: eleve.id, type_decision: selectedType, motif: selectedMotif }, { headers: { Authorization: `Bearer ${token}` } });
-            fetchDecisions(); setSearchStudent(''); setSearchResults([]);
-        } catch (e) { alert("Erreur: Déjà présent."); }
-    };
-
-    const handleAddOrUpdateDecision = async () => {
-        const token = localStorage.getItem('token');
-        try {
-            if (editingDecision) {
-                await axios.put(`/api/decisions-conseil/${editingDecision.id}`, { type_decision: selectedType, motif: selectedMotif }, { headers: { Authorization: `Bearer ${token}` } });
-                setEditingDecision(null); setSearchStudent(''); fetchDecisions();
-            }
-        } catch (e) { }
-    };
-
-    const handleDeleteDecision = async (id) => {
-        if (!window.confirm("Voulez-vous supprimer cette décision ?")) return;
-        try {
-            const token = localStorage.getItem('token');
-            await axios.delete(`/api/decisions-conseil/${id}`, { headers: { Authorization: `Bearer ${token}` } });
-            fetchDecisions();
-        } catch (e) { }
-    };
-
-    const handleEditClick = (d) => {
-        setEditingDecision(d); setSelectedType(d.type_decision); setSelectedMotif(d.motif);
-        setSearchStudent(`${formatNom(d.nom)} ${formatPrenom(d.prenom)}`);
-    };
-
-    const getRestant = (type, key) => {
-        const utilise = decisionsSaved.filter(d => d.type_decision === type).length;
-        const res = quotas[key] - utilise;
-        return res < 0 ? 0 : res;
-    };
 
     useEffect(() => {
         if (!detailedRanking || detailedRanking.length === 0 || isDataReady) return;
@@ -262,7 +197,7 @@ const DashboardGeneral = () => {
             <div className="top-nav-bar">
                 <Link to="/dashboard" className="back-link">&larr; Retour</Link>
                 <div className="export-buttons">
-                    <button onClick={() => setIsConseilModalOpen(true)} className="btn-export" style={{ backgroundColor: '#6c757d' }}><i className="fa fa-gavel"></i> Conseil de Formation</button>
+                    <button onClick={() => navigate('/conseil-formation')} className="btn-export" style={{ backgroundColor: '#6c757d' }}><i className="fa fa-gavel"></i> Conseil de Formation</button>
                     <button onClick={handleExportPDF} className="btn-export pdf-btn" disabled={!isDataReady}>PDF Officiel</button>
                     <button onClick={handleExportExcel} className="btn-export excel-btn" disabled={!isDataReady}>Excel</button>
                 </div>
@@ -324,72 +259,6 @@ const DashboardGeneral = () => {
                     </div>
                 </div>
             </div>
-
-            {isConseilModalOpen && (
-                <div className="doc-modal-overlay">
-                    <div className="doc-modal-content" style={{ width: '95%', maxWidth: '1350px' }}>
-                        <div className="doc-modal-header">
-                            <h3>Conseil de Formation</h3>
-                            <button className="close-doc-btn" onClick={() => { setIsConseilModalOpen(false); setEditingDecision(null); }}>&times;</button>
-                        </div>
-                        <div className="doc-modal-body" style={{ display: 'grid', gridTemplateColumns: '400px 1fr', gap: '25px' }}>
-                            <div style={{ backgroundColor: '#f8f9fa', padding: '20px', borderRadius: '8px', border: '1px solid #ddd' }}>
-                                <h4>{editingDecision ? '📝 Modifier' : '➕ Ajouter'}</h4>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px' }}>
-                                    <label style={{ fontSize: '0.75rem' }}>Ajour. 3m ({getRestant('ajournement_3m','ajour3')}) <input type="number" className="stat-input" value={quotas.ajour3} onChange={e=>setQuotas({...quotas,ajour3:e.target.value})}/></label>
-                                    <label style={{ fontSize: '0.75rem' }}>Ajour. 6m ({getRestant('ajournement_6m','ajour6')}) <input type="number" className="stat-input" value={quotas.ajour6} onChange={e=>setQuotas({...quotas,ajour6:e.target.value})}/></label>
-                                    <label style={{ fontSize: '0.75rem' }}>Redoubl. ({getRestant('redoublement','redouble')}) <input type="number" className="stat-input" value={quotas.redouble} onChange={e=>setQuotas({...quotas,redouble:e.target.value})}/></label>
-                                    <label style={{ fontSize: '0.75rem' }}>Radiation ({getRestant('radiation','radiation')}) <input type="number" className="stat-input" value={quotas.radiation} onChange={e=>setQuotas({...quotas,radiation:e.target.value})}/></label>
-                                </div>
-                                <select className="search-input" style={{ width: '100%', marginBottom: '10px' }} value={selectedType} onChange={e => setSelectedType(e.target.value)}>
-                                    <option value="ajournement_3m">Ajournement 3 mois</option><option value="ajournement_6m">Ajournement 6 mois</option><option value="redoublement">Redoublement</option><option value="radiation">Remise à la famille</option>
-                                </select>
-                                <select className="search-input" style={{ width: '100%', marginBottom: '10px' }} value={selectedMotif} onChange={e => setSelectedMotif(e.target.value)}>
-                                    <option value="Santé">Santé</option><option value="Insuffisance Intellectuelle">Insuffisance Intellectuelle</option><option value="Discipline">Discipline</option>
-                                </select>
-                                {!editingDecision && (
-                                    <>
-                                        <input type="text" className="search-input" placeholder="Chercher élève..." value={searchStudent} onChange={e => handleSearchEleve(e.target.value)} />
-                                        <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid #eee', marginTop: '5px', backgroundColor: '#fff' }}>
-                                            {searchResults.map(e => (
-                                                <div key={e.id} className="clickable-row" style={{ padding: '10px', display: 'flex', justifyContent: 'space-between' }} onClick={() => handleSelectFromSearch(e)}>
-                                                    <span>{e.numero_incorporation} - {formatNom(e.nom)} {formatPrenom(e.prenom)}</span>
-                                                    <i className="fa fa-plus-circle" style={{ color: 'green' }}></i>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </>
-                                )}
-                                {editingDecision && (
-                                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                                        <button className="btn-export excel-btn" style={{ flex: 1 }} onClick={handleAddOrUpdateDecision}>Enregistrer</button>
-                                        <button className="btn-export pdf-btn" style={{ flex: 1 }} onClick={() => { setEditingDecision(null); setSearchStudent(''); }}>Annuler</button>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="table-responsive-dashboard">
-                                <table>
-                                    <thead><tr><th>N° INC</th><th>NOM COMPLET</th><th>DÉCISION</th><th>MOTIF</th><th style={{ textAlign: 'center' }}>ACTIONS</th></tr></thead>
-                                    <tbody>
-                                        {decisionsSaved.map(d => (
-                                            <tr key={d.id}>
-                                                <td><strong>{d.numero_incorporation}</strong></td>
-                                                <td>{formatNom(d.nom)} {formatPrenom(d.prenom)}</td>
-                                                <td><span className="status-badge" style={{ backgroundColor: '#3751FF' }}>{d.type_decision.replace('_', ' ')}</span></td>
-                                                <td>{d.motif}</td>
-                                                <td style={{ textAlign: 'center' }}>
-                                                    <i className="fa fa-pencil" style={{ color: '#ffc107', cursor: 'pointer', marginRight: '15px', fontSize:'1.2rem' }} onClick={() => handleEditClick(d)}></i>
-                                                    <i className="fa fa-trash" style={{ color: '#dc3545', cursor: 'pointer', fontSize:'1.2rem' }} onClick={() => handleDeleteDecision(d.id)}></i>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             <button className="floating-doc-btn" onClick={() => setIsDocModalOpen(true)} title="Documentation"><i className="fa fa-book"></i> Documentation</button>
         </div>

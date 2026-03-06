@@ -1,15 +1,10 @@
-// src/components/GestionUtilisateurs.js
-
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { 
+    FaUsers, FaUserClock, FaUserTag, FaTrashAlt, 
+    FaUserEdit, FaCheck, FaTimes, FaSave, FaUserPlus, FaShieldAlt 
+} from 'react-icons/fa';
 import './GestionUtilisateurs.css';
-
-// Une icône simple pour la fermeture, pour ne pas dépendre d'une librairie externe
-const CloseIcon = () => (
-    <svg height="20" width="20" viewBox="0 0 20 20">
-        <path d="M15.898,4.045c-0.271-0.272-0.713-0.272-0.986,0l-4.71,4.711L5.491,4.045c-0.272-0.272-0.714-0.272-0.986,0s-0.272,0.714,0,0.986l4.709,4.711l-4.71,4.711c-0.272,0.271-0.272,0.713,0,0.986c0.136,0.136,0.314,0.203,0.492,0.203c0.179,0,0.357-0.067,0.493-0.203l4.71-4.711l4.71,4.711c0.137,0.136,0.314,0.203,0.494,0.203c0.178,0,0.355-0.067,0.492-0.203c0.272-0.271,0.272-0.713,0-0.986l-4.71-4.711l4.71-4.711C16.172,4.759,16.172,4.317,15.898,4.045z"></path>
-    </svg>
-);
 
 const GestionUtilisateurs = () => {
     const [users, setUsers] = useState([]);
@@ -17,255 +12,199 @@ const GestionUtilisateurs = () => {
     const [success, setSuccess] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [roleSelections, setRoleSelections] = useState({});
+    const [editingUserId, setEditingUserId] = useState(null);
+    const [newRole, setNewRole] = useState('');
 
-    // --- AJOUT 1: États pour gérer la modification en ligne ---
-    const [editingUserId, setEditingUserId] = useState(null); // L'ID de l'utilisateur en cours de modification
-    const [newRole, setNewRole] = useState(''); // Le nouveau rôle sélectionné pendant la modification
-
-    // Sépare les utilisateurs pour un affichage plus clair
     const pendingUsers = users.filter(user => user.statut === 'en_attente');
     const activeUsers = users.filter(user => user.statut !== 'en_attente');
     const ROLES = ['admin', 'operateur_code', 'operateur_note'];
 
-    const getAuthHeaders = () => {
-        const token = localStorage.getItem('token');
-        return { headers: { Authorization: `Bearer ${token}` } };
-    };
+    const getAuthHeaders = () => ({
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+    });
 
     const fetchUsers = async () => {
         try {
             const response = await axios.get('/api/utilisateurs', getAuthHeaders());
             setUsers(response.data);
         } catch (err) {
-            setError('Impossible de charger les utilisateurs.');
-            setTimeout(() => setError(''), 5000);
+            setError('Erreur de chargement des données.');
         }
     };
 
-    useEffect(() => {
-        fetchUsers();
-    }, []);
+    useEffect(() => { fetchUsers(); }, []);
 
     const handleDelete = async (userId) => {
-        if (window.confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.')) {
+        if (window.confirm('Supprimer cet utilisateur ?')) {
             try {
                 await axios.delete(`/api/utilisateurs/${userId}`, getAuthHeaders());
-                setSuccess('Utilisateur supprimé avec succès !');
+                setSuccess('Utilisateur supprimé.');
                 fetchUsers();
-            } catch (err) {
-                setError(err.response?.data?.message || 'Erreur lors de la suppression.');
-            } finally {
-                setTimeout(() => setSuccess(''), 3000);
-            }
+            } catch (err) { setError('Erreur de suppression.'); }
+            setTimeout(() => setSuccess(''), 3000);
         }
     };
 
     const handleApprove = async (user) => {
         const role = roleSelections[user.id];
-        if (!role) {
-            alert(`Veuillez sélectionner un rôle pour ${user.nom_utilisateur}.`);
-            return;
-        }
-
+        if (!role) return alert('Attribuez un rôle d\'abord.');
         try {
             await axios.put(`/api/utilisateurs/${user.id}/approuver`, { role }, getAuthHeaders());
-            setSuccess('Utilisateur approuvé avec succès !');
+            setSuccess('Utilisateur approuvé !');
             fetchUsers();
-            if (pendingUsers.length === 1) { // Si c'était le dernier, on ferme la modale
-                setIsModalOpen(false);
-            }
-        } catch (err) {
-            setError(err.response?.data?.message || 'Erreur lors de l\'approbation.');
-        } finally {
-            setTimeout(() => setSuccess(''), 3000);
-        }
+            if (pendingUsers.length === 1) setIsModalOpen(false);
+        } catch (err) { setError('Erreur approbation.'); }
+        setTimeout(() => setSuccess(''), 3000);
     };
 
-    const handleReject = async (userId) => {
-        if (window.confirm('Êtes-vous sûr de vouloir rejeter cette demande ?')) {
-            try {
-                await axios.put(`/api/utilisateurs/${userId}/rejeter`, {}, getAuthHeaders());
-                setSuccess('Demande rejetée.');
-                fetchUsers();
-                if (pendingUsers.length === 1) {
-                    setIsModalOpen(false);
-                }
-            } catch (err) {
-                setError(err.response?.data?.message || 'Erreur lors du rejet.');
-            } finally {
-                setTimeout(() => setSuccess(''), 3000);
-            }
-        }
-    };
-
-    const handleRoleChange = (userId, role) => {
-        setRoleSelections(prev => ({ ...prev, [userId]: role }));
-    };
-
-    // --- AJOUT 2: Fonctions pour gérer le mode édition ---
-
-    // Active le mode édition pour une ligne
-    const handleEditClick = (user) => {
-        setEditingUserId(user.id);
-        setNewRole(user.role); // Pré-remplit le select avec le rôle actuel
-    };
-
-    // Annule le mode édition
-    const handleCancelEdit = () => {
-        setEditingUserId(null);
-        setNewRole('');
-    };
-
-    // Sauvegarde le nouveau rôle
     const handleSaveRole = async (userToUpdate) => {
-        if (!newRole) {
-            setError('Veuillez sélectionner un rôle.');
-            setTimeout(() => setError(''), 3000);
-            return;
-        }
-
         try {
-            // On utilise la route PUT existante. Elle nécessite le nom_utilisateur et le role.
-            // On envoie le nom d'utilisateur actuel pour ne pas le changer.
             await axios.put(`/api/utilisateurs/${userToUpdate.id}`, {
                 role: newRole,
-                nom_utilisateur: userToUpdate.nom_utilisateur // Important: Le backend l'exige
+                nom_utilisateur: userToUpdate.nom_utilisateur,
+                assigned_matiere_id: userToUpdate.assigned_matiere_id,
+                assigned_type_examen: userToUpdate.assigned_type_examen,
+                assigned_promotion: userToUpdate.assigned_promotion
             }, getAuthHeaders());
+            setSuccess('Rôle mis à jour.');
+            setEditingUserId(null);
+            fetchUsers();
+        } catch (err) { setError('Erreur mise à jour.'); }
+        setTimeout(() => setSuccess(''), 3000);
+    };
 
-            setSuccess('Rôle mis à jour avec succès !');
-            setEditingUserId(null); // Quitte le mode édition
-            fetchUsers(); // Rafraîchit la liste des utilisateurs
-        } catch (err) {
-            setError(err.response?.data?.message || 'Erreur lors de la mise à jour du rôle.');
-        } finally {
-            setTimeout(() => setSuccess(''), 3000);
-        }
+    const getInitials = (nom, prenom) => {
+        return `${nom ? nom[0] : ''}${prenom ? prenom[0] : ''}`.toUpperCase();
     };
 
     return (
-        <div className="gestion-container">
-            <h2>Gestion des Utilisateurs</h2>
-
-            {error && <p className="error-message">{error}</p>}
-            {success && <p className="success-message">{success}</p>}
-
-            <div className="gestion-header">
-                <h3>Liste des utilisateurs</h3>
-                <button className="requests-button" onClick={() => setIsModalOpen(true)}>
-                    Demandes en attente
-                    {pendingUsers.length > 0 && <span className="requests-count">{pendingUsers.length}</span>}
+        <div className="gu-main-wrapper">
+            <div className="gu-dashboard-header">
+                <div className="gu-header-info">
+                    <div className="gu-icon-box">
+                        <FaShieldAlt />
+                    </div>
+                    <div>
+                        <h1 className="gu-title">Gestion des Utilisateurs</h1>
+                        <p className="gu-subtitle">Contrôle des accès et habilitations du personnel</p>
+                    </div>
+                </div>
+                
+                <button 
+                    className={`gu-pending-trigger ${pendingUsers.length > 0 ? 'gu-pulse' : ''}`} 
+                    onClick={() => setIsModalOpen(true)}
+                >
+                    <FaUserPlus />
+                    <span>Demandes en attente</span>
+                    {pendingUsers.length > 0 && <span className="gu-notif-badge">{pendingUsers.length}</span>}
                 </button>
             </div>
 
-            <table className="users-table">
-                <thead>
-                    <tr>
-                        <th>Nom Complet</th>
-                        <th>Nom d'utilisateur</th>
-                        <th>Rôle</th>
-                        <th>Statut</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {activeUsers.length > 0 ? activeUsers.map((user) => (
-                        <tr key={user.id}>
-                            <td>{user.nom} {user.prenom}</td>
-                            <td>{user.nom_utilisateur}</td>
-                            {/* --- MODIFICATION 1: Affichage conditionnel du rôle --- */}
-                            <td>
-                                {editingUserId === user.id ? (
-                                    <select
-                                        className="role-select"
-                                        value={newRole}
-                                        onChange={(e) => setNewRole(e.target.value)}
-                                    >
-                                        <option value="" disabled>Choisir un rôle...</option>
-                                        {ROLES.map(role => (
-                                            <option key={role} value={role}>
-                                                {role.replace('_', ' ')}
-                                            </option>
-                                        ))}
-                                    </select>
-                                ) : (
-                                    user.role || 'N/A'
-                                )}
-                            </td>
-                            <td>
-                                <span className={`status-badge status-${user.statut}`}>
-                                    {user.statut.replace('_', ' ')}
-                                </span>
-                            </td>
-                            {/* --- MODIFICATION 2: Affichage conditionnel des boutons d'action --- */}
-                            <td className="actions">
-                                {editingUserId === user.id ? (
-                                    <>
-                                        <button className="approve-btn" onClick={() => handleSaveRole(user)}>Enregistrer</button>
-                                        <button className="reject-btn" onClick={handleCancelEdit}>Annuler</button>
-                                    </>
-                                ) : (
-                                    <>
-                                        <button className="modify-btn" onClick={() => handleEditClick(user)}>Modifier Rôle</button>
-                                        <button className="delete-btn" onClick={() => handleDelete(user.id)}>Supprimer</button>
-                                    </>
-                                )}
-                            </td>
-                        </tr>
-                    )) : (
-                        <tr>
-                            <td colSpan="5" style={{ textAlign: 'center' }}>Aucun utilisateur actif.</td>
-                        </tr>
-                    )}
-                </tbody>
-            </table>
+            {error && <div className="gu-alert gu-alert-error"><FaTimes /> {error}</div>}
+            {success && <div className="gu-alert gu-alert-success"><FaCheck /> {success}</div>}
+
+            <div className="gu-content-card">
+                <div className="gu-card-header">
+                    <FaUsers /> <span>Personnel Actif ({activeUsers.length})</span>
+                </div>
+                <div className="gu-table-container">
+                    <table className="gu-table">
+                        <thead>
+                            <tr>
+                                <th>Utilisateur</th>
+                                <th>Identifiant</th>
+                                <th>Rôle & Privilèges</th>
+                                <th>Statut</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {activeUsers.map((user) => (
+                                <tr key={user.id} className={editingUserId === user.id ? 'gu-row-editing' : ''}>
+                                    <td className="gu-td-user">
+                                        <div className="gu-avatar">{getInitials(user.nom, user.prenom)}</div>
+                                        <div className="gu-name-stack">
+                                            <span className="gu-full-name">{user.nom} {user.prenom}</span>
+                                        </div>
+                                    </td>
+                                    <td className="gu-username">@{user.nom_utilisateur}</td>
+                                    <td>
+                                        {editingUserId === user.id ? (
+                                            <select className="gu-role-select" value={newRole} onChange={(e) => setNewRole(e.target.value)}>
+                                                {ROLES.map(role => <option key={role} value={role}>{role.replace('_', ' ')}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className={`gu-role-badge gu-role-${user.role}`}>
+                                                <FaUserTag /> {user.role?.replace('_', ' ')}
+                                            </span>
+                                        )}
+                                    </td>
+                                    <td>
+                                        <span className={`gu-status-pill gu-status-${user.statut}`}>
+                                            {user.statut}
+                                        </span>
+                                    </td>
+                                    <td className="gu-actions-cell">
+                                        {editingUserId === user.id ? (
+                                            <div className="gu-btn-group">
+                                                <button className="gu-btn-circle gu-save" onClick={() => handleSaveRole(user)} title="Sauvegarder"><FaSave /></button>
+                                                <button className="gu-btn-circle gu-cancel" onClick={() => setEditingUserId(null)} title="Annuler"><FaTimes /></button>
+                                            </div>
+                                        ) : (
+                                            <div className="gu-btn-group">
+                                                <button className="gu-btn-circle gu-edit" onClick={() => {setEditingUserId(user.id); setNewRole(user.role);}} title="Modifier"><FaUserEdit /></button>
+                                                <button className="gu-btn-circle gu-delete" onClick={() => handleDelete(user.id)} title="Supprimer"><FaTrashAlt /></button>
+                                            </div>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
 
             {isModalOpen && (
-                <div className="modal-overlay">
-                    {/* ... (le contenu de la modale reste inchangé) ... */}
-                    <div className="modal-content">
-                        <div className="modal-header">
-                            <h4>Demandes d'inscription en attente</h4>
-                            <button className="modal-close-btn" onClick={() => setIsModalOpen(false)}>
-                                <CloseIcon />
-                            </button>
+                <div className="gu-modal-overlay">
+                    <div className="gu-modal-box">
+                        <div className="gu-modal-header">
+                            <h3><FaUserClock /> Inscriptions à valider</h3>
+                            <button className="gu-close-btn" onClick={() => setIsModalOpen(false)}><FaTimes /></button>
                         </div>
-                        <div className="modal-body">
-                            <table className="users-table modal-table">
-                                <thead>
-                                    <tr>
-                                        <th>Nom Complet</th>
-                                        <th>Nom d'utilisateur</th>
-                                        <th>Attribuer un rôle</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {pendingUsers.map((user) => (
-                                        <tr key={user.id}>
-                                            <td>{user.nom} {user.prenom}</td>
-                                            <td>{user.nom_utilisateur}</td>
-                                            <td>
-                                                <select
-                                                    className="role-select"
-                                                    value={roleSelections[user.id] || ''}
-                                                    onChange={(e) => handleRoleChange(user.id, e.target.value)}
-                                                >
-                                                    <option value="" disabled>Choisir un rôle...</option>
-                                                    {ROLES.map(role => (
-                                                        <option key={role} value={role}>
-                                                            {role.replace('_', ' ')}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            </td>
-                                            <td className="actions">
-                                                <button className="approve-btn" onClick={() => handleApprove(user)}>Approuver</button>
-                                                <button className="reject-btn" onClick={() => handleReject(user.id)}>Rejeter</button>
-                                            </td>
+                        <div className="gu-modal-body">
+                            {pendingUsers.length === 0 ? (
+                                <div className="gu-empty-state">Toutes les demandes ont été traitées.</div>
+                            ) : (
+                                <table className="gu-table gu-modal-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Utilisateur</th>
+                                            <th>Rôle à définir</th>
+                                            <th>Actions</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {pendingUsers.map((user) => (
+                                            <tr key={user.id}>
+                                                <td>
+                                                    <div className="gu-full-name">{user.nom} {user.prenom}</div>
+                                                    <small className="gu-username">@{user.nom_utilisateur}</small>
+                                                </td>
+                                                <td>
+                                                    <select className="gu-role-select" value={roleSelections[user.id] || ''} onChange={(e) => setRoleSelections({...roleSelections, [user.id]: e.target.value})}>
+                                                        <option value="">Choisir un rôle...</option>
+                                                        {ROLES.map(role => <option key={role} value={role}>{role.replace('_', ' ')}</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="gu-actions-cell">
+                                                    <button className="gu-action-btn gu-approve-btn" onClick={() => handleApprove(user)}><FaCheck /> Valider</button>
+                                                    <button className="gu-action-btn gu-reject-btn" onClick={() => axios.put(`/api/utilisateurs/${user.id}/rejeter`, {}, getAuthHeaders()).then(fetchUsers)}><FaTimes /> Rejeter</button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
                         </div>
                     </div>
                 </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { FiUsers, FiLayers, FiTrash2, FiArrowLeft, FiCheckCircle, FiAlertCircle } from 'react-icons/fi';
 import './CopiesNotees.css';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
@@ -10,289 +11,244 @@ function CopiesNotees() {
     const [copies, setCopies] = useState([]);
     const [matieres, setMatieres] = useState([]);
     const [dashboardData, setDashboardData] = useState([]);
+    const [selectedPromotion, setSelectedPromotion] = useState('79E');
+    const [selectedPopulation, setSelectedPopulation] = useState('all');
+    const [promotions, setPromotions] = useState([]);
     const [selectedMatiereFilter, setSelectedMatiereFilter] = useState('all');
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalContent, setModalContent] = useState({ title: '', codes: [], layout: 'single-column' });
     const [isModalLoading, setIsModalLoading] = useState(false);
-
-    // --- NOUVEAU : État pour la pagination ---
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10; // Limite de 10 lignes par page
+    const itemsPerPage = 10;
+
+    const populations = [
+        { id: 'all', label: 'Toute la promotion' },
+        { id: 'actif', label: 'Liste Originale (Actifs)' },
+        { id: 'conseil', label: 'Liste Conseil (Redoublants/Ajournés)' }
+    ];
 
     const getAuthHeaders = useCallback(() => ({
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     }), []);
 
+    const fetchDashboardData = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const res = await axios.get(
+                `${API_BASE_URL}/api/stats/copies-par-matiere?promotion=${selectedPromotion}&population=${selectedPopulation}`,
+                getAuthHeaders()
+            );
+            setDashboardData(res.data);
+        } catch (err) { 
+            console.error(err); 
+        } finally { 
+            setIsLoading(false); 
+        }
+    }, [getAuthHeaders, selectedPromotion, selectedPopulation]);
+
     useEffect(() => {
-        const fetchMatieres = async () => {
+        const fetchInitialData = async () => {
             try {
-                const res = await axios.get(`${API_BASE_URL}/api/matieres`, getAuthHeaders());
-                setMatieres(res.data);
-            } catch (err) {
-                console.error("Erreur chargement matières", err);
-            }
+                const [resM, resP] = await Promise.all([
+                    axios.get(`${API_BASE_URL}/api/matieres`, getAuthHeaders()),
+                    axios.get(`${API_BASE_URL}/api/promotions`, getAuthHeaders())
+                ]);
+                setMatieres(resM.data);
+                if (resP.data && resP.data.length > 0) setPromotions(resP.data);
+                else setPromotions(Array.from({ length: 5 }, (_, i) => `${77 + i}E`));
+            } catch (err) { console.error(err); }
         };
-        fetchMatieres();
+        fetchInitialData();
     }, [getAuthHeaders]);
 
     useEffect(() => {
-        const fetchDashboardData = async () => {
-             try {
-                const res = await axios.get(`${API_BASE_URL}/api/stats/copies-par-matiere`, getAuthHeaders());
-                setDashboardData(res.data);
-            } catch (err) {
-                console.error("Erreur chargement du tableau de bord", err);
-            }
-        };
         fetchDashboardData();
-    }, [getAuthHeaders]);
-
-    // Reset de la page à 1 quand on change de filtre ou de données
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [copies, selectedMatiereFilter]);
+    }, [fetchDashboardData]);
 
     useEffect(() => {
         if (currentView === 'table' || selectedCard) {
             const fetchCopies = async () => {
-                setIsLoading(true);
-                setError('');
-                const matiereIdToFetch = selectedCard ? selectedCard.id : selectedMatiereFilter;
+                const matiereId = selectedCard ? selectedCard.id : selectedMatiereFilter;
                 try {
-                    const res = await axios.get(`${API_BASE_URL}/api/copies/notees-non-liees?matiereId=${matiereIdToFetch}`, getAuthHeaders());
+                    const res = await axios.get(
+                        `${API_BASE_URL}/api/copies/notees-non-liees?matiereId=${matiereId}&promotion=${selectedPromotion}&population=${selectedPopulation}`,
+                        getAuthHeaders()
+                    );
                     setCopies(res.data);
-                } catch (err) {
-                    setError('Erreur lors du chargement des données.');
-                    console.error("Erreur chargement copies", err);
-                } finally {
-                    setIsLoading(false);
-                }
+                } catch (err) { console.error(err); }
             };
             fetchCopies();
         }
-    }, [selectedMatiereFilter, selectedCard, currentView, getAuthHeaders]);
+    }, [selectedMatiereFilter, selectedCard, currentView, getAuthHeaders, selectedPromotion, selectedPopulation]);
 
     const handleCardClick = (matiere) => {
         setSelectedCard(matiere);
+        setCurrentPage(1);
     };
 
-    const handleReturnToDashboard = () => {
-        setSelectedCard(null);
+    const handleDeleteNote = async (copieId) => {
+        if (!window.confirm("Supprimer cette note ?")) return;
+        try {
+            await axios.delete(`${API_BASE_URL}/api/resultats/${copieId}`, getAuthHeaders());
+            setCopies(prev => prev.filter(c => c.id !== copieId));
+            fetchDashboardData();
+        } catch (err) { alert("Erreur."); }
     };
-
-    const totalPendingCodes = dashboardData.reduce((total, item) => total + item.avec_note, 0);
 
     const handleSansNoteClick = async (matiereId, nomMatiere) => {
-        document.body.classList.add('modal-print-active');
         setIsModalOpen(true);
         setIsModalLoading(true);
-        setModalContent({ title: `Codes sans note pour ${nomMatiere}`, codes: [], layout: 'single-column' });
         try {
-            const res = await axios.get(`${API_BASE_URL}/api/codes/sans-note/${matiereId}`, getAuthHeaders());
-            const codes = res.data;
-            let layout = codes.length > 0 && /^\d+$/.test(codes[0].code) ? 'multi-column' : 'single-column';
-            setModalContent({ title: `Codes sans note pour ${nomMatiere}`, codes: codes, layout: layout });
-        } catch (err) {
-            console.error("Erreur chargement des codes sans note", err);
-            setModalContent(prev => ({ ...prev, codes: [{ code: "Erreur de chargement." }] }));
-        } finally {
-            setIsModalLoading(false);
-        }
+            const res = await axios.get(`${API_BASE_URL}/api/codes/sans-note/${matiereId}?promotion=${selectedPromotion}&population=${selectedPopulation}`, getAuthHeaders());
+            setModalContent({ 
+                title: `Codes manquants : ${nomMatiere}`, 
+                codes: res.data, 
+                layout: res.data.length > 15 ? 'multi-column' : 'single-column' 
+            });
+        } catch (err) { console.error(err); }
+        finally { setIsModalLoading(false); }
     };
 
-    const closeModal = () => {
-        document.body.classList.remove('modal-print-active');
-        setIsModalOpen(false);
-    };
+    const totalPendingCodes = dashboardData.reduce((total, item) => total + (item.en_attente || 0), 0);
 
-    const handlePrint = () => {
-        window.print();
-    };
-
-    // --- NOUVEAU : Logique de changement de page ---
-    const paginate = (pageNumber) => setCurrentPage(pageNumber);
-
-    const CopiesTable = ({ isEmbedded = false }) => {
-        // Calcul des index pour la pagination
+    const CopiesTable = () => {
         const indexOfLastItem = currentPage * itemsPerPage;
         const indexOfFirstItem = indexOfLastItem - itemsPerPage;
         const currentCopies = copies.slice(indexOfFirstItem, indexOfLastItem);
         const totalPages = Math.ceil(copies.length / itemsPerPage);
 
         return (
-            <div className={`card ${isEmbedded ? 'embedded-table' : ''}`}>
-                {!isEmbedded && (
-                     <h2 className="card-title">Copies Notées en Attente de Liaison</h2>
-                )}
-                {currentView === 'table' && !selectedCard && (
-                     <div className="filter-bar">
-                        <label htmlFor="matiere-filter">Filtrer par matière :</label>
-                        <select
-                            id="matiere-filter"
-                            value={selectedMatiereFilter}
-                            onChange={(e) => setSelectedMatiereFilter(e.target.value)}>
-                            <option value="all">Toutes les matières</option>
-                            {matieres.map(m => (
-                                <option key={m.id} value={m.id}>{m.nom_matiere}</option>
-                            ))}
-                        </select>
+            <div className="table-wrapper">
+                <table className="custom-table">
+                    <thead>
+                        <tr>
+                            <th>Matière</th>
+                            <th>Code Anonyme</th>
+                            <th>Note / 20</th>
+                            <th className="text-center">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {currentCopies.map(copie => (
+                            <tr key={copie.id}>
+                                <td className="font-semibold">{copie.nom_matiere}</td>
+                                <td><code className="code-tag">{copie.code_anonyme}</code></td>
+                                <td><span className="note-badge">{copie.note}</span></td>
+                                <td className="text-center">
+                                    <button className="btn-delete-icon" onClick={() => handleDeleteNote(copie.id)}>
+                                        <FiTrash2 />
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                {copies.length > itemsPerPage && (
+                    <div className="pagination">
+                        <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
+                        <span>{currentPage} / {totalPages}</span>
+                        <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
                     </div>
-                )}
-                {isLoading ? <p>Chargement...</p> : error ? <p className="error-message">{error}</p> : (
-                    <>
-                        <div className="table-container">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Matière</th>
-                                        <th>Code Anonyme</th>
-                                        <th>Note / 20</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {currentCopies.length > 0 ? (
-                                        currentCopies.map(copie => (
-                                            <tr key={copie.id}>
-                                                <td>{copie.nom_matiere}</td>
-                                                <td>{copie.code_anonyme}</td>
-                                                <td>{copie.note}</td>
-                                            </tr>
-                                        ))
-                                    ) : (
-                                        <tr>
-                                            <td colSpan="3">Aucune copie notée trouvée pour ce filtre.</td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                        
-                        {/* --- NOUVEAU : Contrôles de Pagination --- */}
-                        {copies.length > 0 && (
-                            <div className="pagination-container">
-                                <div className="pagination-info">
-                                    Affichage de {indexOfFirstItem + 1} à {Math.min(indexOfLastItem, copies.length)} sur {copies.length} copies
-                                </div>
-                                <div className="pagination-buttons">
-                                    <button 
-                                        onClick={() => paginate(currentPage - 1)} 
-                                        disabled={currentPage === 1}
-                                        className="btn-page"
-                                    >
-                                        &larr; Précédent
-                                    </button>
-                                    <span className="page-number">Page {currentPage} / {totalPages}</span>
-                                    <button 
-                                        onClick={() => paginate(currentPage + 1)} 
-                                        disabled={currentPage === totalPages}
-                                        className="btn-page"
-                                    >
-                                        Suivant &rarr;
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                    </>
                 )}
             </div>
         );
     };
 
     return (
-        <div className="page-container">
-            <header className="main-header">
-                <h1>Gestion de l'Anonymat</h1>
-                <div className="view-selector">
-                    <button
-                        className={`btn-view ${currentView === 'dashboard' ? 'active' : ''}`}
-                        onClick={() => { setCurrentView('dashboard'); setSelectedCard(null); }}>
-                        Tableau de Bord
-                    </button>
-                    <button
-                        className={`btn-view ${currentView === 'table' ? 'active' : ''}`}
-                        onClick={() => { setCurrentView('table'); setSelectedCard(null); }}>
-                        Copies en Attente
-                        {totalPendingCodes > 0 && <span className="badge-notification">{totalPendingCodes}</span>}
-                    </button>
+        <div className="copies-notees-container">
+            <div className="top-toolbar">
+                <div className="toolbar-title">
+                    <h1>Suivi des Notes Anonymes</h1>
+                    <p>{selectedPromotion} - {populations.find(p => p.id === selectedPopulation)?.label}</p>
                 </div>
-            </header>
+                <div className="toolbar-filters">
+                    <div className="filter-group">
+                        <label><FiLayers /> Promotion</label>
+                        <select value={selectedPromotion} onChange={e => setSelectedPromotion(e.target.value)}>
+                            {promotions.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                    </div>
+                    <div className="filter-group">
+                        <label><FiUsers /> Population</label>
+                        <select value={selectedPopulation} onChange={e => setSelectedPopulation(e.target.value)}>
+                            {populations.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div className="main-nav-tabs">
+                <button className={currentView === 'dashboard' ? 'active' : ''} onClick={() => {setCurrentView('dashboard'); setSelectedCard(null);}}>
+                    Vue d'ensemble
+                </button>
+                <button className={currentView === 'table' ? 'active' : ''} onClick={() => {setCurrentView('table'); setSelectedCard(null);}}>
+                    Liste détaillée {totalPendingCodes > 0 && <span className="notif-dot">{totalPendingCodes}</span>}
+                </button>
+            </div>
 
             {currentView === 'dashboard' && (
-                <div className="dashboard-wrapper">
+                <div className="dashboard-content">
                     {selectedCard ? (
-                        <div className="selected-view-container">
-                            <div className="selected-card-panel">
-                                <button onClick={handleReturnToDashboard} className="btn-back">
-                                    &larr; Retour
-                                </button>
-                                <div key={selectedCard.id} className="dashboard-item is-selected">
-                                    <h4>{selectedCard.nom_matiere}</h4>
-                                    <span className="badge badge-success">Avec note: {selectedCard.avec_note}</span>
-                                    <span
-                                        className={`badge badge-warning ${selectedCard.sans_note > 0 ? 'clickable-badge' : ''}`}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleSansNoteClick(selectedCard.id, selectedCard.nom_matiere);
-                                        }}>
-                                        Sans note: {selectedCard.sans_note}
-                                    </span>
+                        <div className="split-view">
+                            <div className="side-panel">
+                                <button className="btn-back-flat" onClick={() => setSelectedCard(null)}><FiArrowLeft /> Retour</button>
+                                <div className="matiere-stat-card selected">
+                                    <h3>{selectedCard.nom_matiere}</h3>
+                                    <div className="stat-row"><span>Notées</span><span className="val success">{selectedCard.avec_note}</span></div>
+                                    <div className="stat-row"><span>En attente</span><span className="val" style={{color:'#3b82f6'}}>{selectedCard.en_attente}</span></div>
+                                    <div className="stat-row"><span>Manquantes</span><span className="val warning">{selectedCard.sans_note < 0 ? 0 : selectedCard.sans_note}</span></div>
                                 </div>
                             </div>
-                            <div className="table-panel">
-                                <CopiesTable isEmbedded={true} />
+                            <div className="main-panel">
+                                <CopiesTable />
                             </div>
                         </div>
                     ) : (
-                        <div className="card">
-                            <h2 className="card-title">Statistiques par Matière</h2>
-                            <div className="dashboard-container">
-                                {dashboardData.map(item => (
-                                    <div key={item.id} className="dashboard-item" onClick={() => handleCardClick(item)}>
-                                        <h4>{item.nom_matiere}</h4>
-                                        <span className="badge badge-success">Avec note: {item.avec_note}</span>
-                                        <span
-                                            className={`badge badge-warning ${item.sans_note > 0 ? 'clickable-badge' : ''}`}
-                                            onClick={(e) => {
-                                                if (item.sans_note > 0) {
-                                                    e.stopPropagation();
-                                                    handleSansNoteClick(item.id, item.nom_matiere);
-                                                }
-                                            }}>
-                                            Sans note: {item.sans_note}
-                                        </span>
+                        <div className="subjects-grid">
+                            {isLoading ? <p>Chargement...</p> : dashboardData.map(item => (
+                                <div key={item.id} className="subject-card" onClick={() => handleCardClick(item)}>
+                                    <div className="subject-card-header"><h4>{item.nom_matiere}</h4></div>
+                                    <div className="subject-card-body">
+                                        <div className="mini-stat"><FiCheckCircle className="icon-success" /> <span>{item.avec_note} notées</span></div>
+                                        <div className="mini-stat"><FiUsers style={{color:'#3b82f6'}} /> <span>{item.en_attente} en attente</span></div>
+                                        <div className="mini-stat clickable" onClick={(e) => { e.stopPropagation(); handleSansNoteClick(item.id, item.nom_matiere); }}>
+                                            <FiAlertCircle className="icon-warning" /> <span>{item.sans_note < 0 ? 0 : item.sans_note} manquantes</span>
+                                        </div>
                                     </div>
-                                ))}
-                            </div>
+                                </div>
+                            ))}
                         </div>
                     )}
                 </div>
             )}
 
-            {currentView === 'table' && <CopiesTable />}
+            {currentView === 'table' && (
+                <div className="table-view-container">
+                    <div className="table-header-actions">
+                        <select value={selectedMatiereFilter} onChange={e => setSelectedMatiereFilter(e.target.value)}>
+                            <option value="all">Toutes les matières</option>
+                            {matieres.map(m => <option key={m.id} value={m.id}>{m.nom_matiere}</option>)}
+                        </select>
+                    </div>
+                    <CopiesTable />
+                </div>
+            )}
 
             {isModalOpen && (
-                 <div className="modal-overlay">
-                    <div className="modal-content">
+                <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h3>{modalContent.title}</h3>
-                            <button onClick={closeModal} className="close-btn">&times;</button>
+                            <button className="close-x" onClick={() => setIsModalOpen(false)}>&times;</button>
                         </div>
                         <div className="modal-body">
-                             <h3 className="print-only-title">{modalContent.title}</h3>
                             {isModalLoading ? <p>Chargement...</p> : (
-                                <ul className={`code-list ${modalContent.layout}`}>
-                                    {modalContent.codes.length > 0 ? (
-                                        modalContent.codes.map((c, index) => <li key={index}>{c.code}</li>)
-                                    ) : (
-                                        <li>Aucun code sans note trouvé.</li>
-                                    )}
-                                </ul>
+                                <div className={`codes-grid-display ${modalContent.layout}`}>
+                                    {modalContent.codes.map((c, i) => <div key={i} className="code-item-box">{c.code}</div>)}
+                                </div>
                             )}
-                        </div>
-                        <div className="modal-footer">
-                            <button onClick={handlePrint} className="print-btn">Imprimer la liste</button>
                         </div>
                     </div>
                 </div>

@@ -1,0 +1,105 @@
+.conseil-page h1 {
+    font-size: 1.5rem;
+    color: var(--text-main);
+}
+
+.conseil-layout {
+    display: grid;
+    grid-template-columns: 350px 1fr;
+    gap: 25px;
+    margin-top: 20px;
+}
+
+.conseil-sidebar .card {
+    padding: 20px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid var(--border-color-light);
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 5px;
+    color: var(--text-secondary);
+}
+
+.search-wrapper {
+    position: relative;
+}
+
+.search-results-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid var(--border-color-light);
+    border-radius: 4px;
+    z-index: 100;
+    max-height: 200px;
+    overflow-y: auto;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.result-item {
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.result-item:hover {
+    background-color: #f8f9fa;
+}
+
+.quota-grid .stat-card-redesign.danger {
+    border-color: #dc3545;
+    background-color: #fff5f5;
+}
+
+.quota-grid .stat-card-redesign.danger p {
+    color: #dc3545;
+}
+
+.badge-ajournement_3m { background-color: #17a2b8; }
+.badge-ajournement_6m { background-color: #007bff; }
+.badge-redoublement { background-color: #6f42c1; }
+.badge-radiation { background-color: #000000; }
+
+.editing-name {
+    padding: 10px;
+    background: #fff3cd;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+}
+
+.btn-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.1rem;
+    margin-right: 10px;
+}
+
+.btn-icon.edit { color: #ffc107; }
+.btn-icon.delete { color: #dc3545; }
+
+.quota-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.quota-inputs input {
+    width: 50px;
+    padding: 2px;
+    font-size: 0.8rem;
+}

@@ -42,8 +42,7 @@ const HistoryModal = ({ resultat, onClose }) => {
                         </div>
                     )}
                 </div>
-                <div className="modal-actions"><button className="btn-cancel" onClick={onClose}>Fermer</button></div>
-            </div>
+                <div className="modal-actions"><button className="btn-cancel" onClick={onClose}>Fermer</button></div>            </div>
         </div>
     );
 };
@@ -122,9 +121,11 @@ function Resultats() {
     const [resultats, setResultats] = useState([]);
     const [matieres, setMatieres] = useState([]);
     const [examTypes, setExamTypes] = useState([]);
+    const [promotions, setPromotions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedMatiere, setSelectedMatiere] = useState('');
     const [selectedTypeExamen, setSelectedTypeExamen] = useState('');
+    const [selectedPromotion, setSelectedPromotion] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
     const [resultsPerPage] = useState(10);
@@ -149,16 +150,16 @@ function Resultats() {
         setLoading(true);
         const token = localStorage.getItem('token');
         const config = { headers: { Authorization: `Bearer ${token}` } };
-
         const resultsRequest = axios.get('/api/resultats', config);
         const matieresRequest = axios.get('/api/matieres', config);
         const examTypesRequest = axios.get('/api/examens', config);
-
-        Promise.all([resultsRequest, matieresRequest, examTypesRequest])
-            .then(([resResults, resMatieres, resExamTypes]) => {
+        const promotionsRequest = axios.get('/api/promotions', config);
+        Promise.all([resultsRequest, matieresRequest, examTypesRequest, promotionsRequest])
+            .then(([resResults, resMatieres, resExamTypes, resPromotions]) => {
                 setResultats(resResults.data);
                 setMatieres(resMatieres.data);
                 setExamTypes(resExamTypes.data);
+                setPromotions(resPromotions.data);
             })
             .catch(err => console.error("Erreur de chargement des données:", err))
             .finally(() => setLoading(false));
@@ -184,8 +185,7 @@ function Resultats() {
             return acc;
         }, {});
         const groupedByStudent = resultats.reduce((acc, r) => {
-            acc[r.numero_incorporation] = acc[r.numero_incorporation] || { notes: [], prenom: r.prenom, nom: r.nom };
-            acc[r.numero_incorporation].notes.push(r);
+            acc[r.numero_incorporation] = acc[r.numero_incorporation] || { notes: [], prenom: r.prenom, nom: r.nom };            acc[r.numero_incorporation].notes.push(r);
             return acc;
         }, {});
         const studentAverages = Object.entries(groupedByStudent).map(([incorp, data]) => {
@@ -212,18 +212,21 @@ function Resultats() {
         if (selectedTypeExamen) {
             results = results.filter(r => r.type_examen === selectedTypeExamen);
         }
+        if (selectedPromotion) {
+            results = results.filter(r => r.promotion === selectedPromotion);
+        }
         if (searchTerm) {
-            const lowercasedFilter = searchTerm.toLowerCase();
+            const lowSearch = searchTerm.toLowerCase().trim();
             results = results.filter(r =>
-                (r.nom && r.nom.toLowerCase().includes(lowercasedFilter)) ||
-                (r.prenom && r.prenom.toLowerCase().includes(lowercasedFilter)) ||
-                (`${r.prenom} ${r.nom}`.toLowerCase().includes(lowercasedFilter)) ||
-                (r.code_anonyme && r.code_anonyme.toLowerCase().includes(lowercasedFilter)) ||
-                (r.numero_incorporation && r.numero_incorporation.toString().includes(lowercasedFilter))
+                (r.nom && r.nom.toLowerCase() === lowSearch) ||
+                (r.prenom && r.prenom.toLowerCase() === lowSearch) ||
+                (`${r.prenom} ${r.nom}`.toLowerCase() === lowSearch) ||
+                (r.code_anonyme && r.code_anonyme.toLowerCase() === lowSearch) ||
+                (r.numero_incorporation && r.numero_incorporation.toString() === lowSearch)
             );
         }
         return results;
-    }, [resultats, selectedMatiere, selectedTypeExamen, searchTerm]);
+    }, [resultats, selectedMatiere, selectedTypeExamen, selectedPromotion, searchTerm]);
 
     useEffect(() => {
         const uniqueStudentsInFilter = new Set(filteredResults.map(r => r.numero_incorporation));
@@ -277,7 +280,6 @@ function Resultats() {
     const indexOfFirstResult = indexOfLastResult - resultsPerPage;
     const currentResults = filteredResults.slice(indexOfFirstResult, indexOfLastResult);
     const totalPages = Math.ceil(filteredResults.length / resultsPerPage);
-
     const paginate = (pageNumber) => setCurrentPage(pageNumber);
 
     const handleSaveModification = (copieId, nouvelleNote, motif) => {
@@ -349,25 +351,26 @@ function Resultats() {
             {isConfigModalOpen && <ConfigurationModal matieres={matieres} onClose={handleCloseConfigModal} />}
             {isSelectionClassementOpen && <SelectionClassementModal onSelect={handleSelectModele} onClose={() => setIsSelectionClassementOpen(false)} />}
             {isResultatClassementOpen && <ClassementModal modeleExamen={selectedModeleClassement} onClose={() => setIsResultatClassementOpen(false)} />}
-            
             {isElevesSansNoteModalOpen && selectedMatiere && (
-                <ElevesSansNoteModal 
-                    matiereId={selectedMatiere} 
-                    nomMatiere={matieres.find(m => m.id === parseInt(selectedMatiere, 10))?.nom_matiere || ''} 
+                <ElevesSansNoteModal
+                    matiereId={selectedMatiere}
+                    nomMatiere={matieres.find(m => m.id === parseInt(selectedMatiere, 10))?.nom_matiere || ''}
                     typeExamen={selectedTypeExamen}
-                    onClose={() => setIsElevesSansNoteModalOpen(false)} 
+                    onClose={() => setIsElevesSansNoteModalOpen(false)}
                 />
             )}
-
             <div className="page-header"><h2>Résultats des Examens</h2></div>
             <div className="resultats-card">
                 <div className="toolbar">
                     <div className="filter-group">
+                        <select value={selectedPromotion} onChange={e => { setSelectedPromotion(e.target.value); setCurrentPage(1); }}>
+                            <option value="">Toutes les promotions</option>
+                            {promotions.map(promo => (<option key={promo} value={promo}>{promo}</option>))}
+                        </select>
                         <select value={selectedMatiere} onChange={e => { setSelectedMatiere(e.target.value); setCurrentPage(1); }}>
                             <option value="">Toutes les matières</option>
                             {matieres.map(matiere => (<option key={matiere.id} value={matiere.id}>{matiere.nom_matiere}</option>))}
                         </select>
-
                         <select value={selectedTypeExamen} onChange={e => { setSelectedTypeExamen(e.target.value); setCurrentPage(1); }}>
                             <option value="">Tous les types</option>
                             {examTypes.map(examen => (
@@ -376,7 +379,6 @@ function Resultats() {
                                 </option>
                             ))}
                         </select>
-
                         <div className="search-container" ref={searchContainerRef}>
                             <IconSearch />
                             <input
@@ -439,6 +441,7 @@ function Resultats() {
                         <thead>
                             <tr>
                                 <th>Élève</th>
+                                <th>Promo</th>
                                 <th>N° Incorp.</th>
                                 <th>Matière</th>
                                 <th>Type</th>
@@ -453,6 +456,7 @@ function Resultats() {
                                 currentResults.map(r => (
                                     <tr key={r.copie_id}>
                                         <td>{`${r.prenom} ${r.nom}`}</td>
+                                        <td>{r.promotion || 'N/A'}</td>
                                         <td>{r.numero_incorporation}</td>
                                         <td>{r.nom_matiere}</td>
                                         <td>{r.type_examen}</td>
@@ -469,7 +473,7 @@ function Resultats() {
                                     </tr>
                                 ))
                             ) : (
-                                <tr><td colSpan="8" className="no-results">Aucun résultat trouvé pour les filtres actuels.</td></tr>
+                                <tr><td colSpan="9" className="no-results">Aucun résultat trouvé pour les filtres actuels.</td></tr>
                             )}
                         </tbody>
                     </table>

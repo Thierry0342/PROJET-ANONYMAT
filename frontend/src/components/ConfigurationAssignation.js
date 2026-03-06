@@ -4,7 +4,6 @@ import { FaUserCog, FaSave, FaEraser, FaCheckCircle, FaExclamationTriangle } fro
 import './ConfigurationAssignation.css';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
-
 const GENERATED_PROMOTIONS = Array.from({ length: 81 }, (_, i) => `${i + 70}E`);
 
 function ConfigurationAssignation() {
@@ -48,7 +47,8 @@ function ConfigurationAssignation() {
                 role: user.role,
                 assigned_matiere_id: data.matiereId,
                 assigned_type_examen: data.typeExamen,
-                assigned_promotion: data.promotion
+                assigned_promotion: data.promotion,
+                assigned_population: data.population
             };
 
             await axios.put(`${API_BASE_URL}/api/utilisateurs/${userId}`, payload, getAuthHeaders());
@@ -67,7 +67,7 @@ function ConfigurationAssignation() {
         <div className="config-assignation-container">
             <div className="card">
                 <h2><FaUserCog /> Configuration des Missions de Saisie</h2>
-                <p className="subtitle">Définissez ici quelle matière et quel examen sont attribués à chaque opérateur.</p>
+                <p className="subtitle">Définissez ici la matière, l'examen et la population d'élèves attribués à chaque opérateur.</p>
 
                 {message.text && (
                     <div className={`alert ${message.type}`}>
@@ -84,6 +84,7 @@ function ConfigurationAssignation() {
                                 <th>Matière Assignée</th>
                                 <th>Type d'Examen</th>
                                 <th>Promotion</th>
+                                <th>Population Cible</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -109,11 +110,13 @@ function UserRow({ user, matieres, examTypes, onSave }) {
     const [matiereId, setMatiereId] = useState(user.assigned_matiere_id || '');
     const [typeExamen, setTypeExamen] = useState(user.assigned_type_examen || '');
     const [promotion, setPromotion] = useState(user.assigned_promotion || '');
+    const [population, setPopulation] = useState(user.assigned_population || 'all');
 
     const isChanged =
         matiereId.toString() !== (user.assigned_matiere_id || '').toString() ||
         typeExamen !== (user.assigned_type_examen || '') ||
-        promotion !== (user.assigned_promotion || '');
+        promotion !== (user.assigned_promotion || '') ||
+        population !== (user.assigned_population || 'all');
 
     return (
         <tr>
@@ -140,18 +143,32 @@ function UserRow({ user, matieres, examTypes, onSave }) {
                 </select>
             </td>
             <td>
+                <select 
+                    value={population} 
+                    onChange={e => setPopulation(e.target.value)}
+                    style={{ 
+                        backgroundColor: population !== 'all' ? '#eef2ff' : 'white',
+                        fontWeight: population !== 'all' ? '600' : 'normal'
+                    }}
+                >
+                    <option value="all">Tous les élèves</option>
+                    <option value="actif">Liste Originale (Actifs)</option>
+                    <option value="conseil">Liste Conseil (Ajournés/Red.)</option>
+                </select>
+            </td>
+            <td>
                 <button
                     className={`btn-save ${isChanged ? 'active' : ''}`}
                     disabled={!isChanged}
-                    onClick={() => onSave(user.id, { matiereId, typeExamen, promotion })}
+                    onClick={() => onSave(user.id, { matiereId, typeExamen, promotion, population })}
                 >
                     <FaSave /> Enregistrer
                 </button>
                 <button
                     className="btn-reset"
                     onClick={() => {
-                        setMatiereId(''); setTypeExamen(''); setPromotion('');
-                        onSave(user.id, { matiereId: null, typeExamen: null, promotion: null });
+                        setMatiereId(''); setTypeExamen(''); setPromotion(''); setPopulation('all');
+                        onSave(user.id, { matiereId: null, typeExamen: null, promotion: null, population: 'all' });
                     }}
                     title="Effacer l'assignation"
                 >

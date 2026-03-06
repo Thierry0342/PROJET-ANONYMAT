@@ -209,3 +209,30 @@
     line-height: 1.6;
     margin-bottom: 1.5rem;
 }
+.promo-folder-card {
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.promo-folder-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+}
+
+.promo-folder-card .lot-card-header {
+    background-color: #f39c12; /* Couleur orange pour différencier les dossiers */
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.detail-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.detail-header h2 {
+    margin: 0;
+}

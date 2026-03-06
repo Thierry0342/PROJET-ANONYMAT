@@ -1,226 +1,321 @@
-.gestion-container {
-    max-width: 1100px;
-    margin: 2rem auto;
+/* Scoped variables for this component only */
+.gu-main-wrapper {
+    --gu-primary: #3b82f6;
+    --gu-success: #10b981;
+    --gu-danger: #ef4444;
+    --gu-warning: #f59e0b;
+    --gu-text-main: #1e293b;
+    --gu-text-muted: #64748b;
+    --gu-bg-page: #f8fafc;
+    --gu-white: #ffffff;
+    --gu-radius: 12px;
+    --gu-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    
     padding: 2rem;
-    background-color: #f9f9f9;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    max-width: 1200px;
+    margin: 0 auto;
 }
 
-.gestion-container h2 {
-    text-align: center;
-    color: #333;
-    margin-bottom: 1.5rem;
-}
-
-.gestion-header {
+/* Header */
+.gu-dashboard-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1.5rem;
+    margin-bottom: 2.5rem;
+    flex-wrap: wrap;
+    gap: 1rem;
 }
 
-.gestion-header h3 {
-    margin: 0;
-    color: #333;
-}
-
-.requests-button {
-    background-color: #007bff;
-    color: white;
-    border: none;
-    padding: 0.6rem 1rem;
-    border-radius: 20px;
-    cursor: pointer;
-    font-size: 0.9rem;
+.gu-header-info {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    transition: background-color 0.2s ease;
+    gap: 1.2rem;
 }
 
-.requests-button:hover {
-    background-color: #0056b3;
+.gu-icon-box {
+    background: var(--gu-white);
+    padding: 1rem;
+    border-radius: 16px;
+    font-size: 2rem;
+    color: var(--gu-primary);
+    box-shadow: var(--gu-shadow);
 }
 
-.requests-count {
-    background-color: #dc3545;
+.gu-title {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: var(--gu-text-main);
+}
+
+.gu-subtitle {
+    margin: 0;
+    color: var(--gu-text-muted);
+    font-size: 0.95rem;
+}
+
+/* Pending Button */
+.gu-pending-trigger {
+    background: var(--gu-white);
+    border: 2px solid #e2e8f0;
+    padding: 0.75rem 1.25rem;
+    border-radius: var(--gu-radius);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    color: var(--gu-text-main);
+    cursor: pointer;
+    position: relative;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gu-pending-trigger:hover {
+    border-color: var(--gu-primary);
+    color: var(--gu-primary);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.gu-notif-badge {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: var(--gu-danger);
     color: white;
+    font-size: 0.7rem;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
-    width: 24px;
-    height: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.8rem;
-    font-weight: bold;
+    border: 2px solid white;
 }
 
-.users-table {
+@keyframes gu-pulse-anim {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); border-color: var(--gu-warning); }
+    100% { transform: scale(1); }
+}
+
+.gu-pulse {
+    animation: gu-pulse-anim 2s infinite ease-in-out;
+}
+
+/* Card & Table */
+.gu-content-card {
+    background: var(--gu-white);
+    border-radius: var(--gu-radius);
+    box-shadow: var(--gu-shadow);
+    overflow: hidden;
+}
+
+.gu-card-header {
+    padding: 1.25rem 1.5rem;
+    background: #fcfcfd;
+    border-bottom: 1px solid #f1f5f9;
+    font-weight: 700;
+    color: var(--gu-text-main);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.gu-table-container {
+    overflow-x: auto;
+}
+
+.gu-table {
     width: 100%;
     border-collapse: collapse;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
 }
 
-.users-table th, .users-table td {
-    border: 1px solid #ddd;
-    padding: 0.85rem;
+.gu-table th {
+    background: #f8fafc;
+    padding: 1rem 1.5rem;
     text-align: left;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--gu-text-muted);
+    letter-spacing: 0.05em;
+    border-bottom: 2px solid #f1f5f9;
+}
+
+.gu-table td {
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid #f1f5f9;
     vertical-align: middle;
 }
 
-.users-table th {
-    background-color: #f2f2f2;
-    font-weight: 600;
+.gu-table tr:hover {
+    background: #fcfcfd;
 }
 
-.users-table tbody tr:nth-child(even) {
-    background-color: #fbfbfb;
-}
-
-.users-table .actions {
+/* User identity cell */
+.gu-td-user {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    min-width: 180px; /* Espace pour les boutons */
+    align-items: center;
+    gap: 1rem;
 }
 
-.actions button {
+.gu-avatar {
+    width: 42px;
+    height: 42px;
+    background: linear-gradient(135deg, var(--gu-primary), #60a5fa);
+    color: white;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.gu-full-name {
+    font-weight: 700;
+    color: var(--gu-text-main);
+    display: block;
+}
+
+.gu-username {
+    color: var(--gu-primary);
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+/* Status & Role Badges */
+.gu-role-badge {
     padding: 0.4rem 0.8rem;
-    border: none;
-    border-radius: 4px;
-    color: white;
-    cursor: pointer;
+    border-radius: 8px;
     font-size: 0.8rem;
-    transition: background-color 0.2s;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     text-transform: capitalize;
 }
 
-.role-select {
-    padding: 0.4rem;
-    border-radius: 4px;
-    border: 1px solid #ccc;
-    min-width: 150px;
+.gu-role-admin { background: #fef2f2; color: #991b1b; border: 1px solid #fee2e2; }
+.gu-role-operateur_note { background: #eff6ff; color: #1e40af; border: 1px solid #dbeafe; }
+.gu-role-operateur_code { background: #f0fdf4; color: #166534; border: 1px solid #dcfce7; }
+
+.gu-status-pill {
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    background: #f1f5f9;
+    color: var(--gu-text-muted);
 }
 
-.delete-btn { background-color: #dc3545; }
-.delete-btn:hover { background-color: #c82333; }
+.gu-status-approuve { background: #dcfce7; color: #166534; }
 
-.approve-btn { background-color: #28a745; }
-.approve-btn:hover { background-color: #218838; }
-
-.reject-btn { background-color: #ffc107; }
-.reject-btn:hover { background-color: #e0a800; }
-
-.status-badge {
-    padding: 4px 10px;
-    border-radius: 12px;
-    font-size: 0.8em;
-    font-weight: bold;
-    color: white;
-    text-transform: capitalize;
-    display: inline-block;
-    text-align: center;
-    min-width: 80px;
+/* Buttons */
+.gu-btn-group {
+    display: flex;
+    gap: 8px;
 }
 
-.status-approuve { background-color: #28a745; }
-.status-en_attente { background-color: #ffc107; color: #333; }
-.status-rejete { background-color: #dc3545; }
-
-.error-message, .success-message {
-    padding: 1rem;
-    border-radius: 4px;
-    margin-bottom: 1rem;
-    text-align: center;
+.gu-btn-circle {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 1rem;
+    background: #f8fafc;
 }
 
-.error-message {
-    background-color: #f8d7da;
-    color: #721c24;
-    border: 1px solid #f5c6cb;
+.gu-btn-circle.gu-edit { color: var(--gu-primary); }
+.gu-btn-circle.gu-delete { color: var(--gu-danger); }
+.gu-btn-circle.gu-save { color: var(--gu-success); background: #f0fdf4; }
+.gu-btn-circle.gu-cancel { color: var(--gu-text-muted); }
+
+.gu-btn-circle:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
 }
 
-.success-message {
-    background-color: #d4edda;
-    color: #155724;
-    border: 1px solid #c3e6cb;
-}
-
-/* --- Styles pour la modale --- */
-.modal-overlay {
+/* Modals */
+.gu-modal-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.6);
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(6px);
     display: flex;
     justify-content: center;
     align-items: center;
-    z-index: 1000;
+    z-index: 10000;
 }
 
-.modal-content {
-    background: white;
-    padding: 1.5rem 2rem;
-    border-radius: 8px;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-    width: 90%;
-    max-width: 900px;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
+.gu-modal-box {
+    background: var(--gu-white);
+    width: 95%;
+    max-width: 850px;
+    border-radius: 20px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    animation: gu-slide-up 0.3s ease-out;
 }
 
-.modal-header {
+.gu-modal-header {
+    padding: 1.5rem;
+    border-bottom: 1px solid #f1f5f9;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid #eee;
-    padding-bottom: 1rem;
-    margin-bottom: 1rem;
 }
 
-.modal-header h4 {
-    margin: 0;
-    font-size: 1.25rem;
-    color: #333;
-}
+.gu-modal-header h3 { margin: 0; font-size: 1.25rem; color: var(--gu-text-main); }
 
-.modal-close-btn {
-    background: transparent;
+.gu-close-btn { background: none; border: none; font-size: 1.25rem; color: var(--gu-text-muted); cursor: pointer; }
+
+.gu-action-btn {
     border: none;
+    padding: 0.6rem 1rem;
+    border-radius: 10px;
+    font-weight: 700;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+}
+
+.gu-approve-btn { background: var(--gu-success); color: white; margin-right: 8px; }
+.gu-reject-btn { background: #f1f5f9; color: var(--gu-text-muted); }
+
+@keyframes gu-slide-up {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+/* Utils */
+.gu-role-select {
     padding: 0.5rem;
-    line-height: 1;
-}
-.modal-close-btn:hover {
-    background: #f1f1f1;
-    border-radius: 50%;
-}
-
-.modal-body {
-    overflow-y: auto; /* Permet de scroller si la liste est longue */
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    outline: none;
+    font-weight: 600;
+    color: var(--gu-text-main);
 }
 
-/* Ajustement pour la table dans la modale */
-.modal-table td.actions {
-    min-width: 200px;
-}
-/* Ajoutez ceci à la fin de votre fichier GestionUtilisateurs.css */
+.gu-row-editing { background-color: #fffbeb !important; }
 
-.modify-btn {
-    background-color: #007bff; /* Bleu */
-    color: white;
-    border: none;
-    padding: 8px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    margin-right: 5px; /* Espace entre les boutons */
+.gu-alert {
+    padding: 1rem;
+    border-radius: var(--gu-radius);
+    margin-bottom: 1.5rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 12px;
 }
 
-.modify-btn:hover {
-    background-color: #0056b3;
-}
+.gu-alert-error { background: #fef2f2; color: var(--gu-danger); border: 1px solid #fee2e2; }
+.gu-alert-success { background: #f0fdf4; color: var(--gu-success); border: 1px solid #dcfce7; }

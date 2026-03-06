@@ -449,3 +449,133 @@
 .packet-counter {
     font-size: 2.5rem; /* Un peu plus petit pour tenir sur le côté */
 }
+/* --- Carte de Session Sécurisée --- */
+.assignment-info-card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 25px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e2e8f0;
+}
+
+/* Couleurs de bordure selon la population */
+.assignment-info-card.pop-actif { border-left: 6px solid #48bb78; }
+.assignment-info-card.pop-conseil { border-left: 6px solid #ed8936; }
+.assignment-info-card.pop-all { border-left: 6px solid #4299e1; }
+
+.assignment-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.assign-title {
+    font-weight: 700;
+    color: #2d3748;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-transform: uppercase;
+    font-size: 0.9rem;
+    letter-spacing: 0.5px;
+}
+
+.status-badge {
+    background: #ebf8ff;
+    color: #3182ce;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 800;
+}
+
+/* Alignement horizontal de Matière, Examen, Promotion */
+.assignment-horizontal-grid {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.assign-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.field-label {
+    font-size: 0.7rem;
+    color: #718096;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.field-value {
+    font-size: 1rem;
+    color: #1a202c;
+    font-weight: 700;
+}
+
+/* Population en dessous */
+.assignment-population-row {
+    background: #f8fafc;
+    padding: 12px 15px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.pop-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 15px;
+}
+
+.pop-actif .pop-indicator { background: #48bb78; box-shadow: 0 0 8px #48bb78; }
+.pop-conseil .pop-indicator { background: #ed8936; box-shadow: 0 0 8px #ed8936; }
+.pop-all .pop-indicator { background: #4299e1; box-shadow: 0 0 8px #4299e1; }
+
+/* Boîte d'instruction au bas de la carte */
+.assignment-instruction-box {
+    display: flex;
+    gap: 12px;
+    background: #fffaf0;
+    border: 1px solid #feebc8;
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.info-icon {
+    color: #dd6b20;
+    font-size: 1.4rem;
+    flex-shrink: 0;
+}
+
+.instruction-text {
+    font-size: 0.88rem;
+    color: #744210;
+    line-height: 1.5;
+}
+
+.warning-text {
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: #c05621;
+    border-top: 1px dashed #fbd38d;
+    padding-top: 8px;
+}
+
+/* Responsive pour mobile */
+@media (max-width: 600px) {
+    .assignment-horizontal-grid {
+        flex-direction: column;
+        gap: 12px;
+    }
+}

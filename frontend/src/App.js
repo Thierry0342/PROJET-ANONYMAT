@@ -23,12 +23,14 @@ import DashboardGeneral from './components/DashboardGeneral';
 import DashboardExamen from './components/DashboardExamen';
 import CreerCodesMatiere from './components/CreerCodesMatiere';
 import ConfigurationAssignation from './components/ConfigurationAssignation';
+import ConseilFormation from './components/ConseilFormation';
 
 import Sidebar from './components/Sidebar';
 import AnimatedNodeBackground from './components/AnimatedNodeBackground';
 import GlobalActivityTracker from './components/GlobalActivityTracker';
 
 import { FiGrid, FiUsers, FiEdit, FiLink, FiFileText, FiPlusSquare, FiUserPlus, FiKey, FiCheckSquare, FiBarChart2, FiSlash, FiPrinter, FiUploadCloud } from 'react-icons/fi';
+import { FaGavel } from 'react-icons/fa';
 
 import './App.css';
 
@@ -39,7 +41,6 @@ const getUserFromToken = () => {
         try {
             return jwtDecode(token);
         } catch (error) {
-            console.error("Token invalide:", error);
             localStorage.removeItem('token');
             return null;
         }
@@ -76,6 +77,7 @@ const getNavItemsForUser = (user) => {
             {
                 label: "Gestion",
                 subItems: [
+                    { label: "Conseil Formation", to: "/conseil-formation", icon: <FaGavel /> },
                     { label: "Copies Notées", to: "/copies-notees", icon: <FiCheckSquare /> },
                     { label: "Gérer Absences", to: "/gestion-absences", icon: <FiSlash /> },
                     { label: "Voir Résultats", to: "/resultats", icon: <FiBarChart2 /> },
@@ -153,6 +155,7 @@ const AppContent = () => {
                             <Route path="/dashboard" element={user.role === 'admin' ? <Dashboard /> : <Navigate to="/" />} />
                             <Route path="/dashboard/general" element={user.role === 'admin' ? <DashboardGeneral /> : <Navigate to="/" />} />
                             <Route path="/dashboard/:typeExamen" element={user.role === 'admin' ? <DashboardExamen /> : <Navigate to="/" />} />
+                            <Route path="/conseil-formation" element={user.role === 'admin' ? <ConseilFormation /> : <Navigate to="/" />} />
                             <Route path="/" element={(user.role === 'admin' || user.role === 'operateur_code') ? <LierCode /> : <Navigate to="/noter" />} />
                             <Route path="/noter" element={(user.role === 'admin' || user.role === 'operateur_note') ? <NoterCopie /> : <Navigate to="/" />} />
                             <Route path="/saisie-directe" element={(user.role === 'admin' || user.role === 'operateur_note') ? <SaisieDirecte /> : <Navigate to="/" />} />
