@@ -86,7 +86,8 @@ app.post(apiPaths.login, async (req, res) => {
             // Données d'assignation
             assigned_matiere_id: user.assigned_matiere_id,
             assigned_type_examen: user.assigned_type_examen,
-            assigned_promotion: user.assigned_promotion
+            assigned_promotion: user.assigned_promotion,
+ assigned_population: user.assigned_population
         };
         
         const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '8h' });
@@ -197,24 +198,109 @@ app.get(apiPaths.eleves.base, authenticateToken, async (req, res) => {
 app.get(apiPaths.eleves.recherche, authenticateToken, async (req, res) => {
     try {
         const searchTerm = req.query.q;
+        const promotionFiltre = req.query.promotion;
+        const populationFiltre = req.query.population; // <--- RÉCUPÉRER LE PARAMÈTRE
+
         if (!searchTerm || searchTerm.trim() === '') return res.json([]);
+
         const nameSearchQuery = `%${searchTerm}%`;
-        const incorpSearchQuery = `${searchTerm}%`;
-        const query = `
-            SELECT id, prenom, nom, numero_incorporation, escadron, peloton
+        const codeSearchQuery = `${searchTerm}%`;
+
+        let query = `
+            SELECT id, prenom, nom, numero_incorporation, escadron, peloton, promotion, statut
             FROM eleves
-            WHERE numero_incorporation LIKE ? OR CONCAT(prenom, ' ', nom) LIKE ? OR CONCAT(nom, ' ', prenom) LIKE ?
-            ORDER BY nom, prenom LIMIT 20;
+            WHERE (
+                numero_incorporation LIKE ?
+                OR CONCAT(prenom, ' ', nom) LIKE ?
+                OR CONCAT(nom, ' ', prenom) LIKE ?
+            )
         `;
-        const [rows] = await db.query(query, [incorpSearchQuery, nameSearchQuery, nameSearchQuery]);
+
+        const params = [codeSearchQuery, nameSearchQuery, nameSearchQuery];
+
+        // Filtre de promotion existant
+        if (promotionFiltre && promotionFiltre !== 'all' && promotionFiltre !== 'Toutes' && promotionFiltre !== 'undefined') {
+            query += " AND promotion = ?";
+            params.push(promotionFiltre);
+        }
+
+        // --- NOUVEAU : Filtre de Population ---
+        if (populationFiltre === 'actif') {
+            // On considère 'actif' comme ceux qui n'ont pas de statut spécial de conseil
+            query += " AND (statut = 'actif' OR statut IS NULL OR statut = 'approuve')";
+        } else if (populationFiltre === 'conseil') {
+            // On cible les redoublants et ajournés
+            query += " AND statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')";
+        }
+
+        query += " ORDER BY nom, prenom LIMIT 20";
+
+        const [rows] = await db.query(query, params);
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: "Erreur lors de la recherche des élèves." });
+        console.error("Erreur recherche eleves:", err);
+        res.status(500).json({ error: "Erreur interne du serveur." });
+    }
+});
+
+app.post('/api/eleves/importer-previsualisation', authenticateToken, checkRole(['admin']), upload.single('fichierEleves'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
+    const { promotion } = req.body;
+    if (!promotion || promotion.trim() === '') return res.status(400).json({ message: "La promotion est requise pour prévisualiser." });
+
+    try {
+        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+
+        const donneesValides = [];
+        const erreurs = [];
+        const numerosIncorporationVus = new Set(); // Pour vérifier les doublons DANS le fichier Excel actuel
+
+        for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            if (!row || row.length === 0) continue;
+
+            const numero_incorporation = row[0] ? String(row[0]).trim() : null;
+            if (!numero_incorporation) {
+                erreurs.push({ ligne: i + 1, message: "Numéro d'incorporation manquant." });
+                continue;
+            }
+            // Vérifie si le numéro est en double à l'intérieur de la MÊME promotion (le fichier en cours)
+            if (numerosIncorporationVus.has(numero_incorporation)) {
+                erreurs.push({ ligne: i + 1, message: `Numéro d'incorporation en double dans ce fichier : ${numero_incorporation}` });
+                continue;
+            }
+            numerosIncorporationVus.add(numero_incorporation);
+
+            const nom_prenom = row[1] ? String(row[1]).trim() : '';
+            const sexeRaw = row[2] ? String(row[2]).trim().toUpperCase() : null;
+            let sexe = (sexeRaw === 'F' || sexeRaw === 'FEMININ') ? 'feminin' : ((sexeRaw === 'M' || sexeRaw === 'MASCULIN') ? 'masculin' : null);
+            const escadron = !isNaN(parseInt(row[3], 10)) ? parseInt(row[3], 10) : null;
+            const peloton = !isNaN(parseInt(row[4], 10)) ? parseInt(row[4], 10) : null;
+
+            donneesValides.push({
+                numero_incorporation,
+                nom_prenom,
+                sexe,
+                escadron,
+                peloton,
+                promotion: promotion.trim()
+            });
+        }
+
+        res.json({ total: donneesValides.length, donneesValides, erreurs });
+    } catch (err) {
+        console.error("Erreur prévisualisation élèves:", err);
+        res.status(500).json({ message: "Erreur interne lors du traitement du fichier Excel." });
     }
 });
 
 app.post(apiPaths.eleves.importer, authenticateToken, checkRole(['admin']), upload.single('fichierEleves'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
+    const { promotion } = req.body;
+    if (!promotion || promotion.trim() === '') return res.status(400).json({ message: "La promotion est requise pour l'importation." });
+
     const connection = await db.getConnection();
     try {
         const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
@@ -222,13 +308,13 @@ app.post(apiPaths.eleves.importer, authenticateToken, checkRole(['admin']), uplo
         const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
         const elevesToInsert = [];
         const numerosIncorporationVus = new Set();
-        
+
         for (const row of data.slice(1)) {
             if (!row || row.length === 0) continue;
             const numero_incorporation = row[0] ? String(row[0]).trim() : null;
             if (!numero_incorporation || numerosIncorporationVus.has(numero_incorporation)) continue;
             numerosIncorporationVus.add(numero_incorporation);
-            
+
             const nom_prenom = row[1] ? String(row[1]).trim() : '';
             const sexeRaw = row[2] ? String(row[2]).trim().toUpperCase() : null;
             let nom = '', prenom = '';
@@ -237,32 +323,40 @@ app.post(apiPaths.eleves.importer, authenticateToken, checkRole(['admin']), uplo
                 nom = nom_prenom.substring(0, firstSpaceIndex).trim();
                 prenom = nom_prenom.substring(firstSpaceIndex + 1).trim();
             } else { nom = nom_prenom; }
-            
+
             let sexe = (sexeRaw === 'F' || sexeRaw === 'FEMININ') ? 'feminin' : ((sexeRaw === 'M' || sexeRaw === 'MASCULIN') ? 'masculin' : null);
             const escadron = !isNaN(parseInt(row[3], 10)) ? parseInt(row[3], 10) : null;
             const peloton = !isNaN(parseInt(row[4], 10)) ? parseInt(row[4], 10) : null;
-            const promotion = row[5] ? String(row[5]).trim() : null; 
 
-            elevesToInsert.push([nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion]);
+            elevesToInsert.push([nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion.trim()]);
         }
-        
+
         if (elevesToInsert.length === 0) return res.status(400).json({ message: "Le fichier ne contient aucun élève valide à importer." });
 
         await connection.beginTransaction();
-        await connection.query("DELETE FROM historique_activites");
-        await connection.query("DELETE FROM copies");
-        await connection.query("DELETE FROM eleves");
+
+        // Si la combinaison (numero_incorporation + promotion) existe déjà, on met à jour,
+        // sinon on ajoute l'élève.
+        const sql = `
+            INSERT INTO eleves (nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion) 
+            VALUES ?
+            ON DUPLICATE KEY UPDATE 
+                nom = VALUES(nom),
+                prenom = VALUES(prenom),
+                sexe = VALUES(sexe),
+                escadron = VALUES(escadron),
+                peloton = VALUES(peloton)
+        `;
         
-        const sql = "INSERT INTO eleves (nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion) VALUES ?";
         await connection.query(sql, [elevesToInsert]);
         await connection.commit();
 
-        await logActivity(req.user.id, req.user.nom_utilisateur, 'IMPORT_ELEVES', `A importé ${elevesToInsert.length} élèves via '${req.file.originalname}'.`);
-        res.json({ message: `Base réinitialisée. ${elevesToInsert.length} élèves importés.` });
+        await logActivity(req.user.id, req.user.nom_utilisateur, 'IMPORT_ELEVES', `A ajouté ou mis à jour ${elevesToInsert.length} élèves pour la promotion '${promotion.trim()}'.`);
+        res.json({ message: `Importation réussie. ${elevesToInsert.length} élèves ont été ajoutés (ou mis à jour) pour la promotion ${promotion.trim()}.` });
     } catch (err) {
         await connection.rollback();
         console.error(err);
-        res.status(500).json({ message: "Erreur interne lors du traitement du fichier." });
+        res.status(500).json({ message: "Erreur interne lors du traitement de l'importation." });
     } finally {
         connection.release();
     }
@@ -590,22 +684,31 @@ app.get(apiPaths.copies.verifier, authenticateToken, checkRole(['admin', 'operat
 
 app.get('/api/copies/notees-non-liees', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
     try {
-        const { matiereId } = req.query;
+        const { matiereId, promotion, population } = req.query;
+        
         let query = `
             SELECT c.id, c.code_anonyme, c.note, m.nom_matiere
-            FROM copies c JOIN matieres m ON c.matiere_id = m.id
-            WHERE c.eleve_id IS NULL AND c.note IS NOT NULL
+            FROM copies c 
+            JOIN matieres m ON c.matiere_id = m.id
+            JOIN codes_anonymes_disponibles cad ON c.code_anonyme = cad.code
+            WHERE c.eleve_id IS NULL 
+              AND c.note IS NOT NULL
+              AND cad.promotion = ?
+              AND cad.population = ?
         `;
-        const params = [];
+        
+        const params = [promotion, population];
+
         if (matiereId && matiereId !== 'all') {
             query += ' AND c.matiere_id = ?';
             params.push(matiereId);
         }
+
         query += ' ORDER BY m.nom_matiere, c.code_anonyme';
         const [rows] = await db.query(query, params);
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: "Erreur interne du serveur." });
+        res.status(500).json({ error: "Erreur serveur" });
     }
 });
 
@@ -740,11 +843,14 @@ app.get(apiPaths.matieres.elevesRestants, authenticateToken, checkRole(['admin',
     }
 });
 
+// backend/server.js
+
 app.get(apiPaths.resultats.base, authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const query = `
             SELECT
                 c.id AS copie_id, e.prenom, e.nom, e.numero_incorporation, e.escadron, e.peloton,
+                e.promotion, -- AJOUT ICI
                 m.nom_matiere, m.id as matiere_id, c.note, c.type_examen, c.code_anonyme,
                 u_note.nom_utilisateur AS operateur_note, u_code.nom_utilisateur AS operateur_code,
                 (SELECT COUNT(*) FROM historique_modifications_notes h WHERE h.copie_id = c.id) AS modifications_count
@@ -988,17 +1094,18 @@ app.post('/api/resultats/generer-document-pdf', authenticateToken, checkRole(['a
         res.status(500).json({ error: "Erreur lors de la génération du fichier PDF." });
     }
 });
+
 app.get(apiPaths.utilisateurs.base, authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        // AJOUT : On récupère les colonnes d'assignation
         const [users] = await db.query(`
-            SELECT id, nom, prenom, nom_utilisateur, role, statut, 
-            assigned_matiere_id, assigned_type_examen, assigned_promotion 
-            FROM utilisateurs 
+            SELECT id, nom, prenom, nom_utilisateur, role, statut,
+            assigned_matiere_id, assigned_type_examen, assigned_promotion, assigned_population
+            FROM utilisateurs
             ORDER BY statut, nom_utilisateur
         `);
         res.json(users);
-    } catch (err) {
+   } catch (err) {
+        console.error("Erreur utilisateurs:", err);
         res.status(500).json({ error: "Erreur lors de la récupération des utilisateurs." });
     }
 });
@@ -1006,27 +1113,26 @@ app.get(apiPaths.utilisateurs.base, authenticateToken, checkRole(['admin']), asy
 app.put(apiPaths.utilisateurs.byId, authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const { id } = req.params;
-        const { nom_utilisateur, mot_de_passe, role, assigned_matiere_id, assigned_type_examen, assigned_promotion } = req.body;
-        
-        if (!nom_utilisateur || !role) return res.status(400).json({ message: "Le nom d'utilisateur et le rôle sont requis." });
+        const { 
+            nom_utilisateur, role, 
+            assigned_matiere_id, assigned_type_examen, 
+            assigned_promotion, assigned_population // AJOUT
+        } = req.body;
 
-        let query, params;
-        if (mot_de_passe) {
-            query = `UPDATE utilisateurs SET 
-                     nom_utilisateur = ?, mot_de_passe = ?, role = ?, 
-                     assigned_matiere_id = ?, assigned_type_examen = ?, assigned_promotion = ? 
+        const query = `UPDATE utilisateurs SET
+                     nom_utilisateur = ?, role = ?,
+                     assigned_matiere_id = ?, assigned_type_examen = ?, 
+                     assigned_promotion = ?, assigned_population = ?
                      WHERE id = ?`;
-            params = [nom_utilisateur, mot_de_passe, role, assigned_matiere_id, assigned_type_examen, assigned_promotion, id];
-        } else {
-            query = `UPDATE utilisateurs SET 
-                     nom_utilisateur = ?, role = ?, 
-                     assigned_matiere_id = ?, assigned_type_examen = ?, assigned_promotion = ? 
-                     WHERE id = ?`;
-            params = [nom_utilisateur, role, assigned_matiere_id, assigned_type_examen, assigned_promotion, id];
-        }
+        
+        const params = [
+            nom_utilisateur, role, 
+            assigned_matiere_id || null, assigned_type_examen || null, 
+            assigned_promotion || null, assigned_population || 'all', id
+        ];
 
         await db.query(query, params);
-        res.json({ message: "Configuration de l'utilisateur mise à jour." });
+        res.json({ message: "Configuration mise à jour." });
     } catch (err) {
         res.status(500).json({ error: "Erreur lors de la mise à jour." });
     }
@@ -1080,32 +1186,39 @@ app.put('/api/utilisateurs/:id/rejeter', authenticateToken, checkRole(['admin'])
 
 app.get('/api/stats/copies-par-matiere', authenticateToken, checkRole(['admin', 'operateur_code', 'operateur_note']), async (req, res) => {
     try {
+        const { promotion, population } = req.query;
+
         const query = `
-            SELECT
-                m.id,
+            SELECT 
+                m.id, 
                 m.nom_matiere,
-                COALESCE(copies_notees.count, 0) AS avec_note,
-                COALESCE(codes_totaux.count, 0) - COALESCE(copies_notees.count, 0) AS sans_note
-            FROM
+                -- 1. Total des notes saisies pour ce groupe précis
+                COUNT(CASE WHEN c.note IS NOT NULL THEN 1 END) AS avec_note,
+                
+                -- 2. Notes saisies mais pas encore liées pour ce groupe
+                COUNT(CASE WHEN c.note IS NOT NULL AND c.eleve_id IS NULL THEN 1 END) AS en_attente,
+                
+                -- 3. Codes générés pour ce groupe mais qui n'ont pas encore de note
+                (SELECT COUNT(*) FROM codes_anonymes_disponibles cad2 
+                 WHERE cad2.code LIKE CONCAT(m.code_prefixe, '%') 
+                 AND cad2.promotion = ? 
+                 AND cad2.population = ?) - COUNT(CASE WHEN c.note IS NOT NULL THEN 1 END) AS sans_note
+            FROM 
                 matieres m
-            LEFT JOIN (
-                SELECT m.id AS matiere_id, COUNT(cad.id) as count
-                FROM matieres m
-                JOIN codes_anonymes_disponibles cad ON cad.code LIKE CONCAT(m.code_prefixe, '%')
-                GROUP BY m.id
-            ) AS codes_totaux ON m.id = codes_totaux.matiere_id
-            LEFT JOIN (
-                SELECT matiere_id, COUNT(*) as count
-                FROM copies
-                WHERE note IS NOT NULL
-                GROUP BY matiere_id
-            ) AS copies_notees ON m.id = copies_notees.matiere_id
+            LEFT JOIN codes_anonymes_disponibles cad ON cad.code LIKE CONCAT(m.code_prefixe, '%')
+            LEFT JOIN copies c ON cad.code = c.code_anonyme AND c.matiere_id = m.id
+            WHERE 
+                cad.promotion = ? 
+                AND cad.population = ?
+            GROUP BY m.id, m.nom_matiere
             ORDER BY m.nom_matiere;
         `;
-        const [stats] = await db.query(query);
+
+        // On passe les paramètres 4 fois pour remplir la requête
+        const [stats] = await db.query(query, [promotion, population, promotion, population]);
         res.json(stats);
     } catch (err) {
-        res.status(500).json({ error: "Erreur interne du serveur." });
+        res.status(500).json({ error: "Erreur serveur" });
     }
 });
 
@@ -1339,44 +1452,58 @@ app.post(apiPaths.copies.noteDirecte, authenticateToken, checkRole(['admin','ope
 });
 
 app.get('/api/eleves-par-groupe', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
-    const { matiereId, typeExamen, escadron, peloton, promotion } = req.query;
+    const { matiereId, typeExamen, escadron, peloton, promotion, population } = req.query;
 
-    if (!matiereId || !typeExamen || !escadron) {
-        return res.status(400).json({ message: "La matière, le type d'examen et l'escadron sont requis." });
+    if (!matiereId || !typeExamen) {
+        return res.status(400).json({ message: "Matière et type d'examen requis." });
     }
 
     try {
-        let params = [matiereId, typeExamen, matiereId, escadron];
-        let filterClause = "";
+        let params = [matiereId, typeExamen, matiereId];
+        let queryConditions = "";
 
-        if (peloton && peloton !== 'all') {
-            filterClause += ' AND e.peloton = ?';
-            params.push(peloton);
+        // --- NOUVELLE LOGIQUE HARMONISÉE ---
+        if (population === 'conseil') {
+            // On prend tous ceux qui ont un statut de conseil
+            queryConditions += " AND e.statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')";
+        } else {
+            // MODE ACTIF / ALL : On utilise le filtre Escadron/Peloton
+            if (escadron) {
+                queryConditions += " AND e.escadron = ?";
+                params.push(escadron);
+            }
+
+            if (peloton && peloton !== 'all') {
+                queryConditions += ' AND e.peloton = ?';
+                params.push(peloton);
+            }
+            
+            if (population === 'actif') {
+                queryConditions += " AND (e.statut = 'actif' OR e.statut IS NULL OR e.statut = 'approuve')";
+            }
         }
+        // ----------------------------------
 
         if (promotion && promotion !== 'all' && promotion !== 'undefined') {
-            filterClause += ' AND e.promotion = ?';
+            queryConditions += ' AND e.promotion = ?';
             params.push(promotion);
         }
 
         const query = `
-            SELECT e.id, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton
+            SELECT e.id, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton, e.statut
             FROM eleves e
             LEFT JOIN copies c ON e.id = c.eleve_id AND c.matiere_id = ? AND c.type_examen = ?
             LEFT JOIN absences a ON e.id = a.eleve_id AND a.matiere_id = ?
             WHERE c.id IS NULL
               AND a.id IS NULL
-              AND e.escadron = ?
-              ${filterClause}
-            ORDER BY e.peloton ASC, CAST(e.numero_incorporation AS UNSIGNED) ASC;
+              ${queryConditions}
+            ORDER BY e.nom ASC, CAST(e.numero_incorporation AS UNSIGNED) ASC;
         `;
 
         const [eleves] = await db.query(query, params);
         res.json(eleves);
-
     } catch (err) {
-        console.error("Erreur eleves-par-groupe:", err);
-        res.status(500).json({ message: "Erreur interne lors de la récupération des élèves." });
+        res.status(500).json({ message: "Erreur serveur." });
     }
 });
 
@@ -1587,14 +1714,58 @@ async function calculerClassementDetaille(typeExamen) {
 
 app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const { typeExamen } = req.query;
-        const data = await calculerClassementDetaille(typeExamen);
-        res.json(data);
+        const { typeExamen, promotion, population } = req.query;
+        
+        // 1. On récupère d'abord les élèves ciblés (Conseil ou Actifs)
+        let queryBase = `
+            SELECT s.eleve_id, s.rang, s.moyenne, e.prenom, e.nom, e.numero_incorporation, e.escadron, e.peloton, e.statut
+            FROM statistiques_classement s
+            JOIN eleves e ON s.eleve_id = e.id
+            WHERE s.type_examen = ?
+        `;
+        const params = [typeExamen || 'General'];
+        if (promotion && promotion !== 'all') { queryBase += " AND s.promotion = ?"; params.push(promotion); }
+        if (population && population !== 'all') { queryBase += " AND s.population = ?"; params.push(population); }
+        queryBase += " ORDER BY CAST(s.rang AS UNSIGNED) ASC";
+
+        const [elevesCibles] = await db.query(queryBase, params);
+
+        if (elevesCibles.length === 0) return res.json({ classement: [], matieres: [] });
+
+        // 2. Pour ces élèves, on va chercher TOUTES leurs moyennes (historique complet)
+        const ids = elevesCibles.map(e => e.eleve_id);
+        const [historiqueNotes] = await db.query(`
+            SELECT eleve_id, type_examen, moyenne 
+            FROM statistiques_classement 
+            WHERE eleve_id IN (?)
+        `, [ids]);
+
+        // 3. On fusionne les données pour que chaque ligne d'élève contienne ses notes d'examen
+        const classementFormate = elevesCibles.map(eleve => {
+            const details = {};
+            historiqueNotes
+                .filter(h => h.eleve_id === eleve.eleve_id)
+                .forEach(h => {
+                    details[h.type_examen] = h.moyenne;
+                });
+            return { ...eleve, details }; // L'objet 'details' contiendra { "TEST JOURNALIER": 14, "FETTA": 12, ... }
+        });
+
+        // 4. Récupérer les matières pour l'affichage des colonnes (optionnel)
+        const [matieres] = await db.query(`
+            SELECT m.id, m.nom_matiere, m.code_prefixe
+            FROM matieres m
+            JOIN examens_configurations ec ON m.id = ec.matiere_id
+            JOIN modeles_examens me ON ec.modele_examen_id = me.id
+            WHERE me.nom_modele = ?`, [typeExamen || 'General']);
+
+        res.json({ classement: classementFormate, matieres });
     } catch (err) {
-        console.error("Erreur critique sur /api/resultats/classement-details :", err);
-        res.status(500).json({ error: "Erreur lors du calcul détaillé du classement." });
+        console.error(err);
+        res.status(500).json({ error: "Erreur chargement classement détaillé" });
     }
 });
+
 
 app.get('/api/resultats/exporter-classement-excel', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
@@ -2330,106 +2501,46 @@ const getMentionForNote = (note) => {
     return 'Insuffisant';
 };
 
+
 app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const { promotion } = req.query;
-
-        let whereClause = "WHERE c.note IS NOT NULL AND c.eleve_id IS NOT NULL AND c.type_examen IS NOT NULL";
-        let params = [];
-        
-        let countWhere = "";
-        let countParams = [];
-
+        const { promotion, population } = req.query;
+        let query = `
+            SELECT 
+                type_examen, 
+                AVG(CAST(moyenne AS DECIMAL(10,2))) as moyenne_globale,
+                MIN(CAST(moyenne AS DECIMAL(10,2))) as moyenne_min,
+                MAX(CAST(moyenne AS DECIMAL(10,2))) as moyenne_max,
+                COUNT(eleve_id) as participants
+            FROM statistiques_classement
+            WHERE 1=1
+        `;
+        const params = [];
         if (promotion && promotion !== 'all') {
-            whereClause += " AND e.promotion = ?";
+            query += " AND promotion = ?";
             params.push(promotion);
-            
-            countWhere = " WHERE promotion = ?";
-            countParams.push(promotion);
         }
+        if (population && population !== 'all' && population !== 'total') {
+            query += " AND population = ?";
+            params.push(population);
+        }
+        query += " GROUP BY type_examen";
 
-        const [allNotes] = await db.query(`
-            SELECT c.type_examen, c.note, m.id as matiere_id, e.id as eleve_id, e.prenom, e.nom
-            FROM copies c
-            JOIN eleves e ON c.eleve_id = e.id
-            JOIN matieres m ON c.matiere_id = m.id
-            ${whereClause}
-        `, params);
+        const [rows] = await db.query(query, params);
 
-        const [allAbsences] = await db.query(`
-            SELECT a.matiere_id, a.motif, e.id as eleve_id, e.nom, e.prenom
-            FROM absences a 
-            JOIN eleves e ON a.eleve_id = e.id
-            ${promotion && promotion !== 'all' ? 'WHERE e.promotion = ?' : ''}
-        `, countParams);
-
-        const [[{ total_eleves }]] = await db.query(`SELECT COUNT(*) as total_eleves FROM eleves ${countWhere}`, countParams);
-
-        if (allNotes.length === 0) return res.json([]);
-
-        const dataByExam = allNotes.reduce((acc, note) => {
-            if (!acc[note.type_examen]) {
-                acc[note.type_examen] = { notes: [], matieresIds: new Set() };
+        const finalSummary = rows.map(r => ({
+            typeExamen: r.type_examen,
+            stats: {
+                participants: r.participants,
+                moyenne: parseFloat(r.moyenne_globale).toFixed(2),
+                min: parseFloat(r.moyenne_min).toFixed(2),
+                max: parseFloat(r.moyenne_max).toFixed(2)
             }
-            acc[note.type_examen].notes.push(note);
-            acc[note.type_examen].matieresIds.add(note.matiere_id);
-            return acc;
-        }, {});
-
-        const finalSummary = Object.entries(dataByExam).map(([typeExamen, data]) => {
-            const { notes, matieresIds } = data;
-            const moyenne = notes.length > 0 ? notes.reduce((sum, n) => sum + parseFloat(n.note), 0) / notes.length : 0;
-
-            const absentsPourCetExamenSet = new Set(
-                allAbsences
-                    .filter(absence => matieresIds.has(absence.matiere_id))
-                    .map(a => a.eleve_id)
-            );
-            const nombreAbsents = absentsPourCetExamenSet.size;
-            const participantsAttendus = parseInt(total_eleves) - nombreAbsents;
-            const safeParticipants = participantsAttendus > 0 ? participantsAttendus : 1; 
-            const notesAttenduesTotal = safeParticipants * matieresIds.size;
-            const totalNotesSaisies = notes.length;
-            const completion = notesAttenduesTotal > 0 ? (totalNotesSaisies / notesAttenduesTotal) * 100 : 0;
-
-            const participantsActuels = new Set(notes.map(n => n.eleve_id)).size;
-
-            const repartitionMentions = { 'Excellent': 0, 'Très Bien': 0, 'Bien': 0, 'Assez Bien': 0, 'Passable': 0, 'Insuffisant': 0 };
-            const getMention = (note) => {
-                if(note === null || isNaN(note)) return;
-                if (note >= 18) return 'Excellent'; if (note >= 16) return 'Très Bien';
-                if (note >= 14) return 'Bien'; if (note >= 12) return 'Assez Bien';
-                if (note >= 10) return 'Passable'; return 'Insuffisant';
-            };
-            notes.forEach(n => {
-                const mention = getMention(parseFloat(n.note));
-                if(mention) repartitionMentions[mention]++;
-            });
-
-            const absentsDetailsList = allAbsences
-                .filter(absence => matieresIds.has(absence.matiere_id))
-                .map(a => ({ nom: `${a.prenom} ${a.nom}`, motif: a.motif || 'Non spécifié' }));
-
-            const uniqueAbsents = [...new Map(absentsDetailsList.map(item => [item['nom'], item])).values()];
-
-            return {
-                typeExamen,
-                stats: {
-                    participants: participantsActuels,
-                    moyenne: moyenne,
-                    absents: nombreAbsents,
-                    completion: completion,
-                },
-                repartitionMentions,
-                absents: uniqueAbsents
-            };
-        });
+        }));
 
         res.json(finalSummary);
-
     } catch (err) {
-        console.error("Erreur sur /api/dashboard/summary-by-exam-type :", err);
-        res.status(500).json({ error: "Erreur lors de la récupération de la synthèse par examen." });
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -2475,129 +2586,57 @@ const [matieres] = await db.query("SELECT id, coefficient_legacy AS coefficient 
 
 app.get('/api/dashboard/general-summary', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const [modeles] = await db.query("SELECT id, nom_modele, coefficient_general FROM modeles_examens");
-        const [configs] = await db.query("SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations");
+        const { promotion, population } = req.query;
 
-        const [eleves] = await db.query("SELECT id, prenom, nom, numero_incorporation, escadron, peloton FROM eleves");
-        const [notes] = await db.query("SELECT eleve_id, matiere_id, note, type_examen FROM copies WHERE note IS NOT NULL AND eleve_id IS NOT NULL");
-        const [absents] = await db.query(`
-            SELECT e.id as eleve_id, e.nom, e.prenom, a.motif, m.nom_matiere
-            FROM absences a JOIN eleves e ON a.eleve_id = e.id JOIN matieres m ON a.matiere_id = m.id
-        `);
-        const [matieresBase] = await db.query("SELECT id, nom_matiere FROM matieres");
+        // 1. Récupération des stats globales depuis le cache
+        let query = `
+            SELECT s.rang, s.moyenne, e.id, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton, e.statut
+            FROM statistiques_classement s
+            JOIN eleves e ON s.eleve_id = e.id
+            WHERE s.type_examen = 'General'
+        `;
+        const params = [];
+        if (promotion && promotion !== 'all') {
+            query += " AND s.promotion = ?";
+            params.push(promotion);
+        }
+        if (population && population !== 'all') {
+            query += " AND s.population = ?";
+            params.push(population);
+        }
+        query += " ORDER BY CAST(s.rang AS UNSIGNED) ASC";
 
-        const classementCalcules = eleves.map(eleve => {
-            const notesEleve = notes.filter(n => n.eleve_id === eleve.id);
-            const notesDetail = {};
+        const [classement] = await db.query(query, params);
 
-            const moyennesParModele = {};
+        if (classement.length === 0) {
+            return res.json({ stats: { moyennePromotion: 0 }, elevesEnDifficulte: [], statsParEscadron: [] });
+        }
 
-            modeles.forEach(modele => {
-                const configsModele = configs.filter(c => c.modele_examen_id === modele.id);
-                let totalPointsModele = 0;
-                let totalCoeffsModele = 0;
+        // 2. Calcul des stats à partir du cache (très rapide)
+        const moyennePromotion = classement.reduce((sum, e) => sum + parseFloat(e.moyenne), 0) / classement.length;
+        const elevesEnDifficulte = classement.filter(e => parseFloat(e.moyenne) < 10);
 
-                configsModele.forEach(config => {
-                    const noteTrouvee = notesEleve.find(n => n.matiere_id === config.matiere_id && n.type_examen === modele.nom_modele);
-
-                    if (noteTrouvee) {
-                        totalPointsModele += parseFloat(noteTrouvee.note) * parseFloat(config.coefficient);
-                        totalCoeffsModele += parseFloat(config.coefficient);
-                    }
-                });
-
-                if (totalCoeffsModele > 0) {
-                    moyennesParModele[modele.nom_modele] = totalPointsModele / totalCoeffsModele;
-                }
-            });
-
-            let totalPointsGeneral = 0;
-            let totalCoeffsGeneral = 0;
-            let aDesNotes = false;
-
-            modeles.forEach(modele => {
-                if (moyennesParModele[modele.nom_modele] !== undefined && parseFloat(modele.coefficient_general) > 0) {
-                    totalPointsGeneral += moyennesParModele[modele.nom_modele] * parseFloat(modele.coefficient_general);
-                    totalCoeffsGeneral += parseFloat(modele.coefficient_general);
-                    aDesNotes = true;
-                }
-            });
-
-            const moyenneFinale = (aDesNotes && totalCoeffsGeneral > 0)
-                ? (totalPointsGeneral / totalCoeffsGeneral)
-                : null;
-
-            return {
-                ...eleve,
-                moyenne: moyenneFinale,
-                details: moyennesParModele
-            };
-        });
-
-        classementCalcules.sort((a, b) => {
-            if (a.moyenne === null && b.moyenne === null) return 0;
-            if (a.moyenne === null) return 1;
-            if (b.moyenne === null) return -1;
-            return b.moyenne - a.moyenne;
-        });
-
-        const elevesAvecMoyenne = classementCalcules.filter(e => e.moyenne !== null);
-        const moyenneGeneralePromotion = elevesAvecMoyenne.length > 0
-            ? elevesAvecMoyenne.reduce((sum, e) => sum + e.moyenne, 0) / elevesAvecMoyenne.length
-            : 0;
-
-        const statsParEscadronGroupes = elevesAvecMoyenne.reduce((acc, eleve) => {
-            const escadron = eleve.escadron || 'Non assigné';
-            if (!acc[escadron]) {
-                acc[escadron] = {
-                    nom: escadron,
-                    sommeMoyennes: 0,
-                    totalEleves: 0,
-                    enDifficulte: 0,
-                    moyenne: 0
-                };
-            }
-            acc[escadron].sommeMoyennes += eleve.moyenne;
-            acc[escadron].totalEleves++;
-            if (eleve.moyenne < 10) acc[escadron].enDifficulte++;
+        // Stats par Escadron
+        const escadrons = classement.reduce((acc, e) => {
+            const esc = e.escadron || 'Inconnu';
+            if (!acc[esc]) acc[esc] = { nom: esc, somme: 0, count: 0 };
+            acc[esc].somme += parseFloat(e.moyenne);
+            acc[esc].count++;
             return acc;
         }, {});
 
-        const statsParEscadron = Object.values(statsParEscadronGroupes)
-            .map(esc => ({
-                ...esc,
-                moyenne: esc.totalEleves > 0 ? (esc.sommeMoyennes / esc.totalEleves) : 0
-            }))
+        const statsParEscadron = Object.values(escadrons)
+            .map(esc => ({ nom: esc.nom, moyenne: esc.somme / esc.count }))
             .sort((a, b) => b.moyenne - a.moyenne);
 
-        const elevesEnDifficulte = classementCalcules
-            .filter(e => e.moyenne !== null && e.moyenne < 10)
-            .sort((a, b) => a.moyenne - b.moyenne);
-
-        const [classementMatieres] = await db.query(`
-            SELECT m.nom_matiere, AVG(c.note) as moyenne
-            FROM copies c JOIN matieres m ON c.matiere_id = m.id
-            WHERE c.note IS NOT NULL
-            GROUP BY m.id ORDER BY moyenne DESC
-        `);
-
         res.json({
-            stats: {
-                totalMatieres: configs.length,
-                moyennePromotion: moyenneGeneralePromotion,
-                meilleureMatiere: classementMatieres[0] || null,
-                pireMatiere: classementMatieres[classementMatieres.length - 1] || null,
-            },
-            classement: classementCalcules,
+            stats: { moyennePromotion: moyennePromotion.toFixed(2) },
+            classement, // On renvoie le classement déjà trié
             elevesEnDifficulte,
-            statsParEscadron,
-            absents,
-            classementMatieres
+            statsParEscadron
         });
-
     } catch (err) {
-        console.error("Erreur sur /api/dashboard/general-summary :", err);
-        res.status(500).json({ error: "Erreur lors de la récupération de la synthèse générale." });
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -2760,7 +2799,7 @@ app.post('/api/absences/direct-bulk', authenticateToken, checkRole(['admin','ope
 
 app.get('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const [modeles] = await db.query("SELECT id, nom_modele, coefficient_general FROM modeles_examens ORDER BY nom_modele");
+        const [modeles] = await db.query("SELECT id, nom_modele, coefficient_general, date_debut, date_fin FROM modeles_examens ORDER BY nom_modele");
         const [configs] = await db.query("SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations");
 
         const configuration = modeles.map(modele => ({
@@ -2784,8 +2823,8 @@ app.put('/api/configuration/examens', authenticateToken, checkRole(['admin']), a
 
         for (const modele of fullConfiguration) {
             await connection.query(
-                "UPDATE modeles_examens SET coefficient_general = ? WHERE id = ?",
-                [modele.coefficient_general, modele.id]
+                "UPDATE modeles_examens SET coefficient_general = ?, date_debut = ?, date_fin = ? WHERE id = ?",
+                [modele.coefficient_general, modele.date_debut || null, modele.date_fin || null, modele.id]
             );
 
             await connection.query(
@@ -2795,19 +2834,14 @@ app.put('/api/configuration/examens', authenticateToken, checkRole(['admin']), a
 
             if (modele.configurations && modele.configurations.length > 0) {
                 const valuesToInsert = modele.configurations.map(config => [
-                    modele.id,
-                    config.matiere_id,
-                    config.coefficient
+                    modele.id, config.matiere_id, config.coefficient
                 ]);
-
                 await connection.query(
-                    `INSERT INTO examens_configurations (modele_examen_id, matiere_id, coefficient)
-                     VALUES ?`,
+                    `INSERT INTO examens_configurations (modele_examen_id, matiere_id, coefficient) VALUES ?`,
                     [valuesToInsert]
                 );
             }
         }
-
         await connection.commit();
         res.json({ message: "Configuration des examens mise à jour avec succès." });
     } catch (err) {
@@ -3080,39 +3114,39 @@ app.delete('/api/codes/lot/:id', authenticateToken, checkRole(['admin']), async 
 });
 
 app.post('/api/codes/sauvegarder', authenticateToken, checkRole(['admin']), async (req, res) => {
-    const { matiereId, typeExamen, codes } = req.body;
+    const { matiereId, typeExamen, codes, promotion, population } = req.body; // Ajout population
     const utilisateurId = req.user.id;
 
-    if (!matiereId || !typeExamen || !Array.isArray(codes) || codes.length === 0) {
+    if (!matiereId || !typeExamen || !promotion || !Array.isArray(codes) || codes.length === 0) {
         return res.status(400).json({ message: "Données invalides pour la sauvegarde." });
     }
 
     const connection = await db.getConnection();
     try {
         await connection.beginTransaction();
-
         const [[matiere]] = await connection.query("SELECT nom_matiere FROM matieres WHERE id = ?", [matiereId]);
-        if (!matiere) throw new Error("Matière non trouvée.");
 
-        const codesAInserer = codes.map(code => [code]);
-        await connection.query("INSERT INTO codes_anonymes_disponibles (code) VALUES ?", [codesAInserer]);
+        // Insertion des codes individuels
+        // On ajoute 'population' dans le mapping et dans la requête SQL
+const codesAInserer = codes.map(code => [code, promotion, population || 'all']);
+await connection.query("INSERT INTO codes_anonymes_disponibles (code, promotion, population) VALUES ?", [codesAInserer]);
 
-        await connection.query(
-            `INSERT INTO lots_codes_generes (matiere_id, nom_matiere, type_examen, nombre_codes, codes_json, genere_par_utilisateur_id)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [matiereId, matiere.nom_matiere, typeExamen, codes.length, JSON.stringify(codes), utilisateurId]
-        );
+        // Insertion du lot avec la population (8 colonnes / 8 ?)
+        const queryLot = `
+            INSERT INTO lots_codes_generes 
+            (matiere_id, nom_matiere, type_examen, promotion, population, nombre_codes, codes_json, genere_par_utilisateur_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        await connection.query(queryLot, [
+            matiereId, matiere.nom_matiere, typeExamen, promotion, 
+            population || 'all', codes.length, JSON.stringify(codes), utilisateurId
+        ]);
 
         await connection.commit();
         res.status(201).json({ message: "Lot de codes enregistré avec succès." });
-
     } catch (err) {
         await connection.rollback();
-        if (err.code === 'ER_DUP_ENTRY') {
-             return res.status(409).json({ message: "Conflit : Un ou plusieurs de ces codes existent déjà." });
-        }
-        console.error("Erreur sur POST /api/codes/sauvegarder", err);
-        res.status(500).json({ message: "Erreur interne lors de la sauvegarde." });
+        res.status(500).json({ message: "Erreur lors de la sauvegarde." });
     } finally {
         connection.release();
     }
@@ -3121,12 +3155,11 @@ app.post('/api/codes/sauvegarder', authenticateToken, checkRole(['admin']), asyn
 app.get('/api/codes/lots', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const [lots] = await db.query(
-            "SELECT id, nom_matiere, type_examen, nombre_codes, date_generation FROM lots_codes_generes ORDER BY date_generation DESC"
-        );
+            "SELECT id, nom_matiere, type_examen, promotion, population, nombre_codes, date_generation FROM lots_codes_generes ORDER BY date_generation DESC"
+        ); // Ajout de 'population' dans le SELECT
         res.json(lots);
     } catch (err) {
-        console.error("Erreur sur GET /api/codes/lots", err);
-        res.status(500).json({ message: "Erreur lors de la récupération de l'historique." });
+        res.status(500).json({ message: "Erreur serveur." });
     }
 });
 
@@ -3296,29 +3329,22 @@ app.get('/api/pelotons/:escadron', authenticateToken, checkRole(['admin','operat
 });
 
 app.post('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
-    const { nom_modele } = req.body;
+    const { nom_modele, date_debut, date_fin } = req.body;
 
     if (!nom_modele || nom_modele.trim() === '') {
         return res.status(400).json({ message: "Le nom du modèle est requis." });
     }
 
     try {
-        const query = "INSERT INTO modeles_examens (nom_modele, coefficient_general) VALUES (?, ?)";
-        const [result] = await db.query(query, [nom_modele.trim(), 1]);
+        const query = "INSERT INTO modeles_examens (nom_modele, coefficient_general, date_debut, date_fin) VALUES (?, ?, ?, ?)";
+        const [result] = await db.query(query, [nom_modele.trim(), 1, date_debut || null, date_fin || null]);
 
         const nouvelId = result.insertId;
         const [[nouveauModele]] = await db.query("SELECT * FROM modeles_examens WHERE id = ?", [nouvelId]);
 
-        res.status(201).json({
-            ...nouveauModele,
-            configurations: []
-        });
-
+        res.status(201).json({ ...nouveauModele, configurations: [] });
     } catch (err) {
-        if (err.code === 'ER_DUP_ENTRY') {
-            return res.status(409).json({ message: "Un modèle avec ce nom existe déjà." });
-        }
-        console.error("Erreur sur POST /api/configuration/examens", err);
+        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: "Un modèle avec ce nom existe déjà." });
         res.status(500).json({ message: "Erreur lors de la création du modèle." });
     }
 });
@@ -3403,25 +3429,97 @@ app.get('/api/stats/notes-utilisateur-specifique', authenticateToken, checkRole(
 
 app.post('/api/decisions-conseil', authenticateToken, checkRole(['admin']), async (req, res) => {
     const { eleve_id, type_decision, motif } = req.body;
+
+    if (!eleve_id || !type_decision) {
+        return res.status(400).json({ message: "L'élève et le type de décision sont requis." });
+    }
+
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // 1. Enregistrer la décision dans l'historique du conseil
+        await connection.query(
+            "INSERT INTO decisions_conseil (eleve_id, type_decision, motif) VALUES (?, ?, ?)",
+            [eleve_id, type_decision, motif && motif !== "" ? motif : null]
+        );
+
+        // 2. Déterminer le nouveau statut de l'élève
+        let nouveauStatut = 'actif';
+        if (type_decision === 'redoublement') nouveauStatut = 'redoublant';
+        else if (type_decision === 'ajournement_3m') nouveauStatut = 'ajourne_3m';
+        else if (type_decision === 'ajournement_6m') nouveauStatut = 'ajourne_6m';
+        else if (type_decision === 'radiation') nouveauStatut = 'radie';
+
+        // 3. Mettre à jour la fiche de l'élève
+        // Note : On pourrait aussi vider 'promotion_actuelle' pour les radiés
+        await connection.query(
+            "UPDATE eleves SET statut = ? WHERE id = ?",
+            [nouveauStatut, eleve_id]
+        );
+
+        await connection.commit();
+        res.status(201).json({ message: "Décision enregistrée et statut élève mis à jour." });
+    } catch (err) {
+        await connection.rollback();
+        console.error(err);
+        res.status(500).json({ error: "Erreur lors de l'enregistrement." });
+    } finally {
+        connection.release();
+    }
+});
+
+// 2. Route pour MODIFIER une décision
+app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+    const { id } = req.params;
+    const { type_decision, motif } = req.body;
+    
     try {
         await db.query(
-            "INSERT INTO decisions_conseil (eleve_id, type_decision, motif) VALUES (?, ?, ?)",
-            [eleve_id, type_decision, motif]
+            "UPDATE decisions_conseil SET type_decision = ?, motif = ? WHERE id = ?",
+            [type_decision, motif && motif !== "" ? motif : null, id] // Gère le "Non renseigné"
         );
-        res.status(201).json({ message: "Décision enregistrée" });
+        res.json({ message: "Décision mise à jour avec succès" });
     } catch (err) {
-        res.status(500).json({ error: "Erreur lors de l'enregistrement" });
+        res.status(500).json({ error: err.message });
     }
 });
 
 app.get('/api/decisions-conseil', authenticateToken, async (req, res) => {
     try {
         const [rows] = await db.query(`
-            SELECT d.*, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton
+            SELECT 
+                d.id, 
+                d.eleve_id, 
+                d.type_decision, 
+                d.motif, 
+                d.date_decision,
+                e.nom, 
+                e.prenom, 
+                e.numero_incorporation, 
+                e.promotion, 
+                e.escadron, 
+                e.peloton
             FROM decisions_conseil d
             JOIN eleves e ON d.eleve_id = e.id
+            ORDER BY d.date_decision DESC
         `);
         res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Ajoute aussi cette route pour la mise à jour (Action modifier)
+app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+    const { id } = req.params;
+    const { type_decision, motif } = req.body;
+    try {
+        await db.query(
+            "UPDATE decisions_conseil SET type_decision = ?, motif = ? WHERE id = ?",
+            [type_decision, motif, id]
+        );
+        res.json({ message: "Décision mise à jour avec succès" });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -3433,6 +3531,208 @@ app.delete('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin'])
         res.json({ message: "Décision supprimée" });
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+    const { id } = req.params;
+    const { type_decision, motif } = req.body;
+    try {
+        await db.query(
+            "UPDATE decisions_conseil SET type_decision = ?, motif = ? WHERE id = ?",
+            [type_decision, motif, id]
+        );
+        res.json({ message: "Décision mise à jour" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+app.get('/api/dashboard/evolution-conseil', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { promotion } = req.query;
+        const [elevesConseil] = await db.query(
+            "SELECT id, nom, prenom, numero_incorporation, promotion, statut FROM eleves WHERE statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m') AND promotion = ?",
+            [promotion]
+        );
+
+        const evolutionData = [];
+        for (const eleve of elevesConseil) {
+            const [stats] = await db.query(
+                "SELECT type_examen, moyenne FROM statistiques_classement WHERE eleve_id = ? AND type_examen IN ('General', 'REPECHAGE')",
+                [eleve.id]
+            );
+
+            const moyInitiale = stats.find(s => s.type_examen === 'General')?.moyenne || 0;
+            const moyRepechage = stats.find(s => s.type_examen === 'REPECHAGE')?.moyenne || 0;
+
+            const [detailsNotes] = await db.query(`
+                SELECT m.nom_matiere, c_rep.note as note_repechage,
+                (SELECT c_init.note FROM copies c_init WHERE c_init.eleve_id = c_rep.eleve_id AND c_init.matiere_id = c_rep.matiere_id AND c_init.type_examen != 'REPECHAGE' LIMIT 1) as note_initiale
+                FROM copies c_rep JOIN matieres m ON c_rep.matiere_id = m.id
+                WHERE c_rep.eleve_id = ? AND c_rep.type_examen = 'REPECHAGE'
+            `, [eleve.id]);
+
+            evolutionData.push({
+                id: eleve.id,
+                nom: eleve.nom,
+                prenom: eleve.prenom,
+                numero_incorporation: eleve.numero_incorporation, // CHANGÉ : 'incorp' devient 'numero_incorporation'
+ statut: eleve.statut, 
+     
+           moyenneInitiale: parseFloat(moyInitiale).toFixed(2),
+                moyenneRepechage: parseFloat(moyRepechage).toFixed(2),
+                progression: (parseFloat(moyRepechage) - parseFloat(moyInitiale)).toFixed(2),
+                matieres: detailsNotes.map(n => ({
+                    nom: n.nom_matiere,
+                    initiale: n.note_initiale ? parseFloat(n.note_initiale).toFixed(2) : "N/A",
+                    repechage: parseFloat(n.note_repechage).toFixed(2),
+                    diff: n.note_initiale ? (parseFloat(n.note_repechage) - parseFloat(n.note_initiale)).toFixed(2) : "N/A"
+                }))
+            });
+        }
+        evolutionData.sort((a, b) => b.progression - a.progression);
+        res.json(evolutionData);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Route pour déclencher le calcul global et remplir la table de cache
+
+app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['admin']), async (req, res) => {
+    const connection = await db.getConnection();
+    req.setTimeout(600000);
+    try {
+        await connection.beginTransaction();
+        const [modeles] = await connection.query("SELECT id, nom_modele, coefficient_general FROM modeles_examens");
+        const [configs] = await connection.query("SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations");
+        const [eleves] = await connection.query("SELECT id, promotion, statut FROM eleves");
+        const [notes] = await connection.query("SELECT eleve_id, matiere_id, note, type_examen FROM copies WHERE note IS NOT NULL");
+
+        const notesIndex = {};
+        notes.forEach(n => {
+            const eId = n.eleve_id;
+            const tEx = String(n.type_examen).trim();
+            const mId = n.matiere_id;
+            if (!notesIndex[eId]) notesIndex[eId] = {};
+            if (!notesIndex[eId][tEx]) notesIndex[eId][tEx] = {};
+            notesIndex[eId][tEx][mId] = parseFloat(n.note);
+        });
+
+        const getPopulation = (statut) => {
+            const conseil = ['redoublant', 'ajourne_3m', 'ajourne_6m'];
+            return conseil.includes(statut) ? 'conseil' : 'actif';
+        };
+
+        let statsToInsert = [];
+        const tousLesModeles = [...modeles, { id: 0, nom_modele: 'General', coefficient_general: 0 }];
+
+        for (const modele of tousLesModeles) {
+            const isGeneral = modele.nom_modele === 'General';
+            
+            const moyennesEleves = eleves.map(eleve => {
+                let moyenneFinale = null;
+                const notesDeLEleve = notesIndex[eleve.id] || {};
+
+                if (isGeneral) {
+                    let totalPointsGen = 0;
+                    let totalCoeffsGen = 0;
+                    modeles.forEach(m => {
+                        const nomExamen = String(m.nom_modele).trim();
+                        const notesDeLExamen = notesDeLEleve[nomExamen] || {};
+                        const configsM = configs.filter(c => c.modele_examen_id === m.id);
+                        let ptsExamen = 0;
+                        let coefExamen = 0;
+                        configsM.forEach(c => {
+                            const noteTrouvee = notesDeLExamen[c.matiere_id];
+                            if (noteTrouvee !== undefined) {
+                                ptsExamen += noteTrouvee * parseFloat(c.coefficient);
+                                coefExamen += parseFloat(c.coefficient);
+                            }
+                        });
+                        const coefModeleGlobal = parseFloat(m.coefficient_general);
+                        if (coefExamen > 0 && coefModeleGlobal > 0) {
+                            totalPointsGen += (ptsExamen / coefExamen) * coefModeleGlobal;
+                            totalCoeffsGen += coefModeleGlobal;
+                        }
+                    });
+                    if (totalCoeffsGen > 0) moyenneFinale = totalPointsGen / totalCoeffsGen;
+                } else {
+                    const nomExamen = String(modele.nom_modele).trim();
+                    const notesDeLExamen = notesDeLEleve[nomExamen] || {};
+                    const configsM = configs.filter(c => c.modele_examen_id === modele.id);
+                    let pts = 0;
+                    let coef = 0;
+                    configsM.forEach(c => {
+                        const noteTrouvee = notesDeLExamen[c.matiere_id];
+                        if (noteTrouvee !== undefined) {
+                            pts += noteTrouvee * parseFloat(c.coefficient);
+                            coef += parseFloat(c.coefficient);
+                        }
+                    });
+                    if (coef > 0) moyenneFinale = pts / coef;
+                }
+
+                if (moyenneFinale === null) return null;
+                return {
+                    id: eleve.id,
+                    promotion: eleve.promotion,
+                    population: getPopulation(eleve.statut),
+                    moyenne: moyenneFinale
+                };
+            }).filter(e => e !== null);
+
+            const promos = [...new Set(eleves.map(e => e.promotion))];
+            promos.forEach(promo => {
+                const groupePromo = moyennesEleves.filter(e => e.promotion === promo);
+                groupePromo.sort((a, b) => b.moyenne - a.moyenne);
+                let rang = 0; let lastMoy = -1; let countAtRank = 1;
+                groupePromo.forEach((eleve, index) => {
+                    const moyArrondie = parseFloat(eleve.moyenne.toFixed(2));
+                    if (moyArrondie !== lastMoy) {
+                        rang += countAtRank;
+                        countAtRank = 1;
+                    } else {
+                        countAtRank++;
+                    }
+                    lastMoy = moyArrondie;
+                    const isEx = (groupePromo[index + 1] && parseFloat(groupePromo[index + 1].moyenne.toFixed(2)) === moyArrondie) ||
+                                 (groupePromo[index - 1] && parseFloat(groupePromo[index - 1].moyenne.toFixed(2)) === moyArrondie);
+                    const rangFinal = isEx ? `${rang} ex` : `${rang}`;
+                    statsToInsert.push([eleve.id, promo, eleve.population, modele.nom_modele, eleve.moyenne.toFixed(2), rangFinal]);
+                });
+            });
+        }
+
+        if (statsToInsert.length > 0) {
+            await connection.query("DELETE FROM statistiques_classement");
+            const chunkSize = 1000;
+            for (let i = 0; i < statsToInsert.length; i += chunkSize) {
+                const chunk = statsToInsert.slice(i, i + chunkSize);
+                await connection.query("INSERT INTO statistiques_classement (eleve_id, promotion, population, type_examen, moyenne, rang) VALUES ?", [chunk]);
+            }
+        }
+        await connection.commit();
+        res.json({ message: "Statistiques et classements générés avec succès." });
+    } catch (err) {
+        await connection.rollback();
+        res.status(500).json({ error: err.message });
+    } finally {
+        connection.release();
+    }
+});
+
+app.get('/api/resultats/stats-eleve/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const query = `
+            SELECT type_examen, moyenne, rang 
+            FROM statistiques_classement 
+            WHERE eleve_id = ?
+        `;
+        const [rows] = await db.query(query, [id]);
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: "Erreur lors de la récupération des statistiques." });
     }
 });
 

@@ -7,8 +7,9 @@ const FALLBACK_COUR_ID = 79;
 
 const formatOrdinal = (n) => {
     if (!n) return '';
-    if (n === 1) return `${n}er`;
-    return `${n}em`;
+    const num = parseInt(n);
+    if (num === 1) return `${num}er`;
+    return `${num}em`;
 };
 
 const formatDate = (dateString) => {
@@ -16,7 +17,11 @@ const formatDate = (dateString) => {
     try {
         const date = new Date(dateString);
         if (isNaN(date.getTime())) return 'N/A';
-        return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }).format(date);
+        return new Intl.DateTimeFormat('fr-FR', {
+            day: '2-digit',
+            month: 'long',
+            year: 'numeric'
+        }).format(date);
     } catch (e) {
         return dateString;
     }
@@ -29,6 +34,23 @@ const calculateDaysBetween = (startDate, endDate) => {
     if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
     const diffTime = Math.abs(end - start);
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+};
+
+// Fonction pour déterminer le chevauchement avec la période d'examen
+const getOverlappingDays = (start1, end1, limitStart, limitEnd) => {
+    if (!start1 || !limitStart || !limitEnd) return 0;
+    const s1 = new Date(start1).getTime();
+    const e1 = end1 ? new Date(end1).getTime() : s1;
+    const s2 = new Date(limitStart).getTime();
+    const e2 = new Date(limitEnd).getTime();
+
+    const maxStart = Math.max(s1, s2);
+    const minEnd = Math.min(e1, e2);
+
+    if (maxStart <= minEnd) {
+        return Math.ceil((minEnd - maxStart) / (1000 * 60 * 60 * 24)) + 1;
+    }
+    return 0;
 };
 
 const SanctionItem = ({ sanction }) => {
@@ -67,9 +89,7 @@ const ConsultationItem = ({ consult }) => {
                     <p><strong>Cadre référent :</strong> {consult.Cadre?.nom} ({consult.Cadre?.grade})</p>
                     <p><strong>Référence message :</strong> {consult.refMessage}</p>
                     <p><strong>Contact :</strong> {consult.phone}</p>
-
                     <p><strong>Status :</strong> {consult.status || 'Non renseigné'}</p>
-
                     <div style={{ margin: '10px 0', padding: '5px', backgroundColor: '#f0f4f8', borderRadius: '4px' }}>
                         <p style={{ margin: '2px 0' }}>
                             <i className="fa fa-bed fa-fw"></i> <strong>Hospitalisation :</strong> {consult.hospitalisation} jour(s)
@@ -78,7 +98,6 @@ const ConsultationItem = ({ consult }) => {
                             <i className="fa fa-heartbeat fa-fw"></i> <strong>Ambulatoire (Non hosp.) :</strong> {consult.Nonhospitalisation ?? 0} jour(s)
                         </p>
                     </div>
-
                     {consult.observation && (
                         <div style={{ marginTop: '10px' }}>
                             <strong>Observation :</strong>
@@ -138,28 +157,22 @@ const ProfileInfoItem = ({ label, value, icon }) => (
     </div>
 );
 
-
-const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => {
+const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, endDate, onClose }) => {
     const [absences, setAbsences] = useState([]);
     const [processedAbsences, setProcessedAbsences] = useState([]);
     const [consultations, setConsultations] = useState([]);
     const [sanctions, setSanctions] = useState([]);
-
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [photoUrl, setPhotoUrl] = useState(DEFAULT_AVATAR_URL);
     const [studentDetails, setStudentDetails] = useState(null);
     const [isImageFullscreen, setIsImageFullscreen] = useState(false);
-
     const [generalResults, setGeneralResults] = useState([]);
     const [loadingGeneral, setLoadingGeneral] = useState(false);
 
     useEffect(() => {
         if (!student) return;
-
         const currentIncorp = String(student.numero_incorporation || student.numeroIncorporation || '').trim();
-        const eleveId = student.id;
-
         const fetchExternalData = async () => {
             setLoading(true);
             setError('');
@@ -171,22 +184,17 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
                     axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${currentIncorp}?cour=${FALLBACK_COUR_ID}`),
                     axios.get(`http://192.168.241.169:4000/api/sanctions`)
                 ]);
-
                 if (consultRes.status === 'fulfilled' && consultRes.value.data) {
                     setConsultations(Array.isArray(consultRes.value.data) ? consultRes.value.data : []);
                 }
                 if (absenceRes.status === 'fulfilled' && absenceRes.value.data) {
                     setAbsences(Array.isArray(absenceRes.value.data) ? absenceRes.value.data : []);
                 }
-
                 if (sanctionsRes.status === 'fulfilled' && sanctionsRes.value.data) {
                     const allSanctions = Array.isArray(sanctionsRes.value.data) ? sanctionsRes.value.data : [];
-                    const studentSanctions = allSanctions.filter(s => {
-                        return s.Eleve && String(s.Eleve.numeroIncorporation).trim() === currentIncorp;
-                    });
+                    const studentSanctions = allSanctions.filter(s => s.Eleve && String(s.Eleve.numeroIncorporation).trim() === currentIncorp);
                     setSanctions(studentSanctions);
                 }
-
                 if (detailsRes.status === 'fulfilled' && detailsRes.value.data?.eleve) {
                     const eleveInfo = detailsRes.value.data.eleve;
                     setStudentDetails(eleveInfo);
@@ -196,7 +204,6 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
                 }
             } catch (err) {
                 setError('Impossible de charger les détails complets.');
-                console.error(err);
             } finally {
                 setLoading(false);
             }
@@ -205,60 +212,37 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
     }, [student]);
 
     useEffect(() => {
-        if (typeExamen === 'General' && student) {
-            const fetchGeneralBreakdown = async () => {
+        if (student) {
+            const fetchOptimizedStats = async () => {
                 setLoadingGeneral(true);
                 const token = localStorage.getItem('token');
                 const headers = { Authorization: `Bearer ${token}` };
-
                 try {
-                    const configRes = await axios.get('/api/configuration/examens', { headers });
-                    const models = configRes.data;
-
-                    const results = await Promise.all(models.map(async (model) => {
-                        try {
-                            const rankRes = await axios.get(`/api/resultats/classement-details?typeExamen=${model.nom_modele}`, { headers });
-                            const studentData = rankRes.data.classement.find(s => s.id === student.id);
-
-                            const hasNote = studentData && studentData.moyenne !== null;
-
-                            return {
-                                id: model.id,
-                                name: model.nom_modele,
-                                average: hasNote ? parseFloat(studentData.moyenne).toFixed(2) : null,
-                                rank: hasNote ? (studentData.rang || studentData.statut) : 'Non classé',
-                                isPassed: hasNote ? parseFloat(studentData.moyenne) >= 12 : false,
-                                hasNote: hasNote
-                            };
-                        } catch (e) { 
-                            return {
-                                id: model.id,
-                                name: model.nom_modele,
-                                average: null,
-                                rank: 'Erreur',
-                                isPassed: false,
-                                hasNote: false
-                            };
-                        }
+                    const response = await axios.get(`/api/resultats/stats-eleve/${student.id}`, { headers });
+                    const results = response.data.map(stat => ({
+                        id: stat.type_examen,
+                        name: stat.type_examen,
+                        average: stat.moyenne,
+                        rank: stat.rang,
+                        isPassed: parseFloat(stat.moyenne) >= 12,
+                        hasNote: true
                     }));
-
-                    setGeneralResults(results.filter(r => r !== null));
+                    setGeneralResults(results);
                 } catch (e) {
-                    console.error("Erreur chargement détail général", e);
+                    console.error("Erreur chargement statistiques directes", e);
                 } finally {
                     setLoadingGeneral(false);
                 }
             };
-            fetchGeneralBreakdown();
+            fetchOptimizedStats();
         }
-    }, [student, typeExamen]);
+    }, [student]);
 
     useEffect(() => {
         if (absences.length === 0) {
             setProcessedAbsences([]);
             return;
         }
-
         const groupedByMotif = absences.reduce((acc, current) => {
             const motifKey = current.motif || 'Non spécifié';
             if (!acc[motifKey]) acc[motifKey] = { motif: motifKey, count: 0, totalDays: 0, dates: [] };
@@ -267,9 +251,45 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
             acc[motifKey].dates.push(current.date);
             return acc;
         }, {});
-
         setProcessedAbsences(Object.values(groupedByMotif));
     }, [absences]);
+
+    // ---- LOGIQUE DE FILTRAGE POUR LA PÉRIODE D'EXAMEN ----
+    const periodConsultations = useMemo(() => {
+        if (!startDate || !endDate) return [];
+        return consultations.filter(c => getOverlappingDays(c.dateDepart, c.dateArrive, startDate, endDate) > 0);
+    }, [consultations, startDate, endDate]);
+
+    const periodAbsencesRaw = useMemo(() => {
+        if (!startDate || !endDate) return [];
+        return absences.filter(a => {
+            const d = a.date || a.dateDebut || a.createdAt;
+            return getOverlappingDays(d, d, startDate, endDate) > 0;
+        });
+    }, [absences, startDate, endDate]);
+
+    const periodSanctions = useMemo(() => {
+        if (!startDate || !endDate) return [];
+        return sanctions.filter(s => getOverlappingDays(s.createdAt, s.createdAt, startDate, endDate) > 0);
+    }, [sanctions, startDate, endDate]);
+
+    const [periodProcessedAbsences, setPeriodProcessedAbsences] = useState([]);
+    useEffect(() => {
+        if (periodAbsencesRaw.length === 0) {
+            setPeriodProcessedAbsences([]);
+            return;
+        }
+        const groupedByMotif = periodAbsencesRaw.reduce((acc, current) => {
+            const motifKey = current.motif || 'Non spécifié';
+            if (!acc[motifKey]) acc[motifKey] = { motif: motifKey, count: 0, totalDays: 0, dates: [] };
+            acc[motifKey].count += 1;
+            acc[motifKey].totalDays += 1;
+            acc[motifKey].dates.push(current.date || current.dateDebut || current.createdAt);
+            return acc;
+        }, {});
+        setPeriodProcessedAbsences(Object.values(groupedByMotif));
+    }, [periodAbsencesRaw]);
+    // ------------------------------------------------------
 
     const consultationStats = useMemo(() => {
         if (consultations.length === 0) return null;
@@ -277,7 +297,6 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
         let label = consultations.length === 1 ? `${totalDays} jours continue` : `${totalDays} jours discontinus`;
         return { totalDays, label };
     }, [consultations]);
-
 
     if (!student) return null;
 
@@ -297,10 +316,8 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
                     />
                 </div>
             )}
-
             <div className="student-modal-cv-content" onClick={e => e.stopPropagation()}>
                 <span onClick={onClose} className="cv-close-button">&times;</span>
-
                 <div className="cv-grid">
                     <aside className="cv-profile-column">
                         <div className="cv-avatar-container">
@@ -333,16 +350,26 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
                         </div>
                         <p className="cv-title-eg">EG</p>
                         <h2 className="cv-student-name">{displayStudent.prenom} {displayStudent.nom}</h2>
-
                         <hr style={{ margin: '20px 0' }} />
                         <div className="cv-info-list">
-                            <div className="info-line"><i className="fa fa-home fa-fw"></i><span>{groupText || 'Groupe non défini'}</span></div>
-                            <div className="info-line"><i className="fa fa-hashtag fa-fw"></i><span>Incorp: {displayStudent.numeroIncorporation || displayStudent.numero_incorporation}</span></div>
-                            <div className="info-line"><i className="fa fa-id-card-o fa-fw"></i><span>Matricule: {displayStudent.matricule || 'N/A'}</span></div>
-                            <div className="info-line"><i className="fa fa-vcard fa-fw"></i><span>CIN: {displayStudent.CIN || 'N/A'}</span></div>
+                            <div className="info-line">
+                                <i className="fa fa-home fa-fw"></i>
+                                <span>{groupText || 'Groupe non défini'}</span>
+                            </div>
+                            <div className="info-line">
+                                <i className="fa fa-hashtag fa-fw"></i>
+                                <span>Incorp: {displayStudent.numeroIncorporation || displayStudent.numero_incorporation}</span>
+                            </div>
+                            <div className="info-line">
+                                <i className="fa fa-id-card-o fa-fw"></i>
+                                <span>Matricule: {displayStudent.matricule || 'N/A'}</span>
+                            </div>
+                            <div className="info-line">
+                                <i className="fa fa-vcard fa-fw"></i>
+                                <span>CIN: {displayStudent.CIN || 'N/A'}</span>
+                            </div>
                         </div>
                         <hr style={{ margin: '20px 0' }} />
-
                         <div className="cv-personal-details-list">
                             <ProfileInfoItem label="Date de Naissance" value={formatDate(displayStudent.dateNaissance)} icon="fa-calendar" />
                             <ProfileInfoItem label="Lieu de Naissance" value={displayStudent.lieuNaissance} icon="fa-map-pin" />
@@ -353,56 +380,70 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
                             <ProfileInfoItem label="N° Candidature" value={displayStudent.numCandidature} icon="fa-ticket" />
                         </div>
                     </aside>
-
                     <main className="cv-main-column">
                         <section className="cv-section">
-                            <h3 className="cv-section-title"><i className="fa fa-pencil fa-fw"></i>Résultats - {typeExamen.replace(/_/g, ' ')}</h3>
-                            <h4 className={`cv-average-display ${parseFloat(student.moyenne) < 12 ? 'average-fail' : ''}`}>Moyenne Générale : {student.moyenne} / 20</h4>
+                            <h3 className="cv-section-title"><i className="fa fa-pencil fa-fw"></i>Résultats Académiques</h3>
+                            <h4 className={`cv-average-display ${parseFloat(student.moyenne) < 12 ? 'average-fail' : ''}`}>Moyenne Actuelle : {student.moyenne} / 20</h4>
                             <div className="notes-grid">
-                                {typeExamen === 'General' ? (
-                                    loadingGeneral ? <p>Chargement des détails par examen...</p> : (
-                                        generalResults.length > 0 ? (
-                                            generalResults.map(res => (
-                                                <div className="note-item" key={res.id} style={{
-                                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', padding: '10px',
-                                                    background: '#f8f9fa', marginBottom: '5px', 
-                                                    borderLeft: res.hasNote ? (res.isPassed ? '4px solid #28a745' : '4px solid #dc3545') : '4px solid #6c757d'
-                                                }}>
-                                                    <span className="note-subject" style={{flex: 1, fontWeight: 'bold'}}>{res.name}</span>
-                                                    <span className="note-score" style={{flex: 1, textAlign: 'center'}}>{res.hasNote ? `${res.average} / 20` : 'Non classé'}</span>
-                                                    <span style={{flex: 1, textAlign: 'right', fontSize: '0.9em', color: '#555'}}>Rang: <strong>{res.rank}</strong></span>
-                                                </div>
-                                            ))
-                                        ) : <p>Aucun résultat d'examen disponible.</p>
-                                    )
+                                {loadingGeneral ? (
+                                    <div style={{padding: '20px', textAlign: 'center', width: '100%'}}>
+                                        <p>Chargement des statistiques...</p>
+                                    </div>
                                 ) : (
-                                    examSubjects && examSubjects.length > 0 ? (
-                                        examSubjects.map(subject => {
-                                            const note = student.notesDetail && student.notesDetail[subject.id];
-                                            const scoreClass = !note ? 'na' : parseFloat(note) < 12 ? 'low-score' : '';
-                                            return (
-                                                <div className="note-item" key={subject.id}>
-                                                    <span className="note-subject">{subject.nom_matiere}</span>
-                                                    <span className={`note-score ${scoreClass}`}>{note || 'N/A'}</span>
-                                                </div>
-                                            );
-                                        })
-                                    ) : <p>Aucune matière configurée.</p>
+                                    generalResults.length > 0 ? (
+                                        generalResults.map(res => (
+                                            <div className="note-item" key={res.id} style={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                width: '100%',
+                                                padding: '12px 15px',
+                                                background: '#f8f9fa',
+                                                marginBottom: '8px',
+                                                borderRadius: '6px',
+                                                borderLeft: res.isPassed ? '5px solid #28a745' : '5px solid #dc3545',
+                                                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                                            }}>
+                                                <span className="note-subject" style={{flex: 1.5, fontWeight: '700', color: '#333'}}>{res.name}</span>
+                                                <span className="note-score" style={{flex: 1, textAlign: 'center', fontWeight: 'bold', color: res.isPassed ? '#28a745' : '#dc3545'}}>
+                                                    {res.average} / 20
+                                                </span>
+                                                <span style={{flex: 1, textAlign: 'right', fontSize: '0.95em', color: '#666'}}>
+                                                    Rang: <strong style={{color: '#007bff'}}>{res.rank}</strong>
+                                                </span>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        examSubjects && examSubjects.length > 0 ? (
+                                            examSubjects.map(subject => {
+                                                const note = student.notesDetail && student.notesDetail[subject.id];
+                                                const isBad = note && parseFloat(note) < 12;
+                                                return (
+                                                    <div className="note-item" key={subject.id}>
+                                                        <span className="note-subject">{subject.nom_matiere}</span>
+                                                        <span className={`note-score ${!note ? 'na' : (isBad ? 'low-score' : '')}`}>
+                                                            {note || 'N/A'}
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })
+                                        ) : <p className="text-muted" style={{padding: '10px'}}>Aucune donnée disponible pour cet examen.</p>
+                                    )
                                 )}
                             </div>
                         </section>
-
+                        
                         <section className="cv-section">
-                            <h3 className="cv-section-title"><i className="fa fa-medkit fa-fw"></i>Discipline & Suivi</h3>
-                            {loading ? <p>Chargement...</p> : error ? <p>{error}</p> : (
+                            <h3 className="cv-section-title"><i className="fa fa-medkit fa-fw"></i>Suivi Disciplinaire & Médical (Historique Global)</h3>
+                            {loading ? <p style={{padding: '10px'}}>Chargement des données externes...</p> : (
                                 <>
                                     <div className="external-info-item">
-                                        <h5>Discipline</h5>
+                                        <h5 style={{borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>Comportement & Discipline</h5>
                                         {sanctions.length > 0 ? (
                                             <div className="sanction-container">
                                                 <div className="sanction-alert-header">
                                                     <i className="fa fa-exclamation-triangle"></i>
-                                                    <span>Attention : {sanctions.length} Sanction(s) enregistrée(s)</span>
+                                                    <span>Dossier Disciplinaire : {sanctions.length} Sanction(s)</span>
                                                 </div>
                                                 <ul className="details-list">
                                                     {sanctions.map((s) => <SanctionItem key={s.id} sanction={s} />)}
@@ -410,41 +451,88 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, onClose }) => 
                                             </div>
                                         ) : (
                                             <div className="sanction-clean">
-                                                <i className="fa fa-check-circle"></i> <span>Élève non sanctionné</span>
+                                                <i className="fa fa-check-circle"></i> <span>Aucune sanction au dossier</span>
                                             </div>
                                         )}
                                     </div>
-
-                                    <div className="external-info-item">
-                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                                            <h5>Consultations Externes ({consultations.length})</h5>
+                                    <div className="external-info-item" style={{marginTop: '20px'}}>
+                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>
+                                            <h5>Mouvements de Santé ({consultations.length})</h5>
                                             {consultationStats && (
-                                                <span className="absence-duration" style={{backgroundColor: '#28a745', color: '#fff'}}>
+                                                <span className="absence-duration" style={{backgroundColor: '#28a745', color: '#fff', padding: '2px 10px', borderRadius: '12px', fontSize: '0.85em'}}>
                                                     {consultationStats.label}
                                                 </span>
                                             )}
                                         </div>
-
                                         {consultations.length > 0 ? (
                                             <ul className="details-list">
                                                 {consultations.map((c) => <ConsultationItem key={c.id} consult={c} />)}
                                             </ul>
-                                        ) : <p className="text-muted">Aucune consultation enregistrée.</p>}
+                                        ) : <p className="text-muted" style={{padding: '5px'}}>Aucune consultation enregistrée.</p>}
                                     </div>
-
-                                    <div className="external-info-item">
-                                        <h5>Absences ({processedAbsences.reduce((acc, g) => acc + g.count, 0)})</h5>
+                                    <div className="external-info-item" style={{marginTop: '20px'}}>
+                                        <h5 style={{borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>Registre des Absences ({processedAbsences.reduce((acc, g) => acc + g.count, 0)})</h5>
                                         {processedAbsences.length > 0 ? (
                                             <ul className="details-list">
                                                 {processedAbsences.map((group, index) => (
                                                     <AbsenceGroupItem key={group.motif || index} group={group} />
                                                 ))}
                                             </ul>
-                                        ) : <p className="text-muted">Aucune absence enregistrée.</p>}
+                                        ) : <p className="text-muted" style={{padding: '5px'}}>Aucune absence enregistrée.</p>}
                                     </div>
                                 </>
                             )}
                         </section>
+
+                        {/* NOUVELLE SECTION POUR LA PÉRIODE DE L'EXAMEN */}
+                        {startDate && endDate && (
+                            <section className="cv-section" style={{ border: '2px dashed #007bff', padding: '15px', borderRadius: '8px', backgroundColor: '#f4faff', marginTop: '30px' }}>
+                                <h3 className="cv-section-title" style={{ color: '#007bff', borderBottom: '2px solid #b8daff', paddingBottom: '10px' }}>
+                                    <i className="fa fa-calendar fa-fw"></i> Événements pendant la période d'examen
+                                </h3>
+                                <p style={{ fontSize: '0.9em', color: '#555', marginBottom: '15px' }}>
+                                    (Du {formatDate(startDate)} au {formatDate(endDate)})
+                                </p>
+                                
+                                {periodSanctions.length === 0 && periodConsultations.length === 0 && periodProcessedAbsences.length === 0 ? (
+                                    <p className="text-muted" style={{fontWeight: 'bold'}}>
+                                        <i className="fa fa-check-circle text-success"></i> Aucun événement disciplinaire ou médical durant cette période.
+                                    </p>
+                                ) : (
+                                    <>
+                                        {/* Sanctions pendant l'examen */}
+                                        {periodSanctions.length > 0 && (
+                                            <div className="external-info-item" style={{ marginBottom: '15px' }}>
+                                                <h5 style={{ color: '#dc3545' }}><i className="fa fa-gavel"></i> Sanctions ({periodSanctions.length})</h5>
+                                                <ul className="details-list">
+                                                    {periodSanctions.map(s => <SanctionItem key={`ps-${s.id}`} sanction={s} />)}
+                                                </ul>
+                                            </div>
+                                        )}
+
+                                        {/* Consultations pendant l'examen */}
+                                        {periodConsultations.length > 0 && (
+                                            <div className="external-info-item" style={{ marginBottom: '15px' }}>
+                                                <h5 style={{ color: '#ffc107' }}><i className="fa fa-heartbeat"></i> Consultations Médicales ({periodConsultations.length})</h5>
+                                                <ul className="details-list">
+                                                    {periodConsultations.map(c => <ConsultationItem key={`pc-${c.id}`} consult={c} />)}
+                                                </ul>
+                                            </div>
+                                        )}
+
+                                        {/* Absences pendant l'examen */}
+                                        {periodProcessedAbsences.length > 0 && (
+                                            <div className="external-info-item" style={{ marginBottom: '15px' }}>
+                                                <h5 style={{ color: '#fd7e14' }}><i className="fa fa-user-times"></i> Absences ({periodAbsencesRaw.length})</h5>
+                                                <ul className="details-list">
+                                                    {periodProcessedAbsences.map((group, index) => <AbsenceGroupItem key={`pa-${index}`} group={group} />)}
+                                                </ul>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </section>
+                        )}
                     </main>
                 </div>
             </div>

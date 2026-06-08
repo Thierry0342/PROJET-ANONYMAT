@@ -7,16 +7,12 @@ const ConfigurationModal = ({ matieres, onClose }) => {
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState(null);
     const [newModelName, setNewModelName] = useState('');
-
-    // --- MODIFICATION 1 : Gérer une copie locale des matières ---
     const [localMatieres, setLocalMatieres] = useState(matieres);
     const [newMatiereName, setNewMatiereName] = useState('');
 
-    // Synchroniser si la prop initiale change
     useEffect(() => {
         setLocalMatieres(matieres);
     }, [matieres]);
-
 
     const fetchConfig = () => {
         setLoading(true);
@@ -30,7 +26,7 @@ const ConfigurationModal = ({ matieres, onClose }) => {
                     setActiveTab(null);
                 }
             })
-            .catch(error => console.error("Erreur de chargement de la configuration", error))
+            .catch(error => console.error("Erreur chargement", error))
             .finally(() => setLoading(false));
     };
 
@@ -39,13 +35,15 @@ const ConfigurationModal = ({ matieres, onClose }) => {
     }, []);
 
     const handleGlobalCoeffChange = (modeleId, value) => {
-        setConfig(prevConfig => prevConfig.map(modele =>
-            modele.id === modeleId ? { ...modele, coefficient_general: value } : modele
-        ));
+        setConfig(prev => prev.map(m => m.id === modeleId ? { ...m, coefficient_general: value } : m));
+    };
+
+    const handlePopulationCibleChange = (modeleId, value) => {
+        setConfig(prev => prev.map(m => m.id === modeleId ? { ...m, population_cible: value } : m));
     };
 
     const handleCheckboxChange = (modeleId, matiereId, isChecked) => {
-         setConfig(prevConfig => prevConfig.map(modele => {
+         setConfig(prev => prev.map(modele => {
             if (modele.id === modeleId) {
                 let newConfigurations;
                 if (isChecked) {
@@ -60,7 +58,7 @@ const ConfigurationModal = ({ matieres, onClose }) => {
     };
 
     const handleMatiereCoeffChange = (modeleId, matiereId, value) => {
-        setConfig(prevConfig => prevConfig.map(modele => {
+        setConfig(prev => prev.map(modele => {
             if (modele.id === modeleId) {
                 return {
                     ...modele,
@@ -78,58 +76,47 @@ const ConfigurationModal = ({ matieres, onClose }) => {
         axios.put('/api/configuration/examens', config, { headers: { Authorization: `Bearer ${token}` } })
             .then(() => {
                 alert('Configuration sauvegardée avec succès.');
-                onClose(); // On peut fermer ou rafraîchir les données parentes ici
+                onClose();
             })
-            .catch(error => alert('Erreur lors de la sauvegarde: ' + error.response?.data?.message || error.message));
+            .catch(error => alert('Erreur sauvegarde: ' + (error.response?.data?.message || error.message)));
     };
 
     const handleAddModel = () => {
-        if (!newModelName.trim()) {
-            alert('Veuillez entrer un nom pour le nouveau modèle.');
-            return;
-        }
+        if (!newModelName.trim()) return;
         const token = localStorage.getItem('token');
         axios.post('/api/configuration/examens', { nom_modele: newModelName }, { headers: { Authorization: `Bearer ${token}` } })
             .then(response => {
-                setConfig(prevConfig => [...prevConfig, response.data]);
+                setConfig(prev => [...prev, response.data]);
                 setActiveTab(response.data.id);
                 setNewModelName('');
             })
-            .catch(error => alert('Erreur lors de la création: ' + error.response?.data?.message || error.message));
+            .catch(error => alert('Erreur création: ' + (error.response?.data?.message || error.message)));
     };
 
     const handleDeleteModel = (modeleId, modeleNom) => {
-        if (window.confirm(`Êtes-vous sûr de vouloir supprimer le modèle "${modeleNom}" ? Cette action est irréversible.`)) {
+        if (window.confirm(`Supprimer le modèle "${modeleNom}" ?`)) {
             const token = localStorage.getItem('token');
             axios.delete(`/api/configuration/examens/${modeleId}`, { headers: { Authorization: `Bearer ${token}` } })
                 .then(() => {
-                    setConfig(prevConfig => {
-                        const newConfig = prevConfig.filter(m => m.id !== modeleId);
-                        if (activeTab === modeleId) {
-                            setActiveTab(newConfig.length > 0 ? newConfig[0].id : null);
-                        }
+                    setConfig(prev => {
+                        const newConfig = prev.filter(m => m.id !== modeleId);
+                        if (activeTab === modeleId) setActiveTab(newConfig.length > 0 ? newConfig[0].id : null);
                         return newConfig;
                     });
                 })
-                .catch(error => alert('Erreur lors de la suppression: ' + error.response?.data?.message || error.message));
+                .catch(error => alert('Erreur suppression: ' + (error.response?.data?.message || error.message)));
         }
     };
 
-    // --- MODIFICATION 2 : Logique pour ajouter une nouvelle matière ---
     const handleAddMatiere = () => {
-        if (!newMatiereName.trim()) {
-            alert('Veuillez entrer un nom pour la nouvelle matière.');
-            return;
-        }
+        if (!newMatiereName.trim()) return;
         const token = localStorage.getItem('token');
         axios.post('/api/matieres', { nom_matiere: newMatiereName }, { headers: { Authorization: `Bearer ${token}` } })
             .then(response => {
-                // `response.data` est le nouvel objet matière grâce à notre modif backend
-                setLocalMatieres(prevMatieres => [...prevMatieres, response.data]);
+                setLocalMatieres(prev => [...prev, response.data]);
                 setNewMatiereName('');
-                alert(`La matière "${response.data.nom_matiere}" a été créée.`);
             })
-            .catch(error => alert('Erreur lors de la création de la matière: ' + error.response?.data?.message || error.message));
+            .catch(error => alert('Erreur matière: ' + (error.response?.data?.message || error.message)));
     };
 
     const getActiveModele = () => config.find(m => m.id === activeTab);
@@ -168,20 +155,29 @@ const ConfigurationModal = ({ matieres, onClose }) => {
                             <div className="config-content">
                                 {getActiveModele() && (
                                     <div className="tab-pane active">
-                                        <div className="form-group global-coeff-group">
-                                            <label>Coefficient pour la Moyenne Générale :</label>
-                                            <input
-                                                type="number"
-                                                step="0.1"
-                                                min="0"
-                                                value={getActiveModele().coefficient_general}
-                                                onChange={e => handleGlobalCoeffChange(getActiveModele().id, parseFloat(e.target.value) || 0)}
-                                            />
+                                        <div className="config-row">
+                                            <div className="form-group">
+                                                <label>Population Cible :</label>
+                                                <select 
+                                                    value={getActiveModele().population_cible || 'all'} 
+                                                    onChange={(e) => handlePopulationCibleChange(getActiveModele().id, e.target.value)}
+                                                >
+                                                    <option value="all">Tous les élèves (Actifs + Conseil)</option>
+                                                    <option value="actif">Uniquement les Actifs</option>
+                                                    <option value="conseil">Uniquement le Conseil</option>
+                                                </select>
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Coeff. Moyenne Générale :</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.1"
+                                                    value={getActiveModele().coefficient_general}
+                                                    onChange={e => handleGlobalCoeffChange(getActiveModele().id, parseFloat(e.target.value) || 0)}
+                                                />
+                                            </div>
                                         </div>
                                         <hr/>
-                                        <h4>Matières incluses dans {getActiveModele().nom_modele}</h4>
-
-                                        {/* --- MODIFICATION 3 : Formulaire de création de matière --- */}
                                         <div className="add-matiere-form">
                                             <input
                                                 type="text"
@@ -192,14 +188,10 @@ const ConfigurationModal = ({ matieres, onClose }) => {
                                             />
                                             <button onClick={handleAddMatiere}>Créer et Ajouter</button>
                                         </div>
-
-
                                         <div className="matiere-coeffs-grid">
-                                            {/* --- MODIFICATION 4 : Utiliser l'état local des matières --- */}
                                             {localMatieres.map(matiere => {
                                                 const configMatiere = getActiveModele().configurations.find(c => c.matiere_id === matiere.id);
                                                 const isChecked = !!configMatiere;
-
                                                 return (
                                                     <div key={matiere.id} className="matiere-config-item">
                                                         <input
@@ -213,7 +205,6 @@ const ConfigurationModal = ({ matieres, onClose }) => {
                                                             <input
                                                                 type="number"
                                                                 step="0.1"
-                                                                min="0"
                                                                 value={configMatiere.coefficient}
                                                                 onChange={e => handleMatiereCoeffChange(getActiveModele().id, matiere.id, parseFloat(e.target.value) || 0)}
                                                             />
@@ -223,10 +214,7 @@ const ConfigurationModal = ({ matieres, onClose }) => {
                                             })}
                                         </div>
                                         <div className="delete-model-section">
-                                             <button
-                                                className="btn-delete-model"
-                                                onClick={() => handleDeleteModel(getActiveModele().id, getActiveModele().nom_modele)}
-                                             >
+                                             <button className="btn-delete-model" onClick={() => handleDeleteModel(getActiveModele().id, getActiveModele().nom_modele)}>
                                                 Supprimer le modèle "{getActiveModele().nom_modele}"
                                              </button>
                                         </div>

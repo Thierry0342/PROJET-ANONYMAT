@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
 import StudentDetailsModal from './StudentDetailsModal';
 import DashboardModal from './DashboardModal';
 import WelcomePage from './WelcomePage';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import './Dashboard.css';
 
 const formatNom = (nom) => {
@@ -19,19 +21,48 @@ const formatPrenom = (prenom) => {
         .join(' ');
 };
 
+const formatStatutLabel = (statut) => {
+    if (!statut) return 'N/A';
+    switch (statut.toLowerCase()) {
+        case 'redoublant': return 'REDOUBLANT';
+        case 'ajourne_3m': return 'AJOURNÉ 3 MOIS';
+        case 'ajourne_6m': return 'AJOURNÉ 6 MOIS';
+        default: return statut.toUpperCase();
+    }
+};
+
+const getStatusColor = (note) => {
+    const val = parseFloat(note);
+    if (isNaN(val)) return '#94a3b8';
+    if (val >= 16) return '#059669';
+    if (val >= 12) return '#10b981';
+    if (val >= 10) return '#f59e0b';
+    return '#ef4444';
+};
+
+const normalizeStudentData = (s) => {
+    if (!s) return s;
+    return {
+        ...s,
+        id: s.id || s.eleve_id || s.eleveId,
+        numero_incorporation: s.numero_incorporation || s.numeroIncorporation || s.incorp,
+        matricule: s.matricule || s.Matricule || 'N/A'
+    };
+};
+
 const calculateCombinedHealthStats = (consultations, absences) => {
     const uniqueDaysSet = new Set();
     const daysConsult = new Set();
     const daysIG = new Set();
     const daysCHRR = new Set();
 
-    if (consultations && consultations.length > 0) {
+    if (consultations && Array.isArray(consultations)) {
         consultations.forEach(c => {
+            if (!c.dateDepart || !c.dateArrive) return;
             const start = new Date(c.dateDepart);
             const end = new Date(c.dateArrive);
             start.setHours(0, 0, 0, 0);
             end.setHours(0, 0, 0, 0);
-
             for (let dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
                 const ts = dt.getTime();
                 uniqueDaysSet.add(ts);
@@ -40,14 +71,13 @@ const calculateCombinedHealthStats = (consultations, absences) => {
         });
     }
 
-    if (absences && absences.length > 0) {
+    if (absences && Array.isArray(absences)) {
         absences.forEach(a => {
             if (a.motif && a.date) {
                 const motifUpper = a.motif.toUpperCase().trim();
                 const d = new Date(a.date);
                 d.setHours(0, 0, 0, 0);
                 const ts = d.getTime();
-
                 if (motifUpper.includes("ADMIS IG")) {
                     uniqueDaysSet.add(ts);
                     daysIG.add(ts);
@@ -59,17 +89,16 @@ const calculateCombinedHealthStats = (consultations, absences) => {
         });
     }
 
-    const total = daysConsult.size + daysIG.size + daysCHRR.size;
-
-    if (uniqueDaysSet.size === 0) return { total: 0, maxContinuous: 0, details: { consult: 0, ig: 0, chrr: 0 } };
+    const total = uniqueDaysSet.size;
+    if (total === 0) {
+        return { total: 0, maxContinuous: 0, details: { consult: 0, ig: 0, chrr: 0 } };
+    }
 
     const sortedTimestamps = Array.from(uniqueDaysSet).sort((a, b) => a - b);
     let maxContinuous = 1;
     let currentStreak = 1;
-
     for (let i = 1; i < sortedTimestamps.length; i++) {
         const diff = sortedTimestamps[i] - sortedTimestamps[i - 1];
-
         if (diff <= 86400000 + 3600000) {
             currentStreak++;
         } else {
@@ -92,26 +121,37 @@ const calculateCombinedHealthStats = (consultations, absences) => {
 
 const Dashboard = () => {
     const [showIntro, setShowIntro] = useState(true);
+    const [isDataReady, setIsDataReady] = useState(false);
+    const [error, setError] = useState('');
+    const [selectedPromotion, setSelectedPromotion] = useState('all');
+    const [selectedPopulation, setSelectedPopulation] = useState('all');
+    const [promotionsList, setPromotionsList] = useState([]);
     const [examSummaries, setExamSummaries] = useState([]);
     const [generalSummary, setGeneralSummary] = useState(null);
-    const [error, setError] = useState('');
-    const [selectedStudent, setSelectedStudent] = useState(null);
-    const [examExtremes, setExamExtremes] = useState({});
-
     const [detailedRanking, setDetailedRanking] = useState([]);
+    const [globalRanking, setGlobalRanking] = useState([]);
     const [classementWithDetails, setClassementWithDetails] = useState([]);
-    const [isDataReady, setIsDataReady] = useState(false);
-    const [motifStats, setMotifStats] = useState([]);
-
+    const [evolutionConseil, setEvolutionConseil] = useState([]);
+    const [searchConseil, setSearchConseil] = useState('');
+    const [filterTypeConseil, setFilterTypeConseil] = useState('all');
+    const [expandedStudentId, setExpandedStudentId] = useState(null);
+    const [selectedStudent, setSelectedStudent] = useState(null);
     const [modalData, setModalData] = useState(null);
     const [modalTitle, setModalTitle] = useState('');
     const [modalColumns, setModalColumns] = useState([]);
+    const [ajournementThreshold, setAjournementThreshold] = useState(10);
 
-    const [ajournementThreshold, setAjournementThreshold] = useState(0);
-    const [isAjournementBlurred, setIsAjournementBlurred] = useState(true);
+    // GESTION DES COLONNES DU LEADERBOARD (Motif masqué par défaut)
+    const [showColMenu, setShowColMenu] = useState(false);
+    const [visibleCols, setVisibleCols] = useState({
+        decision: true,
+        motif: false, // <-- Masqué par défaut
+        initiale: true,
+        repechage: true,
+        gain: true
+    });
 
-    const [promotionsList, setPromotionsList] = useState([]);
-    const [selectedPromotion, setSelectedPromotion] = useState('all');
+    const isSelectionComplete = selectedPromotion !== 'all' && selectedPopulation !== 'all';
 
     useEffect(() => {
         const fetchPromotions = async () => {
@@ -120,700 +160,820 @@ const Dashboard = () => {
                 const res = await axios.get('/api/promotions', {
                     headers: { Authorization: `Bearer ${token}` }
                 });
-                setPromotionsList(res.data);
+                setPromotionsList(res.data || []);
             } catch (e) {
-                console.error("Erreur chargement promotions", e);
+                setError('Impossible de charger les promotions.');
             }
         };
         fetchPromotions();
     }, []);
 
     useEffect(() => {
-        let isMounted = true;
+        if (!isSelectionComplete) return;
 
+        let isMounted = true;
         const fetchData = async () => {
             try {
                 const token = localStorage.getItem('token');
                 const headers = { Authorization: `Bearer ${token}` };
                 const config = { headers, timeout: 60000 };
+                const apiPop = selectedPopulation === 'total' ? 'all' : selectedPopulation;
+                const query = `?promotion=${selectedPromotion}&population=${apiPop}`;
 
-                let examsData = [];
-                const promoQuery = selectedPromotion !== 'all' ? `?promotion=${selectedPromotion}` : '';
-                const promoParam = selectedPromotion !== 'all' ? `&promotion=${selectedPromotion}` : '';
+                const examRes = await axios.get(`/api/dashboard/summary-by-exam-type${query}`, config);
+                if (isMounted) setExamSummaries(examRes.data || []);
 
-                try {
-                    const examRes = await axios.get(`/api/dashboard/summary-by-exam-type${promoQuery}`, config);
-                    examsData = examRes.data;
-                    if (isMounted) {
-                        setExamSummaries(examsData);
-                    }
-                } catch (e) {
-                    console.error("Erreur chargement examens:", e);
-                    if (isMounted) setError("Erreur chargement des examens.");
-                    return;
-                }
+                const typeCible = selectedPopulation === 'conseil' ? 'REPECHAGE' : 'General';
 
-                try {
-                    const [generalRes, rankingRes] = await Promise.all([
-                        axios.get(`/api/dashboard/general-summary${promoQuery}`, config),
-                        axios.get(`/api/resultats/classement-details?typeExamen=General${promoParam}`, config)
-                    ]);
+                const [genRes, currentRankRes, globalRankRes] = await Promise.all([
+                    axios.get(`/api/dashboard/general-summary${query}`, config),
+                    axios.get(`/api/resultats/classement-details?typeExamen=${typeCible}&promotion=${selectedPromotion}&population=${apiPop}`, config),
+                    axios.get(`/api/resultats/classement-details?typeExamen=General&promotion=${selectedPromotion}&population=all`, config)
+                ]);
 
-                    if (isMounted) {
-                        setGeneralSummary(generalRes.data);
-                        setDetailedRanking(rankingRes.data.classement || []);
-                        setIsDataReady(false);
-                        setClassementWithDetails([]);
-                    }
-                } catch (e) {
-                    console.warn("Erreur chargement général:", e);
-                }
-
-                if (examsData && Array.isArray(examsData)) {
-                    for (const exam of examsData) {
-                        if (!isMounted) break;
-
-                        try {
-                            const encodedType = encodeURIComponent(exam.typeExamen);
-                            const detailRes = await axios.get(`/api/resultats/classement-details?typeExamen=${encodedType}${promoParam}`, {
-                                headers, timeout: 60000
-                            });
-                            const classements = detailRes.data.classement || [];
-                            const moyennes = classements
-                                .map(c => c.moyenne ? parseFloat(String(c.moyenne).replace(',', '.')) : null)
-                                .filter(m => m !== null && !isNaN(m));
-
-                            if (moyennes.length > 0) {
-                                setExamExtremes(prev => ({
-                                    ...prev,
-                                    [exam.typeExamen]: {
-                                        min: Math.min(...moyennes).toFixed(2),
-                                        max: Math.max(...moyennes).toFixed(2)
-                                    }
-                                }));
-                            } else {
-                                setExamExtremes(prev => ({
-                                    ...prev,
-                                    [exam.typeExamen]: { min: '-', max: '-' }
-                                }));
-                            }
-                        } catch (e) {
-                            setExamExtremes(prev => ({
-                                ...prev,
-                                [exam.typeExamen]: { min: '?', max: '?' }
-                            }));
-                        }
-                    }
+                if (isMounted) {
+                    setGeneralSummary(genRes.data);
+                    setDetailedRanking((currentRankRes.data.classement || []).map(normalizeStudentData));
+                    setGlobalRanking((globalRankRes.data.classement || []).map(normalizeStudentData));
+                    setIsDataReady(false);
+                    setClassementWithDetails([]);
                 }
             } catch (err) {
-                console.error("Erreur critique Dashboard:", err);
-                if (isMounted) setError('Données indisponibles.');
+                if (isMounted) setError('Erreur lors de la récupération des données.');
             }
         };
 
         fetchData();
         return () => { isMounted = false; };
-    }, [selectedPromotion]);
+    }, [selectedPromotion, selectedPopulation, isSelectionComplete]);
 
     useEffect(() => {
-        if (!detailedRanking || detailedRanking.length === 0) {
+        if (isSelectionComplete && selectedPopulation === 'conseil') {
+            const fetchEvolution = async () => {
+                try {
+                    const token = localStorage.getItem('token');
+                    const headers = { Authorization: `Bearer ${token}` };
+
+                    const [resEvol, resDecisions] = await Promise.all([
+                        axios.get(`/api/dashboard/evolution-conseil?promotion=${selectedPromotion}`, { headers }),
+                        axios.get('/api/decisions-conseil', { headers })
+                    ]);
+
+                    let rawData = (resEvol.data || []).map(normalizeStudentData);
+                    const decisionsList = resDecisions.data || [];
+
+                    const BATCH_SIZE = 5;
+                    let enriched = [];
+                    for (let i = 0; i < rawData.length; i += BATCH_SIZE) {
+                        const batch = rawData.slice(i, i + BATCH_SIZE);
+                        const batchPromises = batch.map(async (st) => {
+                            try {
+                                const detailRes = await axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${st.numero_incorporation}?cour=79`, { timeout: 3000 });
+                                const eleveInfo = detailRes.data?.eleve;
+
+                                const decisionMatch = decisionsList.find(d => String(d.eleve_id) === String(st.id) || String(d.numero_incorporation) === String(st.numero_incorporation));
+
+                                return {
+                                    ...st,
+                                    matricule: eleveInfo?.matricule || st.matricule,
+                                    imagePath: eleveInfo?.image ? `http://192.168.241.169:4000${eleveInfo.image}` : null,
+                                    motif_conseil: decisionMatch?.motif || 'Non renseigné'
+                                };
+                            } catch(e) {
+                                const decisionMatch = decisionsList.find(d => String(d.eleve_id) === String(st.id) || String(d.numero_incorporation) === String(st.numero_incorporation));
+                                return {
+                                    ...st,
+                                    motif_conseil: decisionMatch?.motif || 'Non renseigné'
+                                };
+                            }
+                        });
+                        const resBatch = await Promise.all(batchPromises);
+                        enriched = [...enriched, ...resBatch];
+                    }
+
+                    setEvolutionConseil(enriched.sort((a, b) => parseFloat(b.moyenneRepechage) - parseFloat(a.moyenneRepechage)));
+                } catch (e) {
+                    console.error(e);
+                }
+            };
+            fetchEvolution();
+        }
+    }, [selectedPromotion, selectedPopulation, isSelectionComplete]);
+
+    useEffect(() => {
+        if (!isSelectionComplete || !detailedRanking || detailedRanking.length === 0) {
             setClassementWithDetails([]);
             setIsDataReady(true);
             return;
         }
-        if (isDataReady && classementWithDetails.length > 0) return;
 
-        const fetchAllExtraData = async () => {
+        const fetchEnrichedData = async () => {
             const rawStudents = detailedRanking;
             const BATCH_SIZE = 5;
-            let allEnrichedStudents = [];
-            let globalCounts = {};
+            let enriched = [];
 
             try {
-                let allSanctions = [];
-                try {
-                    const sanctionsResponse = await axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 3000 });
-                    allSanctions = sanctionsResponse.data || [];
-                } catch (e) { }
+                const sancRes = await axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }).catch(() => ({ data: [] }));
+                const allSanctions = sancRes.data || [];
 
                 for (let i = 0; i < rawStudents.length; i += BATCH_SIZE) {
                     const batch = rawStudents.slice(i, i + BATCH_SIZE);
-                    const batchPromises = batch.map(async (student) => {
+                    const batchPromises = batch.map(async (st) => {
                         try {
-                            if (!student.id) return student;
-
-                            const [consultRes, absenceRes] = await Promise.allSettled([
-                                axios.get(`http://192.168.241.169:4000/api/consultation/incorp/${student.numero_incorporation}`, { timeout: 2000 }),
-                                axios.get(`http://192.168.241.169:4000/api/absence/incorp/${student.numero_incorporation}`, { timeout: 2000 })
+                            const [cRes, aRes] = await Promise.allSettled([
+                                axios.get(`http://192.168.241.169:4000/api/consultation/incorp/${st.numero_incorporation}`, { timeout: 3000 }),
+                                axios.get(`http://192.168.241.169:4000/api/absence/incorp/${st.numero_incorporation}`, { timeout: 3000 })
                             ]);
 
-                            const consults = (consultRes.status === 'fulfilled' && consultRes.value.data) ? consultRes.value.data : [];
-                            const absences = (absenceRes.status === 'fulfilled' && absenceRes.value.data) ? absenceRes.value.data : [];
+                            const consults = cRes.status === 'fulfilled' ? cRes.value.data : [];
+                            const absences = aRes.status === 'fulfilled' ? aRes.value.data : [];
+                            const health = calculateCombinedHealthStats(consults, absences);
 
-                            const healthStats = calculateCombinedHealthStats(consults, absences);
-
-                            consults.forEach(c => {
-                                const motif = c.service ? c.service.trim() : 'Service Inconnu';
-                                if (!globalCounts[motif]) globalCounts[motif] = { count: 0, type: 'Santé/Service', students: {} };
-                                globalCounts[motif].count += 1;
-                                const sId = student.id;
-                                if(!globalCounts[motif].students[sId]) {
-                                    globalCounts[motif].students[sId] = {
-                                        nom: student.nom, prenom: student.prenom,
-                                        escadron: student.escadron || '-', peloton: student.peloton || '-', count: 0
-                                    };
-                                }
-                                globalCounts[motif].students[sId].count += 1;
-                            });
-
-                            const absenceDays = absences.length;
-                            absences.forEach(a => {
-                                const motif = a.motif ? a.motif.trim() : 'Absence injustifiée';
-                                if (!globalCounts[motif]) globalCounts[motif] = { count: 0, type: 'Absence', students: {} };
-                                globalCounts[motif].count += 1;
-                                const sId = student.id;
-                                if(!globalCounts[motif].students[sId]) {
-                                    globalCounts[motif].students[sId] = {
-                                        nom: student.nom, prenom: student.prenom,
-                                        escadron: student.escadron || '-', peloton: student.peloton || '-', count: 0
-                                    };
-                                }
-                                globalCounts[motif].students[sId].count += 1;
-                            });
-
-                            const studentIncorp = String(student.numero_incorporation || '').trim();
-                            const sanctionsForStudent = allSanctions.filter(s =>
-                                s.Eleve && String(s.Eleve.numeroIncorporation).trim() === studentIncorp
-                            );
-                            const totalARDays = sanctionsForStudent.reduce((sum, s) => {
-                                const tauxStr = (s.taux || '').toUpperCase();
-                                if (tauxStr.includes('AR')) {
-                                    const jours = parseInt(tauxStr, 10);
-                                    return sum + (isNaN(jours) ? 0 : jours);
-                                }
+                            const stSanc = allSanctions.filter(s => s.Eleve && String(s.Eleve.numeroIncorporation) === String(st.numero_incorporation));
+                            const arDays = stSanc.reduce((sum, s) => {
+                                const taux = (s.taux || '').toUpperCase();
+                                if (taux.includes('AR')) return sum + (parseInt(taux) || 0);
                                 return sum;
                             }, 0);
 
                             return {
-                                ...student,
-                                consultationDays: healthStats.total,
-                                consultationMaxContinuous: healthStats.maxContinuous,
-                                healthDetails: healthStats.details,
-                                absenceDays,
-                                sanctionCount: sanctionsForStudent.length,
-                                totalARDays: totalARDays
+                                ...st,
+                                consultationDays: health.total,
+                                consultationMax: health.maxContinuous,
+                                sanctionCount: stSanc.length,
+                                totalARDays: arDays,
+                                healthDetails: health.details
                             };
-                        } catch (innerErr) { return student; }
+                        } catch (err) { return st; }
                     });
-                    const batchResults = await Promise.all(batchPromises);
-                    allEnrichedStudents = [...allEnrichedStudents, ...batchResults];
+
+                    const resBatch = await Promise.all(batchPromises);
+                    enriched = [...enriched, ...resBatch];
+                    await new Promise(r => setTimeout(r, 40));
                 }
-
-                const formattedStats = Object.keys(globalCounts).map(key => ({
-                    motif: key,
-                    count: globalCounts[key].count,
-                    type: globalCounts[key].type,
-                    uniquePeople: Object.keys(globalCounts[key].students).length,
-                    studentDetails: globalCounts[key].students
-                })).sort((a, b) => b.count - a.count);
-
-                setMotifStats(formattedStats);
-                setClassementWithDetails(allEnrichedStudents);
+                setClassementWithDetails(enriched);
                 setIsDataReady(true);
             } catch (err) {
                 setClassementWithDetails(rawStudents);
                 setIsDataReady(true);
             }
         };
-        fetchAllExtraData();
-    }, [detailedRanking, isDataReady]);
 
-    const showModalWithData = (title, columns, data) => {
-        setModalTitle(title);
+        fetchEnrichedData();
+    }, [detailedRanking, isSelectionComplete]);
+
+    const handleShowEvolutionDetail = useCallback((student) => {
+        const columns = [
+            { key: 'nom', header: 'Matière' },
+            { key: 'initiale', header: 'Initiale' },
+            { key: 'repechage', header: 'Repêchage' },
+            { key: 'diffDisplay', header: 'Progression' }
+        ];
+        const data = student.matieres.map(m => ({
+            ...m,
+            diffDisplay: (
+                <span style={{
+                    color: parseFloat(m.diff) > 0 ? '#10b981' : parseFloat(m.diff) < 0 ? '#ef4444' : '#94a3b8',
+                    fontWeight: '800'
+                }}>
+                    {parseFloat(m.diff) > 0 ? `+${m.diff}` : m.diff}
+                </span>
+            )
+        }));
+        setModalTitle(`Détails Matières : ${formatPrenom(student.prenom)} ${formatNom(student.nom)}`);
         setModalColumns(columns);
         setModalData(data);
-    };
+    }, []);
 
-    const generateActionBtn = (student) => (
-        <button
-            className="btn-details-action"
-            onClick={(e) => {
-                e.stopPropagation();
-                setModalData(null);
-                setSelectedStudent(student);
-            }}
-        >
-            <i className="fa fa-eye"></i> Voir
-        </button>
-    );
+    const showModal = useCallback((title, cols, data) => {
+        setModalTitle(title);
+        setModalColumns(cols);
+        setModalData(data);
+    }, []);
 
-    const getRedoublementList = () => {
-        if (!isDataReady) return [];
-        return classementWithDetails.filter(s => {
-            const condConsultation = s.consultationMaxContinuous >= 45 || s.consultationDays >= 60;
-            const condMoyenne = s.moyenne !== null && parseFloat(s.moyenne) < 8;
-            const condSanction = s.totalARDays >= 20;
-            return condConsultation || condMoyenne || condSanction;
-        }).map(s => {
-            let motifElements = [];
+    const filteredLeaderboard = useMemo(() => {
+        let result = [...evolutionConseil];
 
-            if (s.consultationDays >= 60 || s.consultationMaxContinuous >= 45) {
-                const style = { color: '#856404', backgroundColor: '#fff3cd', padding: '4px 8px', borderRadius: '4px', marginBottom: '4px', fontSize: '0.9em' };
-                let text = '';
-                if (s.consultationDays >= 60 && s.consultationMaxContinuous >= 45) text = `${s.consultationDays}j Total (dont ${s.consultationMaxContinuous}j continus)`;
-                else if (s.consultationDays >= 60) text = `${s.consultationDays}j Total (discontinu)`;
-                else text = `${s.consultationMaxContinuous}j Continus`;
-
-                const d = s.healthDetails || { consult: 0, ig: 0, chrr: 0 };
-                const detailsStr = ` = ${d.consult}j Consult. + ${d.ig}j IG + ${d.chrr}j CHRR`;
-
-                motifElements.push(
-                    <div key="health" style={style}>
-                        <i className="fa fa-user-md"></i> <strong>Santé :</strong> {text}
-                        <br/>
-                        <span style={{fontSize: '0.85em', fontStyle: 'italic', color: '#555'}}>{detailsStr}</span>
-                    </div>
-                );
+        if (filterTypeConseil !== 'all') {
+            if (filterTypeConseil === 'ajournes_all') {
+                result = result.filter(s => s.statut === 'ajourne_3m' || s.statut === 'ajourne_6m');
+            } else {
+                result = result.filter(s => s.statut === filterTypeConseil);
             }
-            if (s.moyenne !== null && parseFloat(s.moyenne) < 8) {
-                motifElements.push(<div key="grade" style={{ color: '#721c24', backgroundColor: '#f8d7da', padding: '4px 8px', borderRadius: '4px', marginBottom: '4px', fontSize: '0.9em' }}><i className="fa fa-graduation-cap"></i> <strong>Moyenne :</strong> {parseFloat(s.moyenne).toFixed(2)} / 20</div>);
-            }
-            if (s.totalARDays >= 20) {
-                motifElements.push(<div key="discipline" style={{ color: '#fff', backgroundColor: '#dc3545', padding: '4px 8px', borderRadius: '4px', marginBottom: '4px', fontSize: '0.9em' }}><i className="fa fa-exclamation-triangle"></i> <strong>Discipline :</strong> {s.totalARDays} jours AR</div>);
-            }
-            return { ...s, motifRedoublement: <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>{motifElements}</div>, actionBtn: generateActionBtn(s) };
+        }
+
+        if (searchConseil) {
+            const term = searchConseil.toLowerCase();
+            result = result.filter(s =>
+                s.nom.toLowerCase().includes(term) ||
+                s.prenom.toLowerCase().includes(term) ||
+                String(s.numero_incorporation).includes(term)
+            );
+        }
+
+        return result.sort((a, b) => {
+            const moyA = parseFloat(a.moyenneRepechage) || 0;
+            const moyB = parseFloat(b.moyenneRepechage) || 0;
+            return moyB - moyA;
         });
-    };
+    }, [evolutionConseil, searchConseil, filterTypeConseil]);
 
-    const handleRedoublementClick = () => {
-        if (!isDataReady) { alert("Calcul en cours..."); return; }
+    const filteredSourceData = useMemo(() => {
+        let data = isDataReady ? classementWithDetails : detailedRanking;
+        if (selectedPopulation === 'conseil' && filterTypeConseil !== 'all') {
+            if (filterTypeConseil === 'ajournes_all') {
+                data = data.filter(s => s.statut === 'ajourne_3m' || s.statut === 'ajourne_6m');
+            } else {
+                data = data.filter(s => s.statut === filterTypeConseil);
+            }
+        }
+        return data || [];
+    }, [isDataReady, classementWithDetails, detailedRanking, selectedPopulation, filterTypeConseil]);
 
-        const baseList = getRedoublementList();
-
-        const groupeSante = [];
-        const groupeDiscipline = [];
-        const groupeMoyenne = [];
-
-        baseList.forEach(student => {
-            const isSante = (student.consultationMaxContinuous >= 45 || student.consultationDays >= 60);
-            const isDiscipline = student.totalARDays >= 20;
-            if (isSante) groupeSante.push(student);
-            else if (isDiscipline) groupeDiscipline.push(student);
-            else groupeMoyenne.push(student);
+    // ==== CALCUL DES STATS DE RÉUSSITE PAR MOTIF ====
+    const motifStats = useMemo(() => {
+        if (selectedPopulation !== 'conseil') return [];
+        const grouped = {};
+        
+        filteredLeaderboard.forEach(st => {
+            const motif = st.motif_conseil || 'Non renseigné';
+            if (!grouped[motif]) grouped[motif] = { total: 0, admis: 0 };
+            grouped[motif].total += 1;
+            
+            // Si la moyenne de repêchage >= 12, on le compte comme admis
+            if (parseFloat(st.moyenneRepechage) >= 12) {
+                grouped[motif].admis += 1;
+            }
         });
 
-        groupeSante.sort((a, b) => {
-            return (b.consultationDays || 0) - (a.consultationDays || 0);
+        return Object.entries(grouped).map(([motif, data]) => ({
+            motif,
+            total: data.total,
+            admis: data.admis,
+            taux: ((data.admis / data.total) * 100).toFixed(1) + '%'
+        })).sort((a, b) => b.total - a.total);
+    }, [filteredLeaderboard, selectedPopulation]);
+
+    const exportToPDF = () => {
+        const doc = new jsPDF('p', 'mm', 'a4');
+
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "normal");
+
+        doc.text("MINISTERE DELEGUE", 55, 15, { align: 'center' });
+        doc.text("EN CHARGE DE LA GENDARMERIE NATIONALE",55 , 20, { align: 'center' });
+        doc.line(40, 22, 70, 22);
+        doc.text("COMMANDEMENT DE LA GENDARMERIE NATIONALE", 55, 28, { align: 'center' });
+        doc.line(40, 30, 70, 30);
+        doc.text("ECOLE DE LA GENDARMERIE NATIONALE", 55, 36, { align: 'center' });
+        doc.text("D'AMBOSITRA", 55, 41, { align: 'center' });
+        doc.line(40,43,70,43);
+
+        doc.text("REPOBLIKAN'I MADAGASIKARA", 155, 15, { align: 'center' });
+        doc.setFont("helvetica", "italic");
+        doc.text("Fitiavana - Tanindrazana - Fandrosoana", 155, 20, { align: 'center' });
+        doc.line(125, 22, 185, 22);
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(12);
+        const titleY = 65;
+        doc.text("ETAT FAISANT CONNAITRE LE RESULTAT", 105, titleY, { align: 'center' });
+        doc.text(`DU REPECHAGE ${selectedPromotion}  COURS DE FORMATION DES ELEVES GENDARMES`, 105, titleY + 6, { align: 'center' });
+
+        const tableColumn = ["RANG", "NOM ET PRENOM", "MATRICULE", "MOYENNE"];
+        const tableRows = []; // CORRECTION ICI (Ajout du `const`)
+
+        filteredLeaderboard.forEach((student) => {
+            const currentMoy = parseFloat(student.moyenneRepechage) || 0;
+            const tieStartIndex = filteredLeaderboard.findIndex(s => (parseFloat(s.moyenneRepechage) || 0) === currentMoy);
+            const displayRank = tieStartIndex + 1;
+            const tiedCount = filteredLeaderboard.filter(s => (parseFloat(s.moyenneRepechage) || 0) === currentMoy).length;
+            const isExAequo = tiedCount > 1;
+
+            const rankText = `${displayRank}${isExAequo ? ' ex' : ''}`;
+            const nomPrenom = `${formatNom(student.nom)} ${formatPrenom(student.prenom)}`;
+            const matriculeText = student.matricule || 'N/A';
+            const moyenneText = student.moyenneRepechage || 'N/A';
+
+            tableRows.push([rankText, nomPrenom, matriculeText,  moyenneText]);
         });
 
-        const formatGroup = (list, titre, couleur, bgCouleur) => {
-            if (list.length === 0) return [];
-            const headerRow = {
-                id: `header-${titre}`,
-                isHeader: true,
-                ordre: '',
-                nom: (<div style={{ textAlign: 'center', fontWeight: 'bold', color: couleur, backgroundColor: bgCouleur, padding: '8px', textTransform: 'uppercase', borderRadius: '4px', width: '100%' }}>{titre} ({list.length})</div>),
-                prenom: '', escadron: '', peloton: '', numero_incorporation: '', motifRedoublement: '', actionBtn: ''
-            };
-            const studentRows = list.map((student, index) => ({
-                ...student,
-                nom: formatNom(student.nom),
-                prenom: formatPrenom(student.prenom),
-                ordre: <strong>{index + 1}</strong>
-            }));
-            return [headerRow, ...studentRows];
-        };
+        autoTable(doc, {
+            startY: titleY + 15,
+            head: [tableColumn],
+            body: tableRows,
+            theme: 'plain',
+            styles: {
+                font: 'helvetica',
+                textColor: [0, 0, 0],
+                lineColor: [0, 0, 0],
+                lineWidth: 0.1,
+                fontSize: 10,
+                cellPadding: 3
+            },
+            headStyles: {
+                fontStyle: 'bold',
+                fillColor: false,
+                textColor: [0, 0, 0],
+                halign: 'center'
+            },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 20 },
+                1: { halign: 'left', cellWidth: 'auto' },
+                2: { halign: 'center', cellWidth: 35 },
+                3: { halign: 'center', cellWidth: 40 },
+                4: { halign: 'center', cellWidth: 25 }
+            }
+        });
 
-        const finalSortedList = [
-            ...formatGroup(groupeSante, 'Raison de Santé', '#856404', '#fff3cd'),
-            ...formatGroup(groupeDiscipline, 'Discipline', '#721c24', '#f8d7da'),
-            ...formatGroup(groupeMoyenne, 'Résultats Scolaires', '#1b1e21', '#d6d8d9')
-        ];
+        let finalY = doc.lastAutoTable.finalY + 20;
 
-        showModalWithData('Proposition de Redoublement', [
-            { key: 'ordre', header: 'N°' },
-            { key: 'nom', header: 'Nom / Catégorie' },
-            { key: 'prenom', header: 'Prénom' },
-            { key: 'escadron', header: 'Escadron' },
-            { key: 'peloton', header: 'Peloton' },
-            { key: 'numero_incorporation', header: 'Incorp' },
-            { key: 'motifRedoublement', header: 'Détails' },
-            { key: 'actionBtn', header: 'Action' }
-        ], finalSortedList);
+        if (finalY > 230) {
+            doc.addPage();
+            finalY = 30;
+        }
+
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "normal");
+
+        doc.text("DESTINATAIRES :", 15, finalY);
+        doc.text("- A Monsieur LE GENERAL DE DIVISION,", 15, finalY + 10);
+        doc.text("Commandant de la gendarmerie nationale", 20, finalY + 15);
+        doc.text("(COM/DGP/PSO)", 25, finalY + 20);
+        doc.text("à - ANTANANARIVO -", 80, finalY + 25);
+
+        doc.text('"A titre de compte-rendu"', 30, finalY + 35);
+
+        doc.text("- A Monsieur LE GENERAL DE DIVISION,", 15, finalY + 45);
+        doc.text("Commandant des écoles de la gendarmerie nationale", 20, finalY + 50);
+        doc.text("(CEGN/SDE)", 25, finalY + 55);
+        doc.text("à - ANTANANARIVO -", 80, finalY + 60);
+
+        const dateStr = new Date().toLocaleDateString('fr-FR');
+        doc.text(`A Ambositra, le ${dateStr}`, 150, finalY, { align: 'center' });
+        doc.setFont("helvetica", "bold");
+        doc.text("LE COLONEL RASOLOFONIARY Jean Michel", 150, finalY + 8, { align: 'center' });
+        doc.setFont("helvetica", "normal");
+        doc.text("Commandant de l'École de la gendarmerie Nationale", 150, finalY + 14, { align: 'center' });
+
+        let fileName = `Liste_Conseil_${selectedPromotion}`;
+        if(filterTypeConseil !== 'all') fileName += `_${filterTypeConseil}`;
+        doc.save(`${fileName}.pdf`);
     };
 
-    const handlePropositionAjournementClick = () => {
-        const sourceData = isDataReady ? classementWithDetails : detailedRanking;
+    const renderLeaderboardRow = (student, index) => {
+        const isExpanded = expandedStudentId === student.id;
+        const historyRecord = globalRanking.find(s => String(s.numero_incorporation) === String(student.numero_incorporation));
+        const realHistory = examSummaries
+            .filter(ex => !ex.typeExamen.toUpperCase().includes('REPECHAGE'))
+            .map(ex => {
+                let noteRaw = historyRecord?.details?.[ex.typeExamen];
+                return {
+                    label: ex.typeExamen.replace(/_/g, ' '),
+                    note: (noteRaw !== null && noteRaw !== undefined) ? parseFloat(noteRaw).toFixed(2) : 'N/A'
+                };
+            });
 
-        const filteredList = sourceData.filter(s =>
-            s.moyenne !== null && parseFloat(s.moyenne) < parseFloat(ajournementThreshold)
-        );
+        const currentMoy = parseFloat(student.moyenneRepechage) || 0;
+        const tieStartIndex = filteredLeaderboard.findIndex(s => (parseFloat(s.moyenneRepechage) || 0) === currentMoy);
+        const displayRank = tieStartIndex + 1;
+        const tiedCount = filteredLeaderboard.filter(s => (parseFloat(s.moyenneRepechage) || 0) === currentMoy).length;
+        const isExAequo = tiedCount > 1;
 
-        const formattedList = filteredList.map(s => ({
-            ...s,
-            rang: s.rang || s.statut,
-            nom: formatNom(s.nom),
-            prenom: formatPrenom(s.prenom),
-            moyenne: parseFloat(s.moyenne).toFixed(3),
-            actionBtn: generateActionBtn(s)
-        }));
+        const healthData = classementWithDetails.find(s => String(s.numero_incorporation) === String(student.numero_incorporation));
+        const colSpanCount = 2 + Object.values(visibleCols).filter(Boolean).length; // +2 for Rank/Name and Action
 
-        formattedList.sort((a, b) => parseFloat(a.moyenne) - parseFloat(b.moyenne));
+        return (
+            <React.Fragment key={student.id}>
+                <tr
+                    className={`evolution-row-main ${isExpanded ? 'is-active' : ''}`}
+                    onClick={() => setExpandedStudentId(isExpanded ? null : student.id)}
+                    style={{ cursor: 'pointer' }}
+                >
+                    <td>
+                        <div className="student-identity-group">
+                            <span className="rank-numeric">#{displayRank}{isExAequo ? ' ex' : ''}</span>
+                            <div className="name-box">
+                                <span className="name-main">{formatNom(student.nom)}</span>
+                                <span className="name-sub">{formatPrenom(student.prenom)}</span>
+                                <span className="name-sub" style={{ fontSize: '0.75em', color: '#666' }}>Mat: {student.matricule || 'N/A'}</span>
+                            </div>
+                        </div>
+                    </td>
+                    
+                    {visibleCols.decision && (
+                        <td className="center-cell">
+                            <div className={`badge-decision ${student.statut}`}>
+                                {formatStatutLabel(student.statut)}
+                            </div>
+                        </td>
+                    )}
+                    
+                    {visibleCols.motif && (
+                        <td className="center-cell" style={{ fontSize: '0.85rem', color: '#555', fontStyle: 'italic', maxWidth: '120px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={student.motif_conseil || 'Non renseigné'}>
+                            {student.motif_conseil || 'Non renseigné'}
+                        </td>
+                    )}
 
-        showModalWithData(
-            `Proposition Ajournement (Moyenne < ${ajournementThreshold})`,
-            [
-                { key: 'rang', header: 'Rang' },
-                { key: 'nom', header: 'Nom' },
-                { key: 'prenom', header: 'Prénom' },
-                { key: 'numero_incorporation', header: 'Incorp' },
-                { key: 'escadron', header: 'Escadron' },
-                { key: 'peloton', header: 'Peloton' },
-                { key: 'moyenne', header: 'Moyenne' },
-                { key: 'actionBtn', header: 'Détails' }
-            ],
-            formattedList
-        );
-    };
+                    {visibleCols.initiale && (
+                        <td className="center-cell"><div className="badge-initial">{student.moyenneInitiale}</div></td>
+                    )}
 
-    const handleSup12Click = () => {
-        const source = isDataReady ? classementWithDetails : detailedRanking;
-        const enrichedList = source.filter(s => s.moyenne >= 12).map(s => ({
-            ...s,
-            nom: formatNom(s.nom),
-            prenom: formatPrenom(s.prenom),
-            actionBtn: generateActionBtn(s)
-        }));
-        showModalWithData('Moyenne ≥ 12', [
-            { key: 'rang', header: 'Rang' }, { key: 'nom', header: 'Nom' }, { key: 'prenom', header: 'Prénom' },
-            { key: 'numero_incorporation', header: 'Incorp' }, { key: 'escadron', header: 'Escadron' }, { key: 'peloton', header: 'Peloton' },
-            { key: 'moyenne', header: 'Moyenne' }, { key: 'actionBtn', header: 'Action' }
-        ], enrichedList);
-    };
+                    {visibleCols.repechage && (
+                        <td className="center-cell"><div className="badge-repechage">{student.moyenneRepechage}</div></td>
+                    )}
 
-    const handleInf12Click = () => {
-        const source = isDataReady ? classementWithDetails : detailedRanking;
-        const enrichedList = source.filter(s => s.moyenne < 12).map(s => ({
-            ...s,
-            nom: formatNom(s.nom),
-            prenom: formatPrenom(s.prenom),
-            actionBtn: generateActionBtn(s)
-        }));
-        showModalWithData('Moyenne < 12', [
-            { key: 'rang', header: 'Rang' }, { key: 'nom', header: 'Nom' }, { key: 'prenom', header: 'Prénom' },
-            { key: 'numero_incorporation', header: 'Incorp' }, { key: 'escadron', header: 'Escadron' }, { key: 'peloton', header: 'Peloton' },
-            { key: 'moyenne', header: 'Moyenne' }, { key: 'actionBtn', header: 'Action' }
-        ], enrichedList);
-    };
+                    {visibleCols.gain && (
+                        <td className="center-cell">
+                            <div className={`gain-indicator ${parseFloat(student.progression) >= 0 ? 'positive' : 'negative'}`}>
+                                {parseFloat(student.progression) >= 0 ? `+${student.progression}` : student.progression}
+                            </div>
+                        </td>
+                    )}
 
-    const handleDifficulteClick = () => {
-        const eleves = generalSummary?.elevesEnDifficulte || [];
-        const enrichedList = eleves.map(s => ({
-            ...s,
-            nom: formatNom(s.nom),
-            prenom: formatPrenom(s.prenom),
-            actionBtn: generateActionBtn(s)
-        }));
-        showModalWithData('Difficulté (Moyenne < 10)', [
-            { key: 'rang', header: 'Rang' }, { key: 'nom', header: 'Nom' }, { key: 'prenom', header: 'Prénom' },
-            { key: 'numero_incorporation', header: 'Incorp' }, { key: 'escadron', header: 'Escadron' }, { key: 'peloton', header: 'Peloton' },
-            { key: 'moyenne', header: 'Moyenne' }, { key: 'actionBtn', header: 'Action' }
-        ], enrichedList);
-    };
+                    <td className="center-cell">
+                        <div className="action-trigger">
+                            <i className={`fa fa-angle-${isExpanded ? 'up' : 'down'}`}></i>
+                        </div>
+                    </td>
+                </tr>
 
-    const handleConsultationClick = () => {
-        if (!isDataReady) { alert("Calcul en cours..."); return; }
-        const sortedData = classementWithDetails.filter(s => s.consultationDays > 0)
-            .sort((a,b) => b.consultationDays - a.consultationDays)
-            .map(s => ({
-                ...s, nom: formatNom(s.nom), prenom: formatPrenom(s.prenom), actionBtn: generateActionBtn(s)
-            }));
-        showModalWithData('Consultations', [
-            { key: 'rang', header: 'Rang' }, { key: 'nom', header: 'Nom' }, { key: 'prenom', header: 'Prénom' },
-            { key: 'numero_incorporation', header: 'Incorp' }, { key: 'escadron', header: 'Escadron' }, { key: 'peloton', header: 'Peloton' },
-            { key: 'consultationDays', header: 'Jours' }, { key: 'actionBtn', header: 'Action' }
-        ], sortedData);
-    };
-
-    const handleSanctionsClick = () => {
-        if (!isDataReady) { alert("Calcul en cours..."); return; }
-        const sortedData = classementWithDetails.filter(s => s.sanctionCount > 0)
-            .sort((a,b) => b.sanctionCount - a.sanctionCount)
-            .map(s => ({
-                ...s, nom: formatNom(s.nom), prenom: formatPrenom(s.prenom), actionBtn: generateActionBtn(s)
-            }));
-        showModalWithData('Sanctions', [
-            { key: 'rang', header: 'Rang' }, { key: 'nom', header: 'Nom' }, { key: 'prenom', header: 'Prénom' },
-            { key: 'numero_incorporation', header: 'Incorp' }, { key: 'escadron', header: 'Escadron' }, { key: 'peloton', header: 'Peloton' },
-            { key: 'sanctionCount', header: 'Total (AS+AR)' }, { key: 'totalARDays', header: 'Jours AR' }, { key: 'actionBtn', header: 'Action' }
-        ], sortedData);
-    };
-
-    const handleMotifDetailsClick = (motifStat) => {
-        const studentsList = Object.values(motifStat.studentDetails).sort((a, b) => b.count - a.count).map(s => ({
-            ...s, nom: formatNom(s.nom), prenom: formatPrenom(s.prenom)
-        }));
-        showModalWithData(`Détails : ${motifStat.motif}`, [
-            { key: 'nom', header: 'Nom' }, { key: 'prenom', header: 'Prénom' },
-            { key: 'escadron', header: 'Escadron' }, { key: 'peloton', header: 'Peloton' },
-            { key: 'count', header: 'Fréq.' }
-        ], studentsList);
-    };
-
-    const handleMotifStatsClick = () => {
-        if (!isDataReady) { alert("Calcul en cours..."); return; }
-        const data = motifStats.map(s => ({
-            ...s, actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleMotifDetailsClick(s); }}>Liste</button>
-        }));
-        showModalWithData('Motifs', [
-            { key: 'motif', header: 'Motif' }, { key: 'count', header: 'Total' }, { key: 'uniquePeople', header: 'Nb Pers.' }, { key: 'actionBtn', header: 'Détail' }
-        ], data);
-    };
-
-    const getExamRank = (examType) => {
-        const name = examType.toUpperCase().replace(/_/g, ' ');
-        if (name.includes('FETTA')) return 1;
-        if (name.includes('TEST')) return 2;
-        if (name.includes('MI') && name.includes('STAGE')) return 3;
-        if (name.includes('FINAL')) return 4;
-        if (name.includes('APTITUDE')) return 5;
-        if (name.includes('GDF')) return 6;
-        if (name.includes('RAID')) return 7;
-        return 999;
-    };
-
-    const sortedExams = [...examSummaries].sort((a, b) => {
-        return getExamRank(a.typeExamen) - getExamRank(b.typeExamen);
-    });
-
-    if (showIntro) {
-        return <WelcomePage onComplete={() => setShowIntro(false)} />;
-    }
-
-    const sourceData = isDataReady ? classementWithDetails : detailedRanking;
-    const totalStudents = sourceData.length;
-    const countSup12 = sourceData.filter(s => s.moyenne >= 12).length;
-    const percentSup12 = totalStudents > 0 ? ((countSup12 / totalStudents) * 100).toFixed(1) : '0.0';
-    const countInf12 = sourceData.filter(s => s.moyenne < 12).length;
-    const percentInf12 = totalStudents > 0 ? ((countInf12 / totalStudents) * 100).toFixed(1) : '0.0';
-
-    const listRedoublement = getRedoublementList();
-    const countRedoublement = isDataReady ? listRedoublement.length : '...';
-
-    const countAjournement = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < parseFloat(ajournementThreshold)).length;
-
-    const totalMotifsCount = isDataReady ? motifStats.reduce((acc, curr) => acc + curr.count, 0) : '...';
-    const countConsultations = isDataReady ? classementWithDetails.filter(s => s.consultationDays > 0).length : '...';
-    const countSanctions = isDataReady ? classementWithDetails.filter(s => s.sanctionCount > 0).length : '...';
-    const elevesEnDifficulte = generalSummary?.elevesEnDifficulte || [];
-    const escadronsAffiches = (generalSummary?.statsParEscadron || []).map((esc, i) => ({ ...esc, rang: i + 1 }));
-
-    return (
-        <div className="dashboard-container">
-            <div className="dashboard-header">
-                 <h1 className="dashboard-title">Tableaux de Bord</h1>
-                 <p className="dashboard-subtitle">Synthèse en temps réel.</p>
-                 
-                 <div style={{ marginTop: '1rem' }}>
-                    <select
-                        value={selectedPromotion}
-                        onChange={(e) => setSelectedPromotion(e.target.value)}
-                        style={{
-                            padding: '0.5rem',
-                            borderRadius: '8px',
-                            backgroundColor: '#2d3748',
-                            color: '#e2e8f0',
-                            border: '1px solid #4a5568',
-                            width: '100%',
-                            fontSize: '1rem'
-                        }}
-                    >
-                        <option value="all">Toutes Promotions</option>
-                        {promotionsList.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                 </div>
-
-                 {error && (
-                     <div style={{color: '#ef4444', backgroundColor: '#fee2e2', padding: '10px', borderRadius: '5px', marginTop: '10px'}}>
-                         ⚠️ {error}
-                     </div>
-                 )}
-            </div>
-
-            <div className="dashboard-main-content">
-                <div className="dashboard-cards-list">
-                    <div className="dashboard-cards-row">
-                        {sortedExams.length > 0 ? sortedExams.map(exam => {
-                            const stats = examExtremes[exam.typeExamen] || { min: '-', max: '-' };
-                            return (
-                                <div key={exam.typeExamen} className="exam-card-wrapper">
-                                    <div className="exam-card-header">
-                                        <div className="exam-card-title-section">
-                                            <h3>{exam.typeExamen.replace(/_/g, ' ')}</h3>
-                                            <span>Synthèse Examen</span>
-                                        </div>
-                                        <div className="exam-card-status"><span className="status-dot"></span>En cours</div>
+                {isExpanded && (
+                    <tr className="evolution-expanded-view">
+                        <td colSpan={colSpanCount}>
+                            <div className="expanded-content-wrapper animate-slide-in">
+                                <div className="history-info-layout">
+                                    <div className="student-photo-area">
+                                        <img
+                                            src={student.imagePath || 'https://www.w3schools.com/w3images/avatar_hat.jpg'}
+                                            alt="Profil"
+                                            onError={(e) => { e.target.onerror = null; e.target.src = 'https://www.w3schools.com/w3images/avatar_hat.jpg'; }}
+                                        />
+                                        <div className="photo-label">PARCOURS ACADÉMIQUE</div>
                                     </div>
-                                    <div className="exam-card-body" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.8rem' }}>
-                                        <div className="exam-card-stat">
-                                            <span className="stat-value">{(exam.stats.moyenne || 0).toFixed(2)}</span>
-                                            <span className="stat-label">Moyenne Gen.</span>
+                                    <div className="history-strip-line">
+                                        <div className="stats-sanct-container" style={{display: 'flex', gap: '20px', marginBottom: '15px', padding: '10px', background: '#f8f9fa', borderRadius: '5px', fontSize: '0.9em'}}>
+                                            <span><i className="fa fa-medkit"></i> Consultations: <strong>{healthData?.consultationDays || 0} jours</strong></span>
+                                            <span><i className="fa fa-gavel"></i> Sanctions: <strong>{healthData?.sanctionCount || 0}</strong></span>
                                         </div>
-                                        <div className="exam-card-stat">
-                                            <span className="stat-value">{exam.stats.participants}</span>
-                                            <span className="stat-label">Participants</span>
+                                        <div className="strip-items-container">
+                                            {realHistory.length > 0 ? realHistory.map((ex, idx) => (
+                                                <div key={idx} className="strip-item">
+                                                    <span className="strip-item-name">{ex.label}</span>
+                                                    <span className="strip-item-value" style={{ backgroundColor: getStatusColor(ex.note) }}>{ex.note}</span>
+                                                </div>
+                                            )) : <span className="no-history">Aucun historique disponible.</span>}
                                         </div>
-                                        <div className="exam-card-stat">
-                                            <span className="stat-value" style={{color: '#4ade80'}}>{stats.max}</span>
-                                            <span className="stat-label">Note Max</span>
-                                        </div>
-                                        <div className="exam-card-stat">
-                                            <span className="stat-value" style={{color: '#f87171'}}>{stats.min}</span>
-                                            <span className="stat-label">Note Min</span>
-                                        </div>
-                                    </div>
-                                    <div className="exam-card-footer">
-                                        <div className="progress-bar-container">
-                                            <span>Progression</span>
-                                            <div className="progress-bar-background">
-                                                <div className="progress-bar-foreground" style={{width: `${exam.stats.completion}%`}}></div>
-                                            </div>
-                                        </div>
-                                        <Link to={`/dashboard/${exam.typeExamen}`} className="details-button">Détails</Link>
                                     </div>
                                 </div>
-                            );
-                        }) : (
-                            <div style={{color: 'gray', fontStyle: 'italic', padding: '20px', width: '100%'}}>
-                                {error ? 'Données inaccessibles.' : 'Chargement des examens...'}
+                                <div className="progression-summary-line">
+                                    <div className="progression-text">
+                                        <i className="fa fa-chart-line"></i>
+                                        Position : <span className="highlight-pts">Rang #{displayRank}</span>
+                                    </div>
+                                    <div className="expansion-button-group">
+                                        <button className="btn-details-matiere" onClick={(e) => { e.stopPropagation(); handleShowEvolutionDetail(student); }}>
+                                            Détails Matières
+                                        </button>
+                                        <button className="btn-dossier-full" onClick={(e) => { e.stopPropagation(); setSelectedStudent(student); }}>
+                                            Consulter Dossier
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                )}
+            </React.Fragment>
+        );
+    };
+
+    const renderInstructionGuide = () => {
+        let step = 1;
+        let title = "SÉLECTION DE LA PROMOTION";
+        let text = "Veuillez choisir une PROMOTION pour charger la base de données.";
+        let icon = "fa-university";
+
+        if (selectedPromotion !== 'all' && selectedPopulation === 'all') {
+            step = 2;
+            title = "DÉFINITION DU PÉRIMÈTRE";
+            text = "Sélectionnez maintenant la POPULATION cible (Actifs ou Conseil) pour le calcul des statistiques.";
+            icon = "fa-users-cog";
+        }
+
+        return (
+            <div className={`instruction-hero phase-${step}`}>
+                <div className="instruction-glass-card">
+                    <div className="step-count">ÉTAPE {step}</div>
+                    <i className={`fa ${icon} icon-float`}></i>
+                    <h2>{title}</h2>
+                    <p>{text}</p>
+                    <div className="arrow-down-bounce"><i className="fa fa-arrow-up"></i></div>
+                </div>
+            </div>
+        );
+    };
+
+    const countStudents = filteredSourceData.length;
+    const countSup12 = filteredSourceData.filter(s => parseFloat(s.moyenne) >= 12).length;
+    const countInf12 = filteredSourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 12).length;
+    const countAjournement = filteredSourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < parseFloat(ajournementThreshold)).length;
+    
+    // Calcul du pourcentage global de réussite (moyenne >= 12) pour la carte Bilan
+    const totalTauxReussite = countStudents > 0 ? ((countSup12 / countStudents) * 100).toFixed(1) + '%' : '0%';
+
+    const countRedoublement = isDataReady ? filteredSourceData.filter(s =>
+        (s.consultationMax >= 45 || s.consultationDays >= 60) ||
+        (s.moyenne !== null && parseFloat(s.moyenne) < 8) ||
+        (s.totalARDays >= 20)
+    ).length : 'Calcul...';
+
+    const sortedExams = (examSummaries || []).filter(e => {
+        if (selectedPopulation === 'conseil') return e.typeExamen.toUpperCase().includes('REPECHAGE');
+        return !e.typeExamen.toUpperCase().includes('REPECHAGE');
+    }).sort((a, b) => {
+        const order = (t) => {
+            const up = t.toUpperCase();
+            if (up.includes('FETTA')) return 1;
+            if (up.includes('TEST')) return 2;
+            if (up.includes('MI')) return 3;
+            if (up.includes('STAGE')) return 4;
+            return 99;
+        };
+        return order(a.typeExamen) - order(b.typeExamen);
+    });
+
+    if (showIntro) return <WelcomePage onComplete={() => setShowIntro(false)} />;
+
+    return (
+        <div className="dashboard-root-layout">
+            <div className="dashboard-sidebar-header">
+                <div className="brand-title">Interface Décisionnelle</div>
+                <div className="brand-subtitle">Analyse Statistique & Support Pédagogique</div>
+
+                <div className="header-filters-container">
+                    <div className={`filter-block ${selectedPromotion === 'all' ? 'pending' : 'filled'}`}>
+                        <label>Promotion</label>
+                        <select
+                            value={selectedPromotion}
+                            onChange={(e) => { setSelectedPromotion(e.target.value); setSelectedPopulation('all'); }}
+                            className="select-custom-ui"
+                        >
+                            <option value="all">Saisir promotion...</option>
+                            {promotionsList.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                    </div>
+
+                    <div className={`filter-block ${selectedPromotion !== 'all' && selectedPopulation === 'all' ? 'pending' : 'filled'}`}>
+                        <label>Donnée Cible</label>
+                        <select
+                            value={selectedPopulation}
+                            onChange={(e) => setSelectedPopulation(e.target.value)}
+                            className="select-custom-ui"
+                        >
+                            <option value="all">Périmètre...</option>
+                            <option value="total">Promotion Totale</option>
+                            <option value="actif">ACTIFS</option>
+                            <option value="conseil">LISTE CONSEIL (Repêchage)</option>
+                        </select>
+                    </div>
+                </div>
+                {error && <div className="error-status-toast">{error}</div>}
+            </div>
+
+            <div className="dashboard-scrollable-content">
+                {!isSelectionComplete ? renderInstructionGuide() : (
+                    <div className="main-data-dashboard animate-fade">
+                        <div className="exam-summary-grid">
+                            {sortedExams.map(exam => (
+                                <div key={exam.typeExamen} className="exam-card-stat-unit">
+                                    <div className="card-top">
+                                        <h4>{exam.typeExamen.replace(/_/g, ' ')}</h4>
+                                        <span className="tag-ok">Statut OK</span>
+                                    </div>
+                                    <div className="card-middle-grid">
+                                        <div className="m-item">
+                                            <span className="m-val">{exam.stats.moyenne}</span>
+                                            <span className="m-lab">Moyenne</span>
+                                        </div>
+                                        <div className="m-item">
+                                            <span className="m-val">{exam.stats.participants}</span>
+                                            <span className="m-lab">Effectif</span>
+                                        </div>
+                                        <div className="m-item">
+                                            <span className="m-val max">{exam.stats.max || '0.00'}</span>
+                                            <span className="m-lab">Max Elève</span>
+                                        </div>
+                                        <div className="m-item">
+                                            <span className="m-val min">{exam.stats.min || '0.00'}</span>
+                                            <span className="m-lab">Min Elève</span>
+                                        </div>
+                                    </div>
+                                    <div className="card-bottom">
+                                        <Link to={`/dashboard/${exam.typeExamen}`} className="btn-explore">Analyser</Link>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {selectedPopulation === 'conseil' && (
+                            <div className="leaderboard-enlarged-container">
+                                <div className="leaderboard-custom-header">
+                                    <div className="l-title-group">
+                                        <h3><i className="fa fa-award"></i> Leaderboard Repêchage</h3>
+                                        <p>Analyse comparative des gains de points après examen de conseil.</p>
+                                    </div>
+                                    <div className="l-action-bar" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                                        
+                                        {/* BOUTON D'AFFICHAGE/MASQUAGE DES COLONNES */}
+                                        <div style={{ position: 'relative' }}>
+                                            <button 
+                                                onClick={() => setShowColMenu(!showColMenu)}
+                                                style={{
+                                                    backgroundColor: '#475569', color: 'white', padding: '0.7rem 1.2rem',
+                                                    borderRadius: '0.7rem', border: 'none', cursor: 'pointer',
+                                                    fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px',
+                                                    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+                                                }}
+                                            >
+                                                <i className="fa fa-columns"></i> Colonnes
+                                            </button>
+                                            {showColMenu && (
+                                                <div style={{
+                                                    position: 'absolute', top: '110%', right: 0, background: 'white',
+                                                    border: '1px solid #e2e8f0', zIndex: 50, padding: '15px', borderRadius: '8px',
+                                                    boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column',
+                                                    gap: '10px', minWidth: '180px'
+                                                }}>
+                                                    <label style={{display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem'}}>
+                                                        <input type="checkbox" checked={visibleCols.decision} onChange={() => setVisibleCols({...visibleCols, decision: !visibleCols.decision})} /> Décision Conseil
+                                                    </label>
+                                                    <label style={{display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem'}}>
+                                                        <input type="checkbox" checked={visibleCols.motif} onChange={() => setVisibleCols({...visibleCols, motif: !visibleCols.motif})} /> Motif
+                                                    </label>
+                                                    <label style={{display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem'}}>
+                                                        <input type="checkbox" checked={visibleCols.initiale} onChange={() => setVisibleCols({...visibleCols, initiale: !visibleCols.initiale})} /> Initiale
+                                                    </label>
+                                                    <label style={{display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem'}}>
+                                                        <input type="checkbox" checked={visibleCols.repechage} onChange={() => setVisibleCols({...visibleCols, repechage: !visibleCols.repechage})} /> Repêchage
+                                                    </label>
+                                                    <label style={{display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem'}}>
+                                                        <input type="checkbox" checked={visibleCols.gain} onChange={() => setVisibleCols({...visibleCols, gain: !visibleCols.gain})} /> Gain
+                                                    </label>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <button
+                                            onClick={exportToPDF}
+                                            style={{
+                                                backgroundColor: '#ef4444', color: 'white', padding: '0.7rem 1.2rem',
+                                                borderRadius: '0.7rem', border: 'none', cursor: 'pointer',
+                                                fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px',
+                                                boxShadow: '0 4px 6px rgba(239, 68, 68, 0.2)'
+                                            }}
+                                        >
+                                            <i className="fa fa-file-pdf-o"></i> Exporter
+                                        </button>
+                                        
+                                        <div className="l-filter-group">
+                                            <label>Statut Conseil :</label>
+                                            <select
+                                                value={filterTypeConseil}
+                                                onChange={(e) => setFilterTypeConseil(e.target.value)}
+                                                className="filter-select-mini"
+                                            >
+                                                <option value="all">Tous les statuts</option>
+                                                <option value="redoublant">Redoublants</option>
+                                                <option value="ajournes_all">Tous les Ajournés (3m & 6m)</option>
+                                                <option value="ajourne_3m">Ajournés 3m</option>
+                                                <option value="ajourne_6m">Ajournés 6m</option>
+                                            </select>
+                                        </div>
+                                        <div className="l-search-group">
+                                            <i className="fa fa-search"></i>
+                                            <input
+                                                type="text"
+                                                placeholder="Rechercher..."
+                                                value={searchConseil}
+                                                onChange={(e) => setSearchConseil(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="leaderboard-table-area no-scroll-global">
+                                    <table className="custom-leader-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Rang & Identification</th>
+                                                {visibleCols.decision && <th className="center">Décision Conseil</th>}
+                                                {visibleCols.motif && <th className="center">Motif</th>}
+                                                {visibleCols.initiale && <th className="center">Initiale</th>}
+                                                {visibleCols.repechage && <th className="center">Repêchage</th>}
+                                                {visibleCols.gain && <th className="center">Gain</th>}
+                                                <th className="center">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {filteredLeaderboard.length > 0 ? (
+                                                filteredLeaderboard.map((st, idx) => renderLeaderboardRow(st, idx))
+                                            ) : (
+                                                <tr><td colSpan="7" className="empty-state">Aucun élève trouvé dans cette catégorie.</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {generalSummary && (
+                            <div className="general-recap-panel">
+                                <div className="panel-header">BILAN GÉNÉRAL : {selectedPopulation.toUpperCase()}</div>
+                                <div className="mini-cards-flexbox">
+                                    <div className="m-card">
+                                        <h5>Effectif Total</h5>
+                                        <div className="v">{countStudents}</div>
+                                        <div className="card-legend">Total population</div>
+                                    </div>
+
+                                    <div className="m-card clickable green" onClick={() => {
+                                        const list = filteredSourceData.filter(s => parseFloat(s.moyenne) >= 12).map(s => ({
+                                            ...s,
+                                            fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
+                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                        }));
+                                        showModal('Admis (Moy ≥ 12)', [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
+                                    }}>
+                                        <h5>Validés</h5>
+                                        <div className="v">{countSup12}</div>
+                                        <div className="card-legend">Moyenne ≥ 12</div>
+                                    </div>
+
+                                    <div className="m-card clickable blue" onClick={() => {
+                                        const list = filteredSourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 12).map(s => ({
+                                            ...s,
+                                            fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
+                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                        }));
+                                        showModal('Inférieur à 12 (Moy < 12)', [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
+                                    }}>
+                                        <h5>Inférieur à 12</h5>
+                                        <div className="v">{countInf12}</div>
+                                        <div className="card-legend">Moyenne &lt; 12</div>
+                                    </div>
+
+                                    <div className="m-card clickable red" onClick={() => {
+                                        const list = filteredSourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < parseFloat(ajournementThreshold)).map(s => ({
+                                            ...s,
+                                            fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
+                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                        }));
+                                        showModal(`Simulation Ajournement (< ${ajournementThreshold})`, [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
+                                    }}>
+                                        <h5>Simulation</h5>
+                                        <div className="threshold-input" onClick={e => e.stopPropagation()}>
+                                            <input type="number" step="0.1" value={ajournementThreshold} onChange={e => setAjournementThreshold(e.target.value)} />
+                                        </div>
+                                        <div className="v">{countAjournement}</div>
+                                        <div className="card-legend">Simulation d'ajournement</div>
+                                    </div>
+
+                                    {/* CARTE CONDITIONNELLE : Réussite/Motif pour le "conseil", sinon Redoublement pour les autres */}
+                                    {selectedPopulation === 'conseil' ? (
+                                        <div className="m-card clickable orange" onClick={() => {
+                                            showModal('Répartition de Réussite par Motif (≥ 12)', [
+                                                {key:'motif', header:'Motif'},
+                                                {key:'total', header:'Effectif Total'},
+                                                {key:'admis', header:'Admis (≥12)'},
+                                                {key:'taux', header:'Taux Réussite'}
+                                            ], motifStats);
+                                        }}>
+                                            <h5>Réussite / Motif</h5>
+                                            <div className="v">{totalTauxReussite}</div>
+                                            <div className="card-legend">Cliquez pour le détail</div>
+                                        </div>
+                                    ) : (
+                                        <div className="m-card clickable orange" onClick={() => {
+                                            const list = filteredSourceData.filter(s => (s.consultationMax >= 45 || s.consultationDays >= 60) || (s.moyenne && s.moyenne < 8) || s.totalARDays >= 20).map(s => ({
+                                                ...s,
+                                                fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
+                                                actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                            }));
+                                            showModal('Alerte Redoublement (Critères cumulés)', [{key:'fullName', header:'Nom & Prénom'}, {key:'actionBtn', header:'Action'}], list);
+                                        }}>
+                                            <h5>Redoublement</h5>
+                                            <div className="v">{countRedoublement}</div>
+                                            <div className="card-legend">Critères cumulés</div>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="panel-footer-btn">
+                                    <Link to="/dashboard/general" className="btn-full-view">Accéder au Dashboard Détaillé</Link>
+                                </div>
                             </div>
                         )}
                     </div>
-
-                    {generalSummary && (
-                        <div className="exam-card-wrapper general">
-                            <div className="exam-card-header">
-                                <div className="exam-card-title-section">
-                                    <h3>FIN FORMATION</h3>
-                                    <span>Vue d'ensemble complète</span>
-                                </div>
-                            </div>
-                            <div className="fin-formation-grid">
-                                <div className="mini-stat-card">
-                                    <h4>Effectif Total</h4>
-                                    <p>{totalStudents}</p>
-                                </div>
-                                <div className="mini-stat-card clickable highlight-blue" onClick={handleSup12Click}>
-                                    <h4>Moyenne ≥ 12</h4>
-                                    <p style={{color:'#4ade80'}}>{countSup12}</p>
-                                    <span>{percentSup12}% des élèves</span>
-                                </div>
-                                <div className="mini-stat-card clickable highlight-blue" onClick={handleInf12Click}>
-                                    <h4>Moyenne &lt; 12</h4>
-                                    <p style={{color:'#facc15'}}>{countInf12}</p>
-                                    <span>{percentInf12}% des élèves</span>
-                                </div>
-
-                                <div
-                                    className={`mini-stat-card highlight-blue input-card-mini ${!isAjournementBlurred ? 'clickable' : ''}`}
-                                    style={{ position: 'relative' }}
-                                    onClick={isAjournementBlurred ? undefined : handlePropositionAjournementClick}
-                                >
-                                    <button
-                                        className={`reveal-overlay-btn ${isAjournementBlurred ? 'visible' : ''}`}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setIsAjournementBlurred(!isAjournementBlurred);
-                                        }}
-                                        title={isAjournementBlurred ? "Révéler la surprise" : "Masquer"}
-                                    >
-                                        <i className={`fa ${isAjournementBlurred ? 'fa-eye' : 'fa-eye-slash'}`}></i>
-                                    </button>
-
-                                    <div className={`card-content-wrapper ${isAjournementBlurred ? 'content-blurred' : ''}`}>
-                                        <h4>Prop. Ajournement</h4>
-                                        <div className="input-wrapper-mini" onClick={(e) => e.stopPropagation()}>
-                                            <label>Seuil &lt; </label>
-                                            <input
-                                                type="number"
-                                                step="0.1"
-                                                min="0"
-                                                max="20"
-                                                value={ajournementThreshold}
-                                                onChange={(e) => setAjournementThreshold(e.target.value)}
-                                                className="mini-input"
-                                                disabled={isAjournementBlurred}
-                                            />
-                                        </div>
-                                        <p style={{color:'#f87171'}}>{countAjournement}</p>
-                                    </div>
-                                </div>
-
-                                <div className="mini-stat-card clickable highlight-blue" onClick={handleRedoublementClick}>
-                                    <h4>Prop. Redoublement</h4>
-                                    <p style={{color:'#f87171'}}>{countRedoublement}</p>
-                                </div>
-                                <div className="mini-stat-card clickable highlight-blue" onClick={handleMotifStatsClick}>
-                                    <h4>Répartition Motifs</h4>
-                                    <p style={{color:'#60a5fa'}}>{totalMotifsCount}</p>
-                                </div>
-                                <div className="mini-stat-card clickable highlight-blue" onClick={handleConsultationClick}>
-                                    <h4>Consultations</h4>
-                                    <p>{countConsultations}</p>
-                                </div>
-                                <div className="mini-stat-card clickable highlight-blue" onClick={handleSanctionsClick}>
-                                    <h4>Sanctions</h4>
-                                    <p>{countSanctions}</p>
-                                </div>
-
-                                <div className="mini-stat-card clickable highlight-blue" onClick={handleDifficulteClick}>
-                                    <h4>Moyenne &lt; 10</h4>
-                                    <p>{elevesEnDifficulte.length}</p>
-                                </div>
-                            </div>
-                            <div className="exam-card-footer">
-                                <Link to="/dashboard/general" className="details-button">Voir Dashboard Complet</Link>
-                            </div>
-                        </div>
-                    )}
-
-                    {generalSummary && (
-                        <div className="exam-card-wrapper follow-up-card">
-                            <div className="exam-card-header">
-                                <div className="exam-card-title-section">
-                                    <h3>Suivi Pédagogique</h3>
-                                    <span>Classement & Alertes</span>
-                                </div>
-                            </div>
-                            <div className="exam-card-body follow-up-body">
-                                <div className="follow-up-section">
-                                    <h4>Classement Escadrons</h4>
-                                    <div className="follow-up-list scrollable-list">
-                                        {escadronsAffiches.map(esc => (
-                                            <div key={esc.nom} className="follow-up-item">
-                                                <span className="escadron-rank-info">
-                                                    <span className="rank-badge">{esc.rang}e</span> Escadron {esc.nom}
-                                                </span>
-                                                <span className={`stat-value small ${esc.moyenne < 10 ? 'red' : ''}`}>{esc.moyenne.toFixed(2)}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="follow-up-section">
-                                    <h4>Élèves en Difficulté</h4>
-                                     <div className="follow-up-list scrollable-list">
-                                        {elevesEnDifficulte.map(eleve => (
-                                            <div key={eleve.id} className="follow-up-item clickable-student" onClick={() => setSelectedStudent(eleve)}>
-                                                <span className="student-link">{eleve.prenom} {eleve.nom}</span>
-                                                <span className="stat-value small red">{parseFloat(eleve.moyenne).toFixed(2)}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
+                )}
             </div>
 
             {selectedStudent && (
@@ -824,8 +984,14 @@ const Dashboard = () => {
                     onClose={() => setSelectedStudent(null)}
                 />
             )}
+
             {modalData && (
-                <DashboardModal title={modalTitle} data={modalData} columns={modalColumns} onClose={() => setModalData(null)} />
+                <DashboardModal
+                    title={modalTitle}
+                    data={modalData}
+                    columns={modalColumns}
+                    onClose={() => setModalData(null)}
+                />
             )}
         </div>
     );

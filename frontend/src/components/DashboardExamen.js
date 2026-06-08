@@ -1,16 +1,35 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import * as xlsx from 'xlsx';
+
 import DashboardModal from './DashboardModal';
 import StudentDetailsModal from './StudentDetailsModal';
 import './DashboardRedesign.css';
 
-// MODIFICATION ICI : Ajout de subValue pour afficher le pourcentage
-const StatCardRedesign = ({ title, value, subValue, onClick, highlight = false, isLoading = false }) => (
+const normalizeStudentData = (s) => {
+    if (!s) return s;
+    return {
+        ...s,
+        id: s.id || s.eleve_id || s.eleveId,
+        numero_incorporation: s.numero_incorporation || s.numeroIncorporation || s.incorp
+    };
+};
+
+const StatCardRedesign = ({ title, value, subValue, onClick, highlight = false, isLoading = false, icon, onExportExcel, onExportPdf }) => (
     <div className={`stat-card-redesign ${onClick ? 'clickable' : ''} ${highlight ? 'highlight' : ''}`} onClick={onClick}>
-        <h4>{title}</h4>
+        <div className="card-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h4 style={{ margin: 0 }}>{title}</h4>
+            <div className="card-icons" style={{ display: 'flex', gap: '8px' }}>
+                {onExportPdf && <i className="fa fa-file-pdf-o action-icon pdf-icon" onClick={(e) => { e.stopPropagation(); onExportPdf(); }} title="Exporter en PDF" style={{ color: '#dc3545', cursor: 'pointer' }}></i>}
+                {onExportExcel && <i className="fa fa-file-excel-o action-icon excel-icon" onClick={(e) => { e.stopPropagation(); onExportExcel(); }} title="Exporter en Excel" style={{ color: '#28a745', cursor: 'pointer' }}></i>}
+                {icon && <i className={`fa ${icon} stat-icon`}></i>}
+            </div>
+        </div>
         <p>{isLoading ? '...' : value}</p>
-        {subValue && <span style={{ fontSize: '0.8rem', color: '#666' }}>{subValue}</span>}
+        {subValue && <span className="stat-subval">{subValue}</span>}
     </div>
 );
 
@@ -21,6 +40,47 @@ const SidebarStatItem = ({ label, value }) => (
     </li>
 );
 
+const getOverlappingDays = (start1, end1, limitStart, limitEnd) => {
+    if (!start1) return 0;
+    const s1 = new Date(start1).getTime();
+    const e1 = end1 ? new Date(end1).getTime() : s1;
+    const s2 = limitStart ? new Date(limitStart).getTime() : -Infinity;
+    const e2 = limitEnd ? new Date(limitEnd).getTime() : Infinity;
+
+    const maxStart = Math.max(s1, s2);
+    const minEnd = Math.min(e1, e2);
+
+    if (maxStart <= minEnd) {
+        return Math.ceil((minEnd - maxStart) / (1000 * 60 * 60 * 24)) + 1;
+    }
+    return 0;
+};
+
+const exportDataToExcel = (title, columns, data) => {
+    const worksheetData = data.map(row => {
+        const obj = {};
+        columns.forEach(col => {
+            if (col.key !== 'actionBtn') obj[col.header] = typeof row[col.key] === 'object' ? '-' : row[col.key];
+        });
+        return obj;
+    });
+    const worksheet = xlsx.utils.json_to_sheet(worksheetData);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, "Export");
+    xlsx.writeFile(workbook, `${title.replace(/[^a-z0-9]/gi, '_')}.xlsx`);
+};
+
+const exportDataToPdf = (title, columns, data) => {
+    const doc = new jsPDF();
+    doc.text(title, 14, 15);
+    const tableColumns = columns.filter(c => c.key !== 'actionBtn').map(c => c.header);
+    const tableData = data.map(row =>
+        columns.filter(c => c.key !== 'actionBtn').map(c => typeof row[c.key] === 'object' ? '-' : row[c.key])
+    );
+    autoTable(doc, { head: [tableColumns], body: tableData, startY: 20 });
+    doc.save(`${title.replace(/[^a-z0-9]/gi, '_')}.pdf`);
+};
+
 const DashboardExamen = () => {
     const { typeExamen } = useParams();
 
@@ -30,6 +90,9 @@ const DashboardExamen = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+
     const [modalData, setModalData] = useState(null);
     const [modalTitle, setModalTitle] = useState('');
     const [modalColumns, setModalColumns] = useState([]);
@@ -37,13 +100,13 @@ const DashboardExamen = () => {
     const [selectedStudent, setSelectedStudent] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
 
-    const [classementWithDetails, setClassementWithDetails] = useState([]);
+    const [classementWithRawDetails, setClassementWithRawDetails] = useState([]);
     const [isDataReady, setIsDataReady] = useState(false);
 
     useEffect(() => {
         if (!typeExamen) return;
 
-        setClassementWithDetails([]);
+        setClassementWithRawDetails([]);
         setIsDataReady(false);
         setLoading(true);
 
@@ -51,17 +114,28 @@ const DashboardExamen = () => {
             try {
                 const token = localStorage.getItem('token');
                 const headers = { Authorization: `Bearer ${token}` };
-                const [summaryRes, detailsRes, subjectsRes] = await Promise.all([
+                const [summaryRes, detailsRes, subjectsRes, configRes] = await Promise.all([
                     axios.get('/api/dashboard/summary-by-exam-type', { headers }),
                     axios.get(`/api/resultats/classement-details?typeExamen=${typeExamen}`, { headers }),
-                    axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}`, { headers })
+                    axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}`, { headers }),
+                    axios.get('/api/configuration/examens', { headers })
                 ]);
+
+                const examConfig = configRes.data.find(c => c.nom_modele === typeExamen);
+                if (examConfig) {
+                    if (examConfig.date_debut) setStartDate(examConfig.date_debut.split('T')[0]);
+                    if (examConfig.date_fin) setEndDate(examConfig.date_fin.split('T')[0]);
+                }
 
                 const examSummary = summaryRes.data.find(e => e.typeExamen === typeExamen);
 
                 if (examSummary && detailsRes.data && subjectsRes.data) {
                     setSummary(examSummary);
-                    setDetails(detailsRes.data);
+                    const normalizedClassement = (detailsRes.data.classement || []).map(normalizeStudentData);
+                    setDetails({
+                        ...detailsRes.data,
+                        classement: normalizedClassement
+                    });
                     setSubjectStats(subjectsRes.data);
                 } else {
                     setError(`Aucune donnée pour l'examen : ${typeExamen.replace(/_/g, ' ')}`);
@@ -79,15 +153,6 @@ const DashboardExamen = () => {
         if (!details || details.classement.length === 0) return;
         if (isDataReady) return;
 
-        const calculateDaysBetween = (startDate, endDate) => {
-            if (!startDate || !endDate) return 0;
-            const start = new Date(startDate);
-            const end = new Date(endDate);
-            if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
-            const diffTime = Math.abs(end - start);
-            return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-        };
-
         const fetchAllExtraData = async () => {
             const rawStudents = details.classement;
             const BATCH_SIZE = 5;
@@ -98,9 +163,7 @@ const DashboardExamen = () => {
                 try {
                     const sanctionsResponse = await axios.get('http://192.168.241.169:4000/api/sanctions');
                     allSanctions = sanctionsResponse.data || [];
-                } catch (e) {
-                    console.error("Erreur chargement sanctions globales", e);
-                }
+                } catch (e) { console.error("Erreur chargement sanctions globales", e); }
 
                 for (let i = 0; i < rawStudents.length; i += BATCH_SIZE) {
                     const batch = rawStudents.slice(i, i + BATCH_SIZE);
@@ -112,17 +175,8 @@ const DashboardExamen = () => {
                                 axios.get(`http://192.168.241.169:4000/api/absence/eleve/${student.id}`)
                             ]);
 
-                            let consultationDays = 0;
-                            if (consultRes.status === 'fulfilled' && consultRes.value.data && Array.isArray(consultRes.value.data)) {
-                                consultationDays = consultRes.value.data.reduce((total, consult) => {
-                                    return total + (calculateDaysBetween(consult.dateDepart, consult.dateArrive) || 0);
-                                }, 0);
-                            }
-
-                            let absenceDays = 0;
-                            if (absenceRes.status === 'fulfilled' && absenceRes.value.data && Array.isArray(absenceRes.value.data)) {
-                                absenceDays = absenceRes.value.data.length;
-                            }
+                            const rawConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
+                            const rawAbsences = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
 
                             const studentIncorp = String(student.numero_incorporation || '').trim();
                             const sanctionsForStudent = allSanctions.filter(s =>
@@ -130,9 +184,9 @@ const DashboardExamen = () => {
                             );
                             const sanctionCount = sanctionsForStudent.length;
 
-                            return { ...student, consultationDays, absenceDays, sanctionCount };
+                            return { ...student, rawConsultations, rawAbsences, sanctionCount };
                         } catch (innerErr) {
-                            return { ...student, consultationDays: 0, absenceDays: 0, sanctionCount: 0 };
+                            return { ...student, rawConsultations: [], rawAbsences: [], sanctionCount: 0 };
                         }
                     });
 
@@ -140,19 +194,42 @@ const DashboardExamen = () => {
                     allEnrichedStudents = [...allEnrichedStudents, ...batchResults];
                 }
 
-                setClassementWithDetails(allEnrichedStudents);
+                setClassementWithRawDetails(allEnrichedStudents);
                 setIsDataReady(true);
-
             } catch (err) {
                 console.error("Erreur batch load", err);
-                setClassementWithDetails(rawStudents);
+                setClassementWithRawDetails(rawStudents);
                 setIsDataReady(true);
             }
         };
 
         fetchAllExtraData();
-
     }, [details, isDataReady]);
+
+    const sourceDataDynamique = useMemo(() => {
+        if (!isDataReady) return details ? details.classement : [];
+        return classementWithRawDetails.map(student => {
+            let consultationDays = 0;
+            if (Array.isArray(student.rawConsultations)) {
+                student.rawConsultations.forEach(c => {
+                    consultationDays += getOverlappingDays(c.dateDepart, c.dateArrive, startDate, endDate);
+                });
+            }
+
+            let absenceDays = 0;
+            if (Array.isArray(student.rawAbsences)) {
+                student.rawAbsences.forEach(a => {
+                    const dateCible = a.date || a.dateDebut || a.createdAt || new Date();
+                    if (getOverlappingDays(dateCible, dateCible, startDate, endDate) > 0) {
+                        absenceDays++;
+                    }
+                });
+            }
+
+            return { ...student, consultationDays, absenceDays };
+        });
+    }, [classementWithRawDetails, isDataReady, startDate, endDate, details]);
+
 
     const showModalWithData = (title, columns, data) => {
         setModalTitle(title);
@@ -166,88 +243,7 @@ const DashboardExamen = () => {
         setSelectedStudent(student);
     };
 
-    const handleConsultationClick = () => {
-        if (!isDataReady) return;
-
-        const elevesEnConsultation = classementWithDetails.filter(s => s.consultationDays > 0);
-        const sortedData = [...elevesEnConsultation].sort((a, b) => b.consultationDays - a.consultationDays);
-
-        const modalDisplayData = sortedData.map(s => ({
-            ...s,
-            nomComplet: `${s.prenom} ${s.nom}`,
-            actionBtn: (
-                <button
-                    className="btn-details-action"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        handleStudentSelectFromModal(s);
-                    }}
-                >
-                    <i className="fa fa-eye"></i> Détail
-                </button>
-            )
-        }));
-
-        const modalColumns = [
-            { key: 'rang', header: 'Rang' },
-            { key: 'nomComplet', header: 'Nom Complet' },
-            { key: 'consultationDays', header: 'Jours de Consultation' },
-            { key: 'actionBtn', header: 'Action' }
-        ];
-
-        showModalWithData('Élèves avec le plus de jours de consultation', modalColumns, modalDisplayData);
-    };
-
-    const handleSanctionsClick = () => {
-        if (!isDataReady) return;
-
-        const elevesSanctionnes = classementWithDetails.filter(s => s.sanctionCount > 0);
-        const sortedData = [...elevesSanctionnes].sort((a, b) => b.sanctionCount - a.sanctionCount);
-
-        const modalDisplayData = sortedData.map(s => ({
-            ...s,
-            nomComplet: `${s.prenom} ${s.nom}`,
-            incorporation: s.numero_incorporation,
-            sanctionCountDisplay: `${s.sanctionCount} sanction(s)`,
-            actionBtn: (
-                <button
-                    className="btn-details-action"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        handleStudentSelectFromModal(s);
-                    }}
-                    style={{
-                        backgroundColor: '#3751FF',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '6px',
-                        padding: '5px 10px',
-                        cursor: 'pointer',
-                        fontSize: '0.85rem'
-                    }}
-                >
-                    <i className="fa fa-eye"></i> Détail
-                </button>
-            )
-        }));
-
-        const modalColumns = [
-            { key: 'rang', header: 'Rang' },
-            { key: 'nomComplet', header: 'Nom Complet' },
-            { key: 'incorporation', header: 'Incorp.' },
-            { key: 'sanctionCountDisplay', header: 'Nombre' },
-            { key: 'actionBtn', header: 'Action' }
-        ];
-
-        showModalWithData('Liste des Élèves Sanctionnés', modalColumns, modalDisplayData);
-    };
-
-
-    if (loading) return <div className="card"><h2>Chargement...</h2></div>;
-    if (error) return <div className="card"><h2>{error}</h2></div>;
-    if (!summary || !details) return <div className="card"><h2>Aucune donnée disponible.</h2></div>;
-
-    const sourceData = isDataReady ? classementWithDetails : details.classement;
+    const sourceData = sourceDataDynamique;
     const totalStudents = sourceData.length;
 
     const elevesEnDifficulte = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 10);
@@ -262,106 +258,72 @@ const DashboardExamen = () => {
     const countInf12 = studentsInf12.length;
     const percentInf12 = totalStudents > 0 ? ((countInf12 / totalStudents) * 100).toFixed(1) : '0.0';
 
-    // --- NOUVEAU : Calcul Dynamique Min / Max ---
-    const validMoyennes = sourceData
-        .filter(s => s.moyenne !== null)
-        .map(s => parseFloat(s.moyenne));
-    
-    // Calcul des valeurs
+    const validMoyennes = sourceData.filter(s => s.moyenne !== null).map(s => parseFloat(s.moyenne));
     const minMoyenneVal = validMoyennes.length > 0 ? Math.min(...validMoyennes).toFixed(2) : '0.00';
     const maxMoyenneVal = validMoyennes.length > 0 ? Math.max(...validMoyennes).toFixed(2) : '0.00';
 
-    // Récupération des élèves correspondants pour la modale
     const studentsWithMin = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne).toFixed(2) === minMoyenneVal);
     const studentsWithMax = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne).toFixed(2) === maxMoyenneVal);
-    // --------------------------------------------
 
-    const countConsultations = isDataReady
-        ? classementWithDetails.filter(s => s.consultationDays > 0).length
-        : '...';
+    const elevesConsultation = sourceData.filter(s => s.consultationDays > 0).sort((a, b) => b.consultationDays - a.consultationDays);
+    const countConsultations = isDataReady ? elevesConsultation.length : '...';
 
-    const countSanctions = isDataReady
-        ? classementWithDetails.filter(s => s.sanctionCount > 0).length
-        : '...';
+    const elevesSanctionnes = sourceData.filter(s => s.sanctionCount > 0).sort((a, b) => b.sanctionCount - a.sanctionCount);
+    const countSanctions = isDataReady ? elevesSanctionnes.length : '...';
 
-    const handleSup12Click = () => {
-        const displayData = studentsSup12.map(s => ({
-            ...s,
-            nomComplet: `${s.prenom} ${s.nom}`,
-            actionBtn: (
-                <button
-                    className="btn-details-action"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        handleStudentSelectFromModal(s);
-                    }}
-                >
-                    <i className="fa fa-eye"></i> Détail
-                </button>
-            )
-        }));
-        showModalWithData('Élèves Moyenne ≥ 12',
-            [
-                { key: 'rang', header: 'Rang' },
-                { key: 'nomComplet', header: 'Nom' },
-                { key: 'moyenne', header: 'Moyenne' },
-                { key: 'actionBtn', header: 'Action' }
-            ],
-            displayData
-        );
-    };
+    // NOUVEAU : Regroupement Absences + Indisponibilités (Consultations) dans l'intervalle
+    const elevesIndisponibles = sourceData.filter(s => s.absenceDays > 0 || s.consultationDays > 0);
+    const countIndisponibles = isDataReady ? elevesIndisponibles.length : '...';
 
-    const handleInf12Click = () => {
-        const displayData = studentsInf12.map(s => ({
-            ...s,
-            nomComplet: `${s.prenom} ${s.nom}`,
-            actionBtn: (
-                <button
-                    className="btn-details-action"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        handleStudentSelectFromModal(s);
-                    }}
-                >
-                    <i className="fa fa-eye"></i> Détail
-                </button>
-            )
-        }));
-        showModalWithData('Élèves Moyenne < 12',
-            [
-                { key: 'rang', header: 'Rang' },
-                { key: 'nomComplet', header: 'Nom' },
-                { key: 'moyenne', header: 'Moyenne' },
-                { key: 'actionBtn', header: 'Action' }
-            ],
-            displayData
-        );
-    };
+    const mapMoyenne = (list) => list.map(s => ({
+        ...s, nomComplet: `${s.prenom} ${s.nom}`,
+        actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
+    }));
+    const standardColumns = [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'moyenne', header: 'Moyenne' }, { key: 'actionBtn', header: 'Action' }];
 
-    // --- NOUVEAU : Handlers pour Min et Max ---
-    const handleMaxClick = () => {
-        const displayData = studentsWithMax.map(s => ({
-            ...s,
-            nomComplet: `${s.prenom} ${s.nom}`,
+    const handleSup12Click = () => showModalWithData('Élèves Moyenne ≥ 12', standardColumns, mapMoyenne(studentsSup12));
+    const handleInf12Click = () => showModalWithData('Élèves Moyenne < 12', standardColumns, mapMoyenne(studentsInf12));
+    const handleMaxClick = () => showModalWithData(`Meilleure Moyenne (${maxMoyenneVal})`, standardColumns, mapMoyenne(studentsWithMax));
+    const handleMinClick = () => showModalWithData(`Moyenne la plus basse (${minMoyenneVal})`, standardColumns, mapMoyenne(studentsWithMin));
+    const handleDifficulteClick = () => showModalWithData('Élèves en Difficulté (< 10/20)', standardColumns, mapMoyenne(elevesEnDifficulte));
+
+    const handleAbsentsClick = () => {
+        if (!isDataReady) return;
+        const mappedData = elevesIndisponibles.map(s => ({
+            ...s, 
+            nomComplet: `${s.prenom} ${s.nom}`, 
+            motifIndisponibilite: s.consultationDays > 0 && s.absenceDays > 0 ? `Consultation (${s.consultationDays}j) & Absence (${s.absenceDays}j)` : (s.consultationDays > 0 ? `Consultation Médicale (${s.consultationDays}j)` : `Absence (${s.absenceDays}j)`),
             actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
         }));
-        showModalWithData(`Meilleure Moyenne (${maxMoyenneVal})`, [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'moyenne', header: 'Moyenne' }, { key: 'actionBtn', header: 'Action' }], displayData);
+        showModalWithData('Absents / Indisponibles', [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }, { key: 'actionBtn', header: 'Action' }], mappedData);
     };
 
-    const handleMinClick = () => {
-        const displayData = studentsWithMin.map(s => ({
-            ...s,
-            nomComplet: `${s.prenom} ${s.nom}`,
+    const handleConsultationClick = () => {
+        if (!isDataReady) return;
+        const modalCols = [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom Complet' }, { key: 'consultationDays', header: 'Jours Consultation' }, { key: 'actionBtn', header: 'Action' }];
+        showModalWithData('Élèves avec le plus de jours de consultation', modalCols, mapMoyenne(elevesConsultation));
+    };
+
+    const handleSanctionsClick = () => {
+        if (!isDataReady) return;
+        const mappedData = elevesSanctionnes.map(s => ({
+            ...s, nomComplet: `${s.prenom} ${s.nom}`, incorporation: s.numero_incorporation, sanctionCountDisplay: `${s.sanctionCount} sanction(s)`,
             actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
         }));
-        showModalWithData(`Moyenne la plus basse (${minMoyenneVal})`, [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'moyenne', header: 'Moyenne' }, { key: 'actionBtn', header: 'Action' }], displayData);
+        const modalCols = [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'incorporation', header: 'Incorp.' }, { key: 'sanctionCountDisplay', header: 'Nombre' }, { key: 'actionBtn', header: 'Action' }];
+        showModalWithData('Liste des Élèves Sanctionnés', modalCols, mappedData);
     };
-    // ------------------------------------------
 
-    const filteredClassement = sourceData.filter(student =>
-        `${student.prenom} ${student.nom}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (student.numero_incorporation && student.numero_incorporation.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
+    if (loading) return <div className="card"><h2>Chargement...</h2></div>;
+    if (error) return <div className="card"><h2>{error}</h2></div>;
+    if (!summary || !details) return <div className="card"><h2>Aucune donnée disponible.</h2></div>;
+
+    const filteredClassement = sourceData.filter(student => {
+        const search = (searchTerm || '').toLowerCase();
+        const fullName = `${student.prenom || ''} ${student.nom || ''}`.toLowerCase();
+        const incorp = (student.numero_incorporation || '').toLowerCase();
+        return fullName.includes(search) || incorp.includes(search);
+    });
 
     return (
         <div className="dashboard-redesign-container">
@@ -381,75 +343,79 @@ const DashboardExamen = () => {
                     student={selectedStudent}
                     examSubjects={details.matieres}
                     typeExamen={typeExamen}
+                    startDate={startDate}
+                    endDate={endDate}
                     onClose={() => setSelectedStudent(null)}
                 />
             )}
 
-            <Link to="/dashboard" className="back-link">&larr; Retour</Link>
+            <div className="top-header-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="header-left">
+                    <Link to="/dashboard" className="back-btn-circle" title="Retour au menu"><i className="fa fa-arrow-left"></i></Link>
+                    <h1>{typeExamen.replace(/_/g, ' ')}</h1>
+                </div>
+                <div className="header-right-filters" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                    <div className="filter-group">
+                        <label style={{ fontSize: '12px', fontWeight: 'bold' }}>Début Période Examen :</label>
+                        <input type="date" className="form-control" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                    </div>
+                    <div className="filter-group">
+                        <label style={{ fontSize: '12px', fontWeight: 'bold' }}>Fin Période Examen :</label>
+                        <input type="date" className="form-control" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                    </div>
+                </div>
+            </div>
 
             <div className="dashboard-redesign-header">
-                <h1>{typeExamen.replace(/_/g, ' ')}</h1>
                 <div className="stats-grid">
-                    <StatCardRedesign title="Participants" value={summary.stats.participants} />
-
-                    {/* --- NOUVELLES CARTES MIN / MAX --- */}
-                    <StatCardRedesign
-                        title="Moyenne Max"
-                        value={maxMoyenneVal}
-                        subValue="Note la plus haute"
-                        onClick={handleMaxClick}
-                        highlight={true}
+                    <StatCardRedesign title="Participants" value={summary.stats.participants} icon="fa-users" />
+                    
+                    <StatCardRedesign title="Moyenne Max" value={maxMoyenneVal} subValue="Note la plus haute" onClick={handleMaxClick} highlight={true} icon="fa-trophy" 
+                        onExportExcel={() => exportDataToExcel("Meilleure_Moyenne", standardColumns, mapMoyenne(studentsWithMax))}
+                        onExportPdf={() => exportDataToPdf("Meilleure_Moyenne", standardColumns, mapMoyenne(studentsWithMax))}
                     />
-
-                    <StatCardRedesign
-                        title="Moyenne Min"
-                        value={minMoyenneVal}
-                        subValue="Note la plus basse"
-                        onClick={handleMinClick}
+                    
+                    <StatCardRedesign title="Moyenne Min" value={minMoyenneVal} subValue="Note la plus basse" onClick={handleMinClick} icon="fa-arrow-down" 
+                        onExportExcel={() => exportDataToExcel("Pire_Moyenne", standardColumns, mapMoyenne(studentsWithMin))}
+                        onExportPdf={() => exportDataToPdf("Pire_Moyenne", standardColumns, mapMoyenne(studentsWithMin))}
                     />
-                    {/* ---------------------------------- */}
-
-                    <StatCardRedesign
-                        title="Moyenne ≥ 12"
-                        value={countSup12}
-                        subValue={`${percentSup12}% des élèves`}
-                        onClick={handleSup12Click}
-                        highlight={true}
+                    
+                    <StatCardRedesign title="Moyenne ≥ 12" value={countSup12} subValue={`${percentSup12}% des élèves`} onClick={handleSup12Click} highlight={true} icon="fa-check-circle" 
+                        onExportExcel={() => exportDataToExcel("Eleves_Admis", standardColumns, mapMoyenne(studentsSup12))}
+                        onExportPdf={() => exportDataToPdf("Eleves_Admis", standardColumns, mapMoyenne(studentsSup12))}
                     />
-
-                    <StatCardRedesign
-                        title="Moyenne < 12"
-                        value={countInf12}
-                        subValue={`${percentInf12}% des élèves`}
-                        onClick={handleInf12Click}
-                        highlight={countInf12 > 0}
+                    
+                    <StatCardRedesign title="Moyenne < 12" value={countInf12} subValue={`${percentInf12}% des élèves`} onClick={handleInf12Click} highlight={countInf12 > 0} icon="fa-exclamation-triangle" 
+                        onExportExcel={() => exportDataToExcel("Eleves_Echec", standardColumns, mapMoyenne(studentsInf12))}
+                        onExportPdf={() => exportDataToPdf("Eleves_Echec", standardColumns, mapMoyenne(studentsInf12))}
                     />
-
-                    <StatCardRedesign
-                        title="Consultations Externes"
-                        value={countConsultations}
-                        isLoading={!isDataReady}
-                        onClick={handleConsultationClick}
-                        highlight={isDataReady && typeof countConsultations === 'number' && countConsultations > 0}
+                    
+                    <StatCardRedesign title="Consultations Externes" value={countConsultations} isLoading={!isDataReady} onClick={handleConsultationClick} highlight={isDataReady && typeof countConsultations === 'number' && countConsultations > 0} icon="fa-medkit" 
+                        onExportExcel={() => exportDataToExcel("Consultations", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'consultationDays', header: 'Jours' }], mapMoyenne(elevesConsultation))}
+                        onExportPdf={() => exportDataToPdf("Consultations", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'consultationDays', header: 'Jours' }], mapMoyenne(elevesConsultation))}
                     />
-
-                    <StatCardRedesign
-                        title="Élèves Sanctionnés"
-                        value={countSanctions}
-                        isLoading={!isDataReady}
-                        onClick={handleSanctionsClick}
-                        highlight={isDataReady && typeof countSanctions === 'number' && countSanctions > 0}
+                    
+                    <StatCardRedesign title="Élèves Sanctionnés" value={countSanctions} isLoading={!isDataReady} onClick={handleSanctionsClick} highlight={isDataReady && typeof countSanctions === 'number' && countSanctions > 0} icon="fa-gavel" 
+                        onExportExcel={() => exportDataToExcel("Sanctions", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'sanctionCount', header: 'Nombre' }], mapMoyenne(elevesSanctionnes))}
+                        onExportPdf={() => exportDataToPdf("Sanctions", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'sanctionCount', header: 'Nombre' }], mapMoyenne(elevesSanctionnes))}
                     />
-
-                    <StatCardRedesign title="Absents" value={summary.stats.absents} onClick={() => showModalWithData('Liste des Absents', [{ key: 'nom', header: 'Nom' }, { key: 'motif', header: 'Motif' }], summary.absents)} />
-                    <StatCardRedesign title="Élèves < 10/20" value={elevesEnDifficulte.length} onClick={() => showModalWithData('Élèves en Difficulté', [{ key: 'nom', header: 'Nom' }, { key: 'moyenne', header: 'Moyenne' }], elevesEnDifficulte)} />
+                    
+                    <StatCardRedesign title="Absents / Indisponibles" value={countIndisponibles} isLoading={!isDataReady} onClick={handleAbsentsClick} icon="fa-user-times" 
+                        onExportExcel={() => exportDataToExcel("Absents_Indisponibles", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }], mapMoyenne(elevesIndisponibles))}
+                        onExportPdf={() => exportDataToPdf("Absents_Indisponibles", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }], mapMoyenne(elevesIndisponibles))}
+                    />
+                    
+                    <StatCardRedesign title="Élèves < 10/20" value={elevesEnDifficulte.length} onClick={handleDifficulteClick} icon="fa-times-circle" 
+                        onExportExcel={() => exportDataToExcel("Eleves_Difficulte", standardColumns, mapMoyenne(elevesEnDifficulte))}
+                        onExportPdf={() => exportDataToPdf("Eleves_Difficulte", standardColumns, mapMoyenne(elevesEnDifficulte))}
+                    />
                 </div>
             </div>
 
             <div className="dashboard-examen-layout">
                 <div className="sidebar-area">
                     <div className="card">
-                        <h3 className="content-title">Matières > 12/20 ({matieresReussite.length})</h3>
+                        <h3 className="content-title"><i className="fa fa-thumbs-up" style={{color:'#28a745'}}></i> Matières ≥ 12/20 ({matieresReussite.length})</h3>
                         <ul className="sidebar-stats-list">
                             {matieresReussite.map(m => (
                                 <SidebarStatItem key={m.nom_matiere} label={m.nom_matiere} value={parseFloat(m.moyenne).toFixed(2)} />
@@ -457,7 +423,7 @@ const DashboardExamen = () => {
                         </ul>
                     </div>
                     <div className="card">
-                        <h3 className="content-title">Matières &lt; 12/20 ({matieresEchec.length})</h3>
+                        <h3 className="content-title"><i className="fa fa-thumbs-down" style={{color:'#dc3545'}}></i> Matières &lt; 12/20 ({matieresEchec.length})</h3>
                         <ul className="sidebar-stats-list">
                             {matieresEchec.map(m => (
                                 <SidebarStatItem key={m.nom_matiere} label={m.nom_matiere} value={parseFloat(m.moyenne).toFixed(2)} />
@@ -473,7 +439,7 @@ const DashboardExamen = () => {
                             <div className="search-bar-container">
                                 <input
                                     type="text"
-                                    placeholder="Rechercher par nom ou incorporation..."
+                                    placeholder="Rechercher par nom ou incorp..."
                                     className="search-input"
                                     value={searchTerm}
                                     onChange={e => setSearchTerm(e.target.value)}
@@ -486,42 +452,40 @@ const DashboardExamen = () => {
                                 <thead>
                                     <tr>
                                         <th>Rang</th>
-                                        <th>Nom</th>
+                                        <th>Nom Complet</th>
                                         <th>Incorporation</th>
                                         <th>Moyenne</th>
-                                        <th style={{ width: '150px' }}>Statut</th>
+                                        <th style={{ width: '150px' }}>Statut Pendant Examen</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {filteredClassement
-                                        .filter(s => s.statut === 'Classé')
-                                        .map(s => (
-                                            <tr key={s.id} onClick={() => setSelectedStudent(s)} className="clickable-row">
-                                                <td>{s.rang}</td>
-                                                <td>{s.prenom} {s.nom}</td>
-                                                <td>{s.numero_incorporation}</td>
-                                                <td>{s.moyenne}</td>
-                                                <td>
-                                                    <div className="badges-container">
-                                                        {s.consultationDays > 0 && (
-                                                            <span className="status-badge consultation-badge" title={`${s.consultationDays} jour(s) de consultation`}>
-                                                                {s.consultationDays} j
-                                                            </span>
-                                                        )}
-                                                        {s.absenceDays > 0 && (
-                                                            <span className="status-badge absence-badge" title={`${s.absenceDays} jour(s) d'absence`}>
-                                                                {s.absenceDays} j
-                                                            </span>
-                                                        )}
-                                                        {s.sanctionCount > 0 && (
-                                                            <span className="status-badge sanction-badge" title={`${s.sanctionCount} sanction(s)`}>
-                                                                {s.sanctionCount} S
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
+                                    {filteredClassement.map(s => (
+                                        <tr key={s.id || s.numero_incorporation || Math.random()} onClick={() => setSelectedStudent(s)} className="clickable-row">
+                                            <td><strong>{s.rang}</strong></td>
+                                            <td>{s.prenom} {s.nom}</td>
+                                            <td>{s.numero_incorporation}</td>
+                                            <td>{s.moyenne}</td>
+                                            <td>
+                                                <div className="badges-container">
+                                                    {s.consultationDays > 0 && (
+                                                        <span className="status-badge consultation-badge" title={`${s.consultationDays} jour(s) de consultation`}>
+                                                            <i className="fa fa-heartbeat"></i> {s.consultationDays} j
+                                                        </span>
+                                                    )}
+                                                    {s.absenceDays > 0 && (
+                                                        <span className="status-badge absence-badge" title={`${s.absenceDays} jour(s) d'absence`}>
+                                                            <i className="fa fa-calendar-times-o"></i> {s.absenceDays} j
+                                                        </span>
+                                                    )}
+                                                    {s.sanctionCount > 0 && (
+                                                        <span className="status-badge sanction-badge" title={`${s.sanctionCount} sanction(s)`}>
+                                                            <i className="fa fa-gavel"></i> {s.sanctionCount} S
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
                                 </tbody>
                             </table>
                         </div>
