@@ -2856,24 +2856,33 @@ app.put('/api/configuration/examens', authenticateToken, checkRole(['admin']), a
 app.get('/api/dashboard/exam-subject-stats/:typeExamen', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const { typeExamen } = req.params;
+        const { promotion } = req.query; // AJOUT
 
-        const query = `
+        let query = `
             SELECT
                 m.nom_matiere,
                 AVG(c.note) as moyenne
             FROM copies c
             JOIN matieres m ON c.matiere_id = m.id
+            JOIN eleves e ON c.eleve_id = e.id
             WHERE c.type_examen = ? AND c.note IS NOT NULL
-            GROUP BY m.id, m.nom_matiere
-            ORDER BY moyenne ASC;
         `;
+        
+        const params = [typeExamen];
 
-        const [stats] = await db.query(query, [typeExamen]);
+        // AJOUT filtre promotion
+        if (promotion && promotion !== 'all') {
+            query += ' AND e.promotion = ?';
+            params.push(promotion);
+        }
+
+        query += ' GROUP BY m.id, m.nom_matiere ORDER BY moyenne ASC';
+
+        const [stats] = await db.query(query, params);
         res.json(stats);
 
     } catch (err) {
-        console.error("Erreur sur /api/dashboard/exam-subject-stats/:typeExamen :", err);
-        res.status(500).json({ error: "Erreur lors de la récupération des statistiques par matière." });
+        res.status(500).json({ error: err.message });
     }
 });
 
