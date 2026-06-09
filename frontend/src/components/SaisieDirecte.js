@@ -130,6 +130,9 @@ const SaisieDirecte = () => {
     const [elevePourAbsence, setElevePourAbsence] = useState(null);
     const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
     const [assignment, setAssignment] = useState(null);
+    //promotion
+    const [promotionsList, setPromotionsList] = useState([]);
+    const [selectedPromotion, setSelectedPromotion] = useState('');
 
     const noteInputRef = useRef(null);
     const rechercheEleveInputRef = useRef(null);
@@ -162,13 +165,15 @@ const SaisieDirecte = () => {
             try {
                 const token = localStorage.getItem('token');
                 const decoded = jwtDecode(token);
-                const [elevesRes, examTypesRes, matieresRes] = await Promise.all([
+              const [elevesRes, examTypesRes, matieresRes, promotionsRes] = await Promise.all([
                     axios.get(apiPaths.eleves.base, getAuthHeaders()),
                     axios.get('/api/examens', getAuthHeaders()),
-                    axios.get('/api/matieres', getAuthHeaders())
+                    axios.get('/api/matieres', getAuthHeaders()),
+                    axios.get('/api/promotions', getAuthHeaders())
                 ]);
                 setAllEleves(elevesRes.data);
                 setExamTypes(examTypesRes.data);
+                setPromotionsList(promotionsRes.data || []); 
                 if (decoded.assigned_matiere_id) {
                     const matiereObj = matieresRes.data.find(m => m.id === decoded.assigned_matiere_id);
                     setAssignment({
@@ -201,17 +206,19 @@ const SaisieDirecte = () => {
     }, [selectedTypeExamen, assignment, getAuthHeaders]);
 
     const escadrons = useMemo(() => {
-        let filtered = allEleves;
-        if (assignment && assignment.promotion) filtered = allEleves.filter(e => e.promotion === assignment.promotion);
-        return [...new Set(filtered.map(e => e.escadron).filter(Boolean))].sort((a, b) => a - b);
-    }, [allEleves, assignment]);
+    let filtered = allEleves;
+    const promo = assignment?.promotion || selectedPromotion;
+    if (promo) filtered = allEleves.filter(e => e.promotion === promo);
+    return [...new Set(filtered.map(e => e.escadron).filter(Boolean))].sort((a, b) => a - b);
+}, [allEleves, assignment, selectedPromotion]);
 
     const pelotons = useMemo(() => {
-        if (!selectedEscadron) return [];
-        let filtered = allEleves.filter(e => e.escadron === selectedEscadron);
-        if (assignment && assignment.promotion) filtered = filtered.filter(e => e.promotion === assignment.promotion);
-        return [...new Set(filtered.map(e => e.peloton).filter(Boolean))].sort((a, b) => a - b);
-    }, [allEleves, selectedEscadron, assignment]);
+    if (!selectedEscadron) return [];
+    const promo = assignment?.promotion || selectedPromotion;
+    let filtered = allEleves.filter(e => e.escadron === selectedEscadron);
+    if (promo) filtered = filtered.filter(e => e.promotion === promo);
+    return [...new Set(filtered.map(e => e.peloton).filter(Boolean))].sort((a, b) => a - b);
+}, [allEleves, selectedEscadron, assignment, selectedPromotion]);
 
     const handleSaveModification = (copieId, nouvelleNote, motif) => {
         axios.put(`/api/resultats/${copieId}`, { nouvelle_note: nouvelleNote, motif }, getAuthHeaders())
@@ -230,7 +237,7 @@ const SaisieDirecte = () => {
             const params = { 
                 matiereId: selectedMatiereId, 
                 typeExamen: selectedTypeExamen, 
-                promotion: assignment?.promotion,
+                promotion: assignment?.promotion|| selectedPromotion,
                 population: assignment?.population,
                 escadron: selectedEscadron,
                 peloton: selectedPeloton,
@@ -274,7 +281,14 @@ const SaisieDirecte = () => {
         const chercher = async () => {
             if (rechercheEleve.trim().length < 2 || (selectedEleve && rechercheEleve.includes(selectedEleve.nom))) { setElevesTrouves([]); return; }
             try {
-                const res = await axios.get(apiPaths.eleves.recherche, { params: { q: rechercheEleve, promotion: assignment?.promotion, population: assignment?.population }, ...getAuthHeaders() });
+                const res = await axios.get(apiPaths.eleves.recherche, { 
+                    params: { 
+                        q: rechercheEleve, 
+                        promotion: assignment?.promotion || selectedPromotion,  // MODIFIÉ
+                        population: assignment?.population 
+                    }, 
+                    ...getAuthHeaders() 
+                });
                 setElevesTrouves(res.data);
             } catch (error) { console.error(error); }
         };
@@ -344,7 +358,11 @@ const SaisieDirecte = () => {
             {isSaisieSerieActive ? (
                 <>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h2>Notation en Série...</h2><button onClick={() => setIsSaisieSerieActive(false)} className="btn btn-secondary"><FaArrowLeft /> Retour</button></div>
-                    <p>Matière: <strong>{assignment?.matiereNom}</strong> | Examen: <strong>{selectedTypeExamen}</strong></p>
+                  <p>
+                        Matière: <strong>{assignment?.matiereNom}</strong> | 
+                        Examen: <strong>{selectedTypeExamen}</strong> | 
+                        Promotion: <strong>{assignment?.promotion || selectedPromotion || 'Toutes'}</strong>
+                    </p>
                     <div className="student-info-card">
                         <h3>{listeElevesSerie[currentIndex].nom} {listeElevesSerie[currentIndex].prenom}</h3>
                         <p>N° Incorp: {listeElevesSerie[currentIndex].numero_incorporation} | <span className={`badge-statut ${listeElevesSerie[currentIndex].statut}`}>{listeElevesSerie[currentIndex].statut || 'Actif'}</span></p>
@@ -374,8 +392,38 @@ const SaisieDirecte = () => {
                         </div>
                     ) : (
                         <>
-                            <div className="form-group"><label>Examen</label><select value={selectedTypeExamen} onChange={e => setSelectedTypeExamen(e.target.value)} disabled={saisiesTemporaires.length > 0}><option value="">-- Choisir --</option>{examTypes.map(ex => <option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>)}</select></div>
-                            <div className="form-group"><label>Matière</label><select value={selectedMatiereId} onChange={e => setSelectedMatiereId(e.target.value)} disabled={!selectedTypeExamen || isMatiereLoading}><option value="">-- Choisir --</option>{availableMatieres.map(m => <option key={m.id} value={m.id}>{m.nom_matiere}</option>)}</select></div>
+                            {/* AJOUT SELECT PROMOTION */}
+                            <div className="form-group">
+                                <label>Promotion</label>
+                                <select 
+                                    value={selectedPromotion} 
+                                    onChange={e => { 
+                                        setSelectedPromotion(e.target.value); 
+                                        setSelectedEscadron(''); 
+                                        setSelectedPeloton('all'); 
+                                    }}
+                                    disabled={saisiesTemporaires.length > 0}
+                                >
+                                    <option value="">-- Toutes les promotions --</option>
+                                    {promotionsList.map(p => <option key={p} value={p}>{p}</option>)}
+                                </select>
+                            </div>
+
+                            <div className="form-group">
+                                <label>Examen</label>
+                                <select value={selectedTypeExamen} onChange={e => setSelectedTypeExamen(e.target.value)} disabled={saisiesTemporaires.length > 0}>
+                                    <option value="">-- Choisir --</option>
+                                    {examTypes.map(ex => <option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>)}
+                                </select>
+                            </div>
+
+                            <div className="form-group">
+                                <label>Matière</label>
+                                <select value={selectedMatiereId} onChange={e => setSelectedMatiereId(e.target.value)} disabled={!selectedTypeExamen || isMatiereLoading}>
+                                    <option value="">-- Choisir --</option>
+                                    {availableMatieres.map(m => <option key={m.id} value={m.id}>{m.nom_matiere}</option>)}
+                                </select>
+                            </div>
                         </>
                     )}
                     {mode === 'serie' ? renderModeSerie() : (

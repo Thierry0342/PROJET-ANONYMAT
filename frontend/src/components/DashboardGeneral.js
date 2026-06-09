@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate ,useLocation } from 'react-router-dom';
 import axios from 'axios';
 import DashboardModal from './DashboardModal';
 import StudentDetailsModal from './StudentDetailsModal';
@@ -91,6 +91,10 @@ const generatePdfHeader = (doc, titleOverride = null) => {
 
 const DashboardGeneral = () => {
     const navigate = useNavigate();
+    const location = useLocation();
+    const selectedPromotion = location.state?.promotion || 'all';
+    const rawPopulation = location.state?.population || 'all';
+    const selectedPopulation = rawPopulation === 'total' ? 'actif' : rawPopulation;
     const [generalData, setGeneralData] = useState(null);
     const [detailedRanking, setDetailedRanking] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -117,11 +121,11 @@ const DashboardGeneral = () => {
                 setLoading(true);
                 const token = localStorage.getItem('token');
                 const headers = { Authorization: `Bearer ${token}` };
-                const [summaryRes, rankingRes, decisionsRes] = await Promise.all([
-                    axios.get('/api/dashboard/general-summary', { headers }),
-                    axios.get('/api/resultats/classement-details?typeExamen=General', { headers }),
-                    axios.get('/api/decisions-conseil', { headers })
-                ]);
+               const [summaryRes, rankingRes, decisionsRes] = await Promise.all([
+                axios.get(`/api/dashboard/general-summary?promotion=${selectedPromotion}&population=${selectedPopulation}`, { headers }),
+                axios.get(`/api/resultats/classement-details?typeExamen=General&promotion=${selectedPromotion}&population=${selectedPopulation}`, { headers }),
+                axios.get('/api/decisions-conseil', { headers })
+            ]);
 
                 setGeneralData(summaryRes.data);
                 const normalizedRanking = (rankingRes.data.classement || []).map(normalizeStudentData);
@@ -134,52 +138,96 @@ const DashboardGeneral = () => {
             }
         };
         fetchData();
-    }, []);
+   }, [selectedPromotion, selectedPopulation]);
 
-    useEffect(() => {
-        if (!detailedRanking || detailedRanking.length === 0 || isDataReady) return;
+  useEffect(() => {
+    if (!detailedRanking || detailedRanking.length === 0 || isDataReady) return;
 
-        const fetchExtra = async () => {
-            try {
-                let enriched = [];
-                let motifsCount = {};
-                let allSanctions = [];
+    let isMounted = true;
 
-                try {
-                    const sancRes = await axios.get('http://192.168.241.169:4000/api/sanctions');
-                    allSanctions = sancRes.data || [];
-                } catch(e) {}
+    const fetchExtra = async () => {
+        const incorporations = detailedRanking.map(s => String(s.numero_incorporation));
 
-                for (let i = 0; i < detailedRanking.length; i++) {
-                    const s = detailedRanking[i];
-                    try {
-                        const [cRes, aRes] = await Promise.allSettled([
-                            axios.get(`http://192.168.241.169:4000/api/consultation/incorp/${s.numero_incorporation}`),
-                            axios.get(`http://192.168.241.169:4000/api/absence/incorp/${s.numero_incorporation}`)
-                        ]);
-                        const cData = cRes.status === 'fulfilled' ? cRes.value.data : [];
-                        const aData = aRes.status === 'fulfilled' ? aRes.value.data : [];
+        try {
+            // 3 requêtes parallèles au lieu de N*2
+            const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
+                axios.get('http://192.168.241.169:4000/api/sanctions',
+                    { timeout: 5000 }
+                ),
+                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
+                    { incorporations, cour: selectedPromotion },
+                    { timeout: 5000 }
+                ),
+                axios.post('http://192.168.241.169:4000/api/absence/bulk',
+                    { incorporations, cour: selectedPromotion },
+                    { timeout: 5000 }
+                )
+            ]);
 
-                        cData.forEach(c => { if(c.service) motifsCount[c.service] = (motifsCount[c.service] || 0) + 1; });
-                        aData.forEach(a => { if(a.motif) motifsCount[a.motif] = (motifsCount[a.motif] || 0) + 1; });
+            const allSanctions     = sancRes.status    === 'fulfilled' ? sancRes.value.data    : [];
+            const allConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
+            const allAbsences      = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
 
-                        const studentSanc = allSanctions.filter(sa => sa.Eleve && String(sa.Eleve.numeroIncorporation) === String(s.numero_incorporation));
-                        enriched.push({ ...s, consultationDays: cData.length, sanctionCount: studentSanc.length, totalARDays: studentSanc.length });
-                    } catch(err) {
-                        enriched.push({ ...s, consultationDays: 0, sanctionCount: 0, totalARDays: 0 });
-                    }
-                    setLoadingProgress(Math.round(((i + 1) / detailedRanking.length) * 100));
-                }
+            // Grouper consultations par incorporation
+            const consultationsMap = {};
+            allConsultations.forEach(c => {
+                const incorp = String(c.Eleve?.numeroIncorporation || '');
+                if (!consultationsMap[incorp]) consultationsMap[incorp] = [];
+                consultationsMap[incorp].push(c);
+            });
+
+            // Grouper absences par incorporation
+            const absencesMap = {};
+            allAbsences.forEach(a => {
+                const incorp = String(a.Eleve?.numeroIncorporation || '');
+                if (!absencesMap[incorp]) absencesMap[incorp] = [];
+                absencesMap[incorp].push(a);
+            });
+
+            // Calcul des motifs
+            const motifsCount = {};
+            allConsultations.forEach(c => {
+                if (c.service) motifsCount[c.service] = (motifsCount[c.service] || 0) + 1;
+            });
+            allAbsences.forEach(a => {
+                if (a.motif) motifsCount[a.motif] = (motifsCount[a.motif] || 0) + 1;
+            });
+
+            const enriched = detailedRanking.map(s => {
+                const incorp = String(s.numero_incorporation || '').trim();
+
+                const cData = consultationsMap[incorp] || [];
+                const aData = absencesMap[incorp]      || [];
+
+                const studentSanc = allSanctions.filter(sa =>
+                    sa.Eleve && String(sa.Eleve.numeroIncorporation).trim() === incorp
+                );
+
+                return {
+                    ...s,
+                    consultationDays: cData.length,
+                    sanctionCount:    studentSanc.length,
+                    totalARDays:      studentSanc.length
+                };
+            });
+
+            if (isMounted) {
                 setMotifStats(Object.keys(motifsCount).map(k => ({ motif: k, count: motifsCount[k] })));
                 setClassementWithDetails(enriched);
                 setIsDataReady(true);
-            } catch (e) {
+                setLoadingProgress(100);
+            }
+        } catch (e) {
+            if (isMounted) {
                 setClassementWithDetails(detailedRanking);
                 setIsDataReady(true);
             }
-        };
-        fetchExtra();
-    }, [detailedRanking, isDataReady]);
+        }
+    };
+
+    fetchExtra();
+    return () => { isMounted = false; };
+}, [detailedRanking, isDataReady, selectedPromotion]);
 
     const handleExportPDF = () => {
         const doc = new jsPDF();
@@ -256,6 +304,15 @@ const DashboardGeneral = () => {
                 <div className="header-left">
                     <Link to="/dashboard" className="back-btn-circle" title="Retour"><i className="fa fa-arrow-left"></i></Link>
                     <h1>Synthèse Générale</h1>
+                    {selectedPromotion !== 'all' && (
+                        <span style={{
+                            background: '#3182ce', color: 'white',
+                            padding: '4px 12px', borderRadius: '20px',
+                            fontSize: '0.85rem', fontWeight: 'bold'
+                        }}>
+                            Promotion : {selectedPromotion}
+                        </span>
+                    )}
                 </div>
                 <div className="export-buttons">
                     <button onClick={() => navigate('/conseil-formation')} className="btn-export" style={{ backgroundColor: '#6c757d' }}><i className="fa fa-gavel"></i> Conseil Formation</button>

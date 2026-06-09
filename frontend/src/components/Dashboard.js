@@ -260,67 +260,98 @@ const Dashboard = () => {
         }
     }, [selectedPromotion, selectedPopulation, isSelectionComplete]);
 
-    useEffect(() => {
-        if (!isSelectionComplete || !detailedRanking || detailedRanking.length === 0) {
-            setClassementWithDetails([]);
-            setIsDataReady(true);
-            return;
-        }
+   useEffect(() => {
+    if (!isSelectionComplete || !detailedRanking || detailedRanking.length === 0) {
+        setClassementWithDetails([]);
+        setIsDataReady(true);
+        return;
+    }
 
-        const fetchEnrichedData = async () => {
-            const rawStudents = detailedRanking;
-            const BATCH_SIZE = 5;
-            let enriched = [];
+    let isMounted = true;
 
-            try {
-                const sancRes = await axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }).catch(() => ({ data: [] }));
-                const allSanctions = sancRes.data || [];
+    const fetchEnrichedData = async () => {
+        const rawStudents = detailedRanking;
+        const incorporations = rawStudents.map(s => String(s.numero_incorporation));
 
-                for (let i = 0; i < rawStudents.length; i += BATCH_SIZE) {
-                    const batch = rawStudents.slice(i, i + BATCH_SIZE);
-                    const batchPromises = batch.map(async (st) => {
-                        try {
-                            const [cRes, aRes] = await Promise.allSettled([
-                                axios.get(`http://192.168.241.169:4000/api/consultation/incorp/${st.numero_incorporation}`, { timeout: 3000 }),
-                                axios.get(`http://192.168.241.169:4000/api/absence/incorp/${st.numero_incorporation}`, { timeout: 3000 })
-                            ]);
+        try {
+            // 3 requêtes parallèles au lieu de N*2 requêtes séquentielles
+            const [sancRes, absenceRes, consultRes] = await Promise.allSettled([
+                axios.get(
+                    'http://192.168.241.169:4000/api/sanctions',
+                    { timeout: 5000 }
+                ),
+                axios.post(
+                    'http://192.168.241.169:4000/api/absence/bulk',
+                    { incorporations, cour: selectedPromotion },
+                    { timeout: 5000 }
+                ),
+                axios.post(
+                    'http://192.168.241.169:4000/api/consultation/bulk',
+                    { incorporations, cour: selectedPromotion },
+                    { timeout: 5000 }
+                )
+            ]);
 
-                            const consults = cRes.status === 'fulfilled' ? cRes.value.data : [];
-                            const absences = aRes.status === 'fulfilled' ? aRes.value.data : [];
-                            const health = calculateCombinedHealthStats(consults, absences);
+            const allSanctions     = sancRes.status     === 'fulfilled' ? sancRes.value.data     : [];
+            const allAbsences      = absenceRes.status  === 'fulfilled' ? absenceRes.value.data  : [];
+            const allConsultations = consultRes.status  === 'fulfilled' ? consultRes.value.data  : [];
 
-                            const stSanc = allSanctions.filter(s => s.Eleve && String(s.Eleve.numeroIncorporation) === String(st.numero_incorporation));
-                            const arDays = stSanc.reduce((sum, s) => {
-                                const taux = (s.taux || '').toUpperCase();
-                                if (taux.includes('AR')) return sum + (parseInt(taux) || 0);
-                                return sum;
-                            }, 0);
+            // Grouper absences par incorporation
+            const absencesMap = {};
+            allAbsences.forEach(a => {
+                const incorp = String(a.Eleve?.numeroIncorporation || '');
+                if (!absencesMap[incorp]) absencesMap[incorp] = [];
+                absencesMap[incorp].push(a);
+            });
 
-                            return {
-                                ...st,
-                                consultationDays: health.total,
-                                consultationMax: health.maxContinuous,
-                                sanctionCount: stSanc.length,
-                                totalARDays: arDays,
-                                healthDetails: health.details
-                            };
-                        } catch (err) { return st; }
-                    });
+            // Grouper consultations par incorporation
+            const consultationsMap = {};
+            allConsultations.forEach(c => {
+                const incorp = String(c.Eleve?.numeroIncorporation || '');
+                if (!consultationsMap[incorp]) consultationsMap[incorp] = [];
+                consultationsMap[incorp].push(c);
+            });
 
-                    const resBatch = await Promise.all(batchPromises);
-                    enriched = [...enriched, ...resBatch];
-                    await new Promise(r => setTimeout(r, 40));
-                }
+            // Fusion des données
+            const enriched = rawStudents.map(st => {
+                const incorp   = String(st.numero_incorporation);
+                const consults = consultationsMap[incorp] || [];
+                const absences = absencesMap[incorp]      || [];
+                const health   = calculateCombinedHealthStats(consults, absences);
+
+                const stSanc = allSanctions.filter(s =>
+                    s.Eleve && String(s.Eleve.numeroIncorporation) === incorp
+                );
+                const arDays = stSanc.reduce((sum, s) => {
+                    const taux = (s.taux || '').toUpperCase();
+                    return taux.includes('AR') ? sum + (parseInt(taux) || 0) : sum;
+                }, 0);
+
+                return {
+                    ...st,
+                    consultationDays: health.total,
+                    consultationMax:  health.maxContinuous,
+                    sanctionCount:    stSanc.length,
+                    totalARDays:      arDays,
+                    healthDetails:    health.details
+                };
+            });
+
+            if (isMounted) {
                 setClassementWithDetails(enriched);
                 setIsDataReady(true);
-            } catch (err) {
+            }
+        } catch (err) {
+            if (isMounted) {
                 setClassementWithDetails(rawStudents);
                 setIsDataReady(true);
             }
-        };
+        }
+    };
 
-        fetchEnrichedData();
-    }, [detailedRanking, isSelectionComplete]);
+    fetchEnrichedData();
+    return () => { isMounted = false; };
+}, [detailedRanking, isSelectionComplete, selectedPromotion]);
 
     const handleShowEvolutionDetail = useCallback((student) => {
         const columns = [
@@ -770,7 +801,14 @@ const Dashboard = () => {
                                         </div>
                                     </div>
                                     <div className="card-bottom">
-                                        <Link to={`/dashboard/${exam.typeExamen}`} className="btn-explore">Analyser</Link>
+                                       
+                                        <Link 
+                                                 to={`/dashboard/${exam.typeExamen}`} 
+                                                 state={{ promotion: selectedPromotion, population: selectedPopulation }}
+                                                    className="btn-explore"
+                                                >
+                                                  Analyser
+                                        </Link>
                                     </div>
                                 </div>
                             ))}
@@ -840,8 +878,13 @@ const Dashboard = () => {
                                             <label>Statut Conseil :</label>
                                             <select
                                                 value={filterTypeConseil}
-                                                onChange={(e) => setFilterTypeConseil(e.target.value)}
-                                                className="filter-select-mini"
+                                                // Quand la promotion change
+                                                    onChange={(e) => { 
+                                                        setSelectedPromotion(e.target.value); 
+                                                        setSelectedPopulation('all');
+                                                        localStorage.setItem('selectedPromotion', e.target.value);
+                                                    }}
+                                                        className="filter-select-mini"
                                             >
                                                 <option value="all">Tous les statuts</option>
                                                 <option value="redoublant">Redoublants</option>
@@ -968,7 +1011,13 @@ const Dashboard = () => {
                                     )}
                                 </div>
                                 <div className="panel-footer-btn">
-                                    <Link to="/dashboard/general" className="btn-full-view">Accéder au Dashboard Détaillé</Link>
+                                  <Link 
+                                        to="/dashboard/general" 
+                                        state={{ promotion: selectedPromotion, population: selectedPopulation }}
+                                        className="btn-full-view"
+                                    >
+                                        Accéder au Dashboard Détaillé
+                                    </Link>
                                 </div>
                             </div>
                         )}

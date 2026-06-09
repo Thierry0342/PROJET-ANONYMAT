@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link,useLocation  } from 'react-router-dom';
 import axios from 'axios';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -83,6 +83,7 @@ const exportDataToPdf = (title, columns, data) => {
 
 const DashboardExamen = () => {
     const { typeExamen } = useParams();
+    const location = useLocation();
 
     const [summary, setSummary] = useState(null);
     const [details, setDetails] = useState(null);
@@ -102,8 +103,14 @@ const DashboardExamen = () => {
 
     const [classementWithRawDetails, setClassementWithRawDetails] = useState([]);
     const [isDataReady, setIsDataReady] = useState(false);
+     // Récupérer la promotion passée depuis Dashboard
+    const selectedPromotion = location.state?.promotion 
+    || localStorage.getItem('selectedPromotion') 
+    || 'all';
+    const selectedPopulation = location.state?.population || 'actif';
 
     useEffect(() => {
+
         if (!typeExamen) return;
 
         setClassementWithRawDetails([]);
@@ -114,10 +121,10 @@ const DashboardExamen = () => {
             try {
                 const token = localStorage.getItem('token');
                 const headers = { Authorization: `Bearer ${token}` };
-                const [summaryRes, detailsRes, subjectsRes, configRes] = await Promise.all([
-                    axios.get('/api/dashboard/summary-by-exam-type', { headers }),
-                    axios.get(`/api/resultats/classement-details?typeExamen=${typeExamen}`, { headers }),
-                    axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}`, { headers }),
+               const [summaryRes, detailsRes, subjectsRes, configRes] = await Promise.all([
+                    axios.get(`/api/dashboard/summary-by-exam-type?promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
+                    axios.get(`/api/resultats/classement-details?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
+                   axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}?promotion=${selectedPromotion}`, { headers }) ,
                     axios.get('/api/configuration/examens', { headers })
                 ]);
 
@@ -148,63 +155,88 @@ const DashboardExamen = () => {
         };
         fetchData();
     }, [typeExamen]);
+    const apiPopulation = selectedPopulation === 'total' ? 'actif' : selectedPopulation;
 
-    useEffect(() => {
-        if (!details || details.classement.length === 0) return;
-        if (isDataReady) return;
+useEffect(() => {
+    if (!details || details.classement.length === 0) return;
+    if (isDataReady) return;
 
-        const fetchAllExtraData = async () => {
-            const rawStudents = details.classement;
-            const BATCH_SIZE = 5;
-            let allEnrichedStudents = [];
+    let isMounted = true;
 
-            try {
-                let allSanctions = [];
-                try {
-                    const sanctionsResponse = await axios.get('http://192.168.241.169:4000/api/sanctions');
-                    allSanctions = sanctionsResponse.data || [];
-                } catch (e) { console.error("Erreur chargement sanctions globales", e); }
+    const fetchAllExtraData = async () => {
+        const rawStudents = details.classement;
+        const incorporations = rawStudents.map(s => String(s.numero_incorporation));
 
-                for (let i = 0; i < rawStudents.length; i += BATCH_SIZE) {
-                    const batch = rawStudents.slice(i, i + BATCH_SIZE);
+        try {
+            // 3 requêtes parallèles au lieu de N*2
+            const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
+                axios.get('http://192.168.241.169:4000/api/sanctions', 
+                    { timeout: 5000 }
+                ),
+                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
+                    { incorporations, cour: selectedPromotion },
+                    { timeout: 5000 }
+                ),
+                axios.post('http://192.168.241.169:4000/api/absence/bulk',
+                    { incorporations, cour: selectedPromotion },
+                    { timeout: 5000 }
+                )
+            ]);
 
-                    const batchPromises = batch.map(async (student) => {
-                        try {
-                            const [consultRes, absenceRes] = await Promise.allSettled([
-                                axios.get(`http://192.168.241.169:4000/api/consultation/incorp/${student.numero_incorporation}`),
-                                axios.get(`http://192.168.241.169:4000/api/absence/eleve/${student.id}`)
-                            ]);
+            const allSanctions     = sancRes.status    === 'fulfilled' ? sancRes.value.data    : [];
+            const allConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
+            const allAbsences      = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
 
-                            const rawConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
-                            const rawAbsences = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
+            // Grouper consultations par incorporation
+            const consultationsMap = {};
+            allConsultations.forEach(c => {
+                const incorp = String(c.Eleve?.numeroIncorporation || '');
+                if (!consultationsMap[incorp]) consultationsMap[incorp] = [];
+                consultationsMap[incorp].push(c);
+            });
 
-                            const studentIncorp = String(student.numero_incorporation || '').trim();
-                            const sanctionsForStudent = allSanctions.filter(s =>
-                                s.Eleve && String(s.Eleve.numeroIncorporation).trim() === studentIncorp
-                            );
-                            const sanctionCount = sanctionsForStudent.length;
+            // Grouper absences par incorporation
+            const absencesMap = {};
+            allAbsences.forEach(a => {
+                const incorp = String(a.Eleve?.numeroIncorporation || '');
+                if (!absencesMap[incorp]) absencesMap[incorp] = [];
+                absencesMap[incorp].push(a);
+            });
 
-                            return { ...student, rawConsultations, rawAbsences, sanctionCount };
-                        } catch (innerErr) {
-                            return { ...student, rawConsultations: [], rawAbsences: [], sanctionCount: 0 };
-                        }
-                    });
+            const allEnrichedStudents = rawStudents.map(student => {
+                const incorp = String(student.numero_incorporation || '').trim();
 
-                    const batchResults = await Promise.all(batchPromises);
-                    allEnrichedStudents = [...allEnrichedStudents, ...batchResults];
-                }
+                const rawConsultations = consultationsMap[incorp] || [];
+                const rawAbsences      = absencesMap[incorp]      || [];
 
+                const sanctionsForStudent = allSanctions.filter(s =>
+                    s.Eleve && String(s.Eleve.numeroIncorporation).trim() === incorp
+                );
+
+                return {
+                    ...student,
+                    rawConsultations,
+                    rawAbsences,
+                    sanctionCount: sanctionsForStudent.length
+                };
+            });
+
+            if (isMounted) {
                 setClassementWithRawDetails(allEnrichedStudents);
                 setIsDataReady(true);
-            } catch (err) {
-                console.error("Erreur batch load", err);
+            }
+        } catch (err) {
+            console.error("Erreur bulk load", err);
+            if (isMounted) {
                 setClassementWithRawDetails(rawStudents);
                 setIsDataReady(true);
             }
-        };
+        }
+    };
 
-        fetchAllExtraData();
-    }, [details, isDataReady]);
+    fetchAllExtraData();
+    return () => { isMounted = false; };
+}, [details, isDataReady, selectedPromotion]);
 
     const sourceDataDynamique = useMemo(() => {
         if (!isDataReady) return details ? details.classement : [];
@@ -352,7 +384,13 @@ const DashboardExamen = () => {
             <div className="top-header-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div className="header-left">
                     <Link to="/dashboard" className="back-btn-circle" title="Retour au menu"><i className="fa fa-arrow-left"></i></Link>
+                    
                     <h1>{typeExamen.replace(/_/g, ' ')}</h1>
+                    {selectedPromotion !== 'all' && (
+                    <span className="promotion-badge">
+                    Promotion : {selectedPromotion}
+                    </span>
+                     )}
                 </div>
                 <div className="header-right-filters" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                     <div className="filter-group">
