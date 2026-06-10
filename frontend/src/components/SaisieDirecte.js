@@ -159,40 +159,48 @@ const SaisieDirecte = () => {
         }
     };
 
-    useEffect(() => {
-        const fetchData = async () => {
-            setIsLoading(true);
-            try {
-                const token = localStorage.getItem('token');
-                const decoded = jwtDecode(token);
-              const [elevesRes, examTypesRes, matieresRes, promotionsRes] = await Promise.all([
-                    axios.get(apiPaths.eleves.base, getAuthHeaders()),
-                    axios.get('/api/examens', getAuthHeaders()),
-                    axios.get('/api/matieres', getAuthHeaders()),
-                    axios.get('/api/promotions', getAuthHeaders())
-                ]);
-                setAllEleves(elevesRes.data);
-                setExamTypes(examTypesRes.data);
-                setPromotionsList(promotionsRes.data || []); 
-                if (decoded.assigned_matiere_id) {
-                    const matiereObj = matieresRes.data.find(m => m.id === decoded.assigned_matiere_id);
-                    setAssignment({
-                        matiereNom: matiereObj ? matiereObj.nom_matiere : 'Inconnue',
-                        examen: decoded.assigned_type_examen,
-                        promotion: decoded.assigned_promotion,
-                        population: decoded.assigned_population || 'all'
-                    });
-                    setSelectedMatiereId(decoded.assigned_matiere_id);
-                    setSelectedTypeExamen(decoded.assigned_type_examen);
-                } else if (examTypesRes.data.length > 0) {
-                    setSelectedTypeExamen(examTypesRes.data[0].nom_modele);
-                }
-            } catch (err) { setError("Erreur de chargement."); }
-            setIsLoading(false);
-        };
-        fetchData();
-    }, [getAuthHeaders]);
+   useEffect(() => {
+    const fetchData = async () => {
+        setIsLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            const decoded = jwtDecode(token);
+            const [elevesRes, examTypesRes, matieresRes, promotionsRes] = await Promise.all([
+                axios.get(apiPaths.eleves.base, getAuthHeaders()),
+                axios.get('/api/examens', getAuthHeaders()),
+                axios.get('/api/matieres', getAuthHeaders()),
+                axios.get('/api/promotions', getAuthHeaders())
+            ]);
+            setAllEleves(elevesRes.data);
+            setExamTypes(examTypesRes.data);
+            
+            const list = promotionsRes.data || [];
+            setPromotionsList(list);
 
+            // ✅ Sélectionner automatiquement la dernière promotion
+            if (list.length > 0 && !assignment) {
+                const derniere = list[0]; // "80E" par exemple
+                setSelectedPromotion(derniere);
+            }
+
+            if (decoded.assigned_matiere_id) {
+                const matiereObj = matieresRes.data.find(m => m.id === decoded.assigned_matiere_id);
+                setAssignment({
+                    matiereNom: matiereObj ? matiereObj.nom_matiere : 'Inconnue',
+                    examen: decoded.assigned_type_examen,
+                    promotion: decoded.assigned_promotion,
+                    population: decoded.assigned_population || 'all'
+                });
+                setSelectedMatiereId(decoded.assigned_matiere_id);
+                setSelectedTypeExamen(decoded.assigned_type_examen);
+            } else if (examTypesRes.data.length > 0) {
+                setSelectedTypeExamen(examTypesRes.data[0].nom_modele);
+            }
+        } catch (err) { setError("Erreur de chargement."); }
+        setIsLoading(false);
+    };
+    fetchData();
+}, [getAuthHeaders]);
     useEffect(() => {
         const fetchMatieres = async () => {
             if (!selectedTypeExamen || assignment) return;

@@ -3,7 +3,7 @@ import axios from 'axios';
 import './StudentDetailsModal.css';
 
 const DEFAULT_AVATAR_URL = "https://www.w3schools.com/w3images/avatar_hat.jpg";
-const FALLBACK_COUR_ID = 79;
+
 
 const formatOrdinal = (n) => {
     if (!n) return '';
@@ -157,7 +157,8 @@ const ProfileInfoItem = ({ label, value, icon }) => (
     </div>
 );
 
-const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, endDate, onClose }) => {
+const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, endDate, selectedPromotion, onClose }) => {
+
     const [absences, setAbsences] = useState([]);
     const [processedAbsences, setProcessedAbsences] = useState([]);
     const [consultations, setConsultations] = useState([]);
@@ -170,46 +171,81 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
     const [generalResults, setGeneralResults] = useState([]);
     const [loadingGeneral, setLoadingGeneral] = useState(false);
 
-    useEffect(() => {
-        if (!student) return;
-        const currentIncorp = String(student.numero_incorporation || student.numeroIncorporation || '').trim();
-        const fetchExternalData = async () => {
-            setLoading(true);
-            setError('');
-            setStudentDetails(student);
-            try {
-                const [consultRes, absenceRes, detailsRes, sanctionsRes] = await Promise.allSettled([
-                    axios.get(`http://192.168.241.169:4000/api/consultation/incorp/${currentIncorp}`),
-                    axios.get(`http://192.168.241.169:4000/api/absence/incorp/${currentIncorp}`),
-                    axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${currentIncorp}?cour=${FALLBACK_COUR_ID}`),
-                    axios.get(`http://192.168.241.169:4000/api/sanctions`)
-                ]);
-                if (consultRes.status === 'fulfilled' && consultRes.value.data) {
-                    setConsultations(Array.isArray(consultRes.value.data) ? consultRes.value.data : []);
-                }
-                if (absenceRes.status === 'fulfilled' && absenceRes.value.data) {
-                    setAbsences(Array.isArray(absenceRes.value.data) ? absenceRes.value.data : []);
-                }
-                if (sanctionsRes.status === 'fulfilled' && sanctionsRes.value.data) {
-                    const allSanctions = Array.isArray(sanctionsRes.value.data) ? sanctionsRes.value.data : [];
-                    const studentSanctions = allSanctions.filter(s => s.Eleve && String(s.Eleve.numeroIncorporation).trim() === currentIncorp);
-                    setSanctions(studentSanctions);
-                }
-                if (detailsRes.status === 'fulfilled' && detailsRes.value.data?.eleve) {
-                    const eleveInfo = detailsRes.value.data.eleve;
-                    setStudentDetails(eleveInfo);
-                    if (eleveInfo.image) {
-                        setPhotoUrl(`http://192.168.241.169:4000${eleveInfo.image}`);
-                    }
-                }
-            } catch (err) {
-                setError('Impossible de charger les détails complets.');
-            } finally {
-                setLoading(false);
+   useEffect(() => {
+    if (!student) return;
+    const currentIncorp = String(student.numero_incorporation || student.numeroIncorporation || '').trim();
+    const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
+    const fetchExternalData = async () => {
+        setLoading(true);
+        setError('');
+        setStudentDetails(student);
+        try {
+            const [sancRes, consultRes, absenceRes, detailsRes] = await Promise.allSettled([
+                // Sanctions : même appel global que DashboardExamen, filtrage côté client
+                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
+
+                // Consultation bulk avec cour/promotion — même principe que DashboardExamen
+                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
+                    { incorporations: [currentIncorp], cour: courNormalise  },
+                    { timeout: 5000 }
+                ),
+
+                // Absence bulk avec cour/promotion — même principe que DashboardExamen
+                axios.post('http://192.168.241.169:4000/api/absence/bulk',
+                    { incorporations: [currentIncorp], cour: courNormalise  },
+                    { timeout: 5000 }
+                ),
+
+                // Détails élève — inchangé
+                axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${currentIncorp}?cour=${courNormalise}`)
+            ]);
+
+            // Sanctions — filtrage par incorporation (identique à DashboardExamen)
+            if (sancRes.status === 'fulfilled' && sancRes.value.data) {
+                const allSanctions = Array.isArray(sancRes.value.data) ? sancRes.value.data : [];
+                const studentSanctions = allSanctions.filter(s =>
+                    s.Eleve && String(s.Eleve.numeroIncorporation).trim() === currentIncorp
+                );
+                setSanctions(studentSanctions);
             }
-        };
-        fetchExternalData();
-    }, [student]);
+
+            // Consultations — extraire depuis la réponse bulk (tableau filtré pour cet élève)
+            if (consultRes.status === 'fulfilled' && consultRes.value.data) {
+                const allConsult = Array.isArray(consultRes.value.data) ? consultRes.value.data : [];
+                // Le bulk renvoie toutes les consultations des incorporations demandées,
+                // on filtre pour s'assurer d'avoir uniquement cet élève
+                const studentConsult = allConsult.filter(c =>
+                    String(c.Eleve?.numeroIncorporation || '').trim() === currentIncorp
+                );
+                setConsultations(studentConsult);
+            }
+
+            // Absences — même logique
+            if (absenceRes.status === 'fulfilled' && absenceRes.value.data) {
+                const allAbsences = Array.isArray(absenceRes.value.data) ? absenceRes.value.data : [];
+                const studentAbsences = allAbsences.filter(a =>
+                    String(a.Eleve?.numeroIncorporation || '').trim() === currentIncorp
+                );
+                setAbsences(studentAbsences);
+            }
+
+            // Détails élève — inchangé
+            if (detailsRes.status === 'fulfilled' && detailsRes.value.data?.eleve) {
+                const eleveInfo = detailsRes.value.data.eleve;
+                setStudentDetails(eleveInfo);
+                if (eleveInfo.image) {
+                    setPhotoUrl(`http://192.168.241.169:4000${eleveInfo.image}`);
+                }
+            }
+        } catch (err) {
+            setError('Impossible de charger les détails complets.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    fetchExternalData();
+}, [student, selectedPromotion]);
 
     useEffect(() => {
         if (student) {

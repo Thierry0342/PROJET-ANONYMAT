@@ -147,19 +147,17 @@ const DashboardGeneral = () => {
 
     const fetchExtra = async () => {
         const incorporations = detailedRanking.map(s => String(s.numero_incorporation));
-
+        const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
         try {
             // 3 requêtes parallèles au lieu de N*2
-            const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
-                axios.get('http://192.168.241.169:4000/api/sanctions',
-                    { timeout: 5000 }
-                ),
+           const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
+                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
                 axios.post('http://192.168.241.169:4000/api/consultation/bulk',
-                    { incorporations, cour: selectedPromotion },
+                    { incorporations, cour: courNormalise }, 
                     { timeout: 5000 }
                 ),
                 axios.post('http://192.168.241.169:4000/api/absence/bulk',
-                    { incorporations, cour: selectedPromotion },
+                    { incorporations, cour: courNormalise }, 
                     { timeout: 5000 }
                 )
             ]);
@@ -298,7 +296,7 @@ const DashboardGeneral = () => {
     return (
         <div className="dashboard-redesign-container">
             {modalData && <DashboardModal title={modalTitle} data={modalData} columns={modalColumns} onClose={() => setModalData(null)} onExport={handleExportModalPDF} />}
-            {selectedStudent && <StudentDetailsModal student={selectedStudent} typeExamen="General" onClose={() => setSelectedStudent(null)} />}
+            {selectedStudent && <StudentDetailsModal student={selectedStudent} typeExamen="General" selectedPromotion={selectedPromotion} onClose={() => setSelectedStudent(null)} />}
 
             <div className="top-header-section">
                 <div className="header-left">

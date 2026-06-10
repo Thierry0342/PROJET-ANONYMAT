@@ -165,24 +165,22 @@ useEffect(() => {
 
     const fetchAllExtraData = async () => {
         const rawStudents = details.classement;
+        const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
         const incorporations = rawStudents.map(s => String(s.numero_incorporation));
 
         try {
             // 3 requêtes parallèles au lieu de N*2
-            const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
-                axios.get('http://192.168.241.169:4000/api/sanctions', 
-                    { timeout: 5000 }
-                ),
+           const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
+                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
                 axios.post('http://192.168.241.169:4000/api/consultation/bulk',
-                    { incorporations, cour: selectedPromotion },
+                    { incorporations, cour: courNormalise }, 
                     { timeout: 5000 }
                 ),
                 axios.post('http://192.168.241.169:4000/api/absence/bulk',
-                    { incorporations, cour: selectedPromotion },
+                    { incorporations, cour: courNormalise }, 
                     { timeout: 5000 }
                 )
             ]);
-
             const allSanctions     = sancRes.status    === 'fulfilled' ? sancRes.value.data    : [];
             const allConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
             const allAbsences      = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
@@ -377,6 +375,7 @@ useEffect(() => {
                     typeExamen={typeExamen}
                     startDate={startDate}
                     endDate={endDate}
+                    selectedPromotion={selectedPromotion}
                     onClose={() => setSelectedStudent(null)}
                 />
             )}

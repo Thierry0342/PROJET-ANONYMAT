@@ -153,20 +153,29 @@ const Dashboard = () => {
 
     const isSelectionComplete = selectedPromotion !== 'all' && selectedPopulation !== 'all';
 
-    useEffect(() => {
-        const fetchPromotions = async () => {
-            try {
-                const token = localStorage.getItem('token');
-                const res = await axios.get('/api/promotions', {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                setPromotionsList(res.data || []);
-            } catch (e) {
-                setError('Impossible de charger les promotions.');
+   useEffect(() => {
+    const fetchPromotions = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.get('/api/promotions', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const list = res.data || [];
+            setPromotionsList(list);
+
+            // ✅ Sélectionner automatiquement la promotion la plus récente
+            if (list.length > 0) {
+                const derniere = list[0]; // ou list[0] selon l'ordre retourné
+                setSelectedPromotion(derniere);
+                setSelectedPopulation('total');
+                localStorage.setItem('selectedPromotion', derniere);
             }
-        };
-        fetchPromotions();
-    }, []);
+        } catch (e) {
+            setError('Impossible de charger les promotions.');
+        }
+    };
+    fetchPromotions();
+}, []);
 
     useEffect(() => {
         if (!isSelectionComplete) return;
@@ -210,6 +219,7 @@ const Dashboard = () => {
     useEffect(() => {
         if (isSelectionComplete && selectedPopulation === 'conseil') {
             const fetchEvolution = async () => {
+                const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
                 try {
                     const token = localStorage.getItem('token');
                     const headers = { Authorization: `Bearer ${token}` };
@@ -228,7 +238,7 @@ const Dashboard = () => {
                         const batch = rawData.slice(i, i + BATCH_SIZE);
                         const batchPromises = batch.map(async (st) => {
                             try {
-                                const detailRes = await axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${st.numero_incorporation}?cour=79`, { timeout: 3000 });
+                                const detailRes = await axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${st.numero_incorporation}?cour=${courNormalise}`, { timeout: 3000 });
                                 const eleveInfo = detailRes.data?.eleve;
 
                                 const decisionMatch = decisionsList.find(d => String(d.eleve_id) === String(st.id) || String(d.numero_incorporation) === String(st.numero_incorporation));
@@ -272,22 +282,19 @@ const Dashboard = () => {
     const fetchEnrichedData = async () => {
         const rawStudents = detailedRanking;
         const incorporations = rawStudents.map(s => String(s.numero_incorporation));
+        const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
+
 
         try {
             // 3 requêtes parallèles au lieu de N*2 requêtes séquentielles
-            const [sancRes, absenceRes, consultRes] = await Promise.allSettled([
-                axios.get(
-                    'http://192.168.241.169:4000/api/sanctions',
+          const [sancRes, absenceRes, consultRes] = await Promise.allSettled([
+                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
+                axios.post('http://192.168.241.169:4000/api/absence/bulk',
+                    { incorporations, cour: courNormalise }, // ✅
                     { timeout: 5000 }
                 ),
-                axios.post(
-                    'http://192.168.241.169:4000/api/absence/bulk',
-                    { incorporations, cour: selectedPromotion },
-                    { timeout: 5000 }
-                ),
-                axios.post(
-                    'http://192.168.241.169:4000/api/consultation/bulk',
-                    { incorporations, cour: selectedPromotion },
+                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
+                    { incorporations, cour: courNormalise }, // ✅
                     { timeout: 5000 }
                 )
             ]);
@@ -943,7 +950,7 @@ const Dashboard = () => {
                                         const list = filteredSourceData.filter(s => parseFloat(s.moyenne) >= 12).map(s => ({
                                             ...s,
                                             fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
-                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setModalData(null); setSelectedStudent(s); }}>Dossier</button>)
                                         }));
                                         showModal('Admis (Moy ≥ 12)', [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
                                     }}>
@@ -956,7 +963,7 @@ const Dashboard = () => {
                                         const list = filteredSourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 12).map(s => ({
                                             ...s,
                                             fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
-                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setModalData(null); setSelectedStudent(s); }}>Dossier</button>)
                                         }));
                                         showModal('Inférieur à 12 (Moy < 12)', [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
                                     }}>
@@ -969,7 +976,7 @@ const Dashboard = () => {
                                         const list = filteredSourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < parseFloat(ajournementThreshold)).map(s => ({
                                             ...s,
                                             fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
-                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                            actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation();  setModalData(null);setSelectedStudent(s); }}>Dossier</button>)
                                         }));
                                         showModal(`Simulation Ajournement (< ${ajournementThreshold})`, [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
                                     }}>
@@ -1000,7 +1007,7 @@ const Dashboard = () => {
                                             const list = filteredSourceData.filter(s => (s.consultationMax >= 45 || s.consultationDays >= 60) || (s.moyenne && s.moyenne < 8) || s.totalARDays >= 20).map(s => ({
                                                 ...s,
                                                 fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
-                                                actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setSelectedStudent(s); }}>Dossier</button>)
+                                                actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setModalData(null); setSelectedStudent(s); }}>Dossier</button>)
                                             }));
                                             showModal('Alerte Redoublement (Critères cumulés)', [{key:'fullName', header:'Nom & Prénom'}, {key:'actionBtn', header:'Action'}], list);
                                         }}>
@@ -1030,6 +1037,7 @@ const Dashboard = () => {
                     student={selectedStudent}
                     typeExamen="General"
                     examSubjects={[]}
+                     selectedPromotion={selectedPromotion}
                     onClose={() => setSelectedStudent(null)}
                 />
             )}
