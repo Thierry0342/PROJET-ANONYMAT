@@ -22,9 +22,18 @@ const GestionAbsences = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [listeAbsences, setListeAbsences] = useState([]);
     const [editingAbsence, setEditingAbsence] = useState(null);
+    const [promotionsList, setPromotionsList] = useState([]);
+    const [selectedPromotion, setSelectedPromotion] = useState('');
+    const [filtrePromotion, setFiltrePromotion] = useState('');
 
     useEffect(() => {
         // Charger les matières
+        axios.get('/api/promotions')
+    .then(res => {
+        setPromotionsList(res.data);
+        if (res.data.length > 0) setSelectedPromotion(res.data[0]);
+    })
+    .catch(err => console.error('Erreur chargement promotions', err));
         axios.get(apiPaths.matieres.base)
             .then(res => setMatieres(res.data))
             .catch(err => setError('Erreur lors du chargement des matières.'));
@@ -57,7 +66,7 @@ const GestionAbsences = () => {
         setSearchTerm(value);
         if (value.length > 2) {
             try {
-                const res = await axios.get(`${apiPaths.eleves.recherche}?q=${value}`);
+                const res = await axios.get(`${apiPaths.eleves.recherche}?q=${value}&promotion=${selectedPromotion}`);
                 setSearchResults(res.data);
             } catch (err) { console.error("Erreur de recherche d'élève:", err); }
         } else {
@@ -151,6 +160,7 @@ const GestionAbsences = () => {
     const handleOpenModal = () => {
         clearMessages();
         fetchAbsences();
+        setFiltrePromotion('');
         setIsModalOpen(true);
     };
 
@@ -185,6 +195,26 @@ const GestionAbsences = () => {
 
             {error && <div className="alert alert-danger">{error}</div>}
             {success && <div className="alert alert-success">{success}</div>}
+            <div className="form-section">
+                <h3>Promotion</h3>
+                <div className="form-group">
+                    <select
+                        className="form-control"
+                        value={selectedPromotion}
+                        onChange={(e) => {
+                            setSelectedPromotion(e.target.value);
+                            setSelectedEleve(null);
+                            setSearchTerm('');
+                            setSearchResults([]);
+                        }}
+                    >
+                        <option value="">-- Toutes les promotions --</option>
+                        {promotionsList.map(p => (
+                            <option key={p} value={p}>{p}</option>
+                        ))}
+                    </select>
+                </div>
+            </div>
 
             <div className="form-section">
                 <h3>Étape 1 : Chercher et sélectionner l'élève</h3>
@@ -264,11 +294,31 @@ const GestionAbsences = () => {
                             <button className="close-button" onClick={() => setIsModalOpen(false)}><FaTimes /></button>
                         </div>
                         <div className="modal-body">
+                            <div className="form-group mb-3"> 
+                                 <select
+                                    className="form-control"
+                                    value={filtrePromotion}
+                                    onChange={(e) => setFiltrePromotion(e.target.value)}
+                                >
+                                    <option value="">-- Toutes les promotions --</option>
+                                    {promotionsList.map(p => (
+                                        <option key={p} value={p}>{p}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            
+                            
+                            
                             {loading ? <p>Chargement...</p> : (
                                 <table className="table table-bordered">
                                     <thead><tr><th>N° Incorp.</th><th>Nom & Prénom</th><th>Détails (Type : Matière)</th><th>Motif</th><th>Actions</th></tr></thead>
                                     <tbody>
-                                        {listeAbsences.length > 0 ? listeAbsences.map(absence => (
+                                       {listeAbsences
+                                        .filter(absence => !filtrePromotion || absence.eleve.promotion === filtrePromotion)
+                                        .length > 0 
+                                        ? listeAbsences
+                                            .filter(absence => !filtrePromotion || absence.eleve.promotion === filtrePromotion)
+                                            .map(absence => (
                                             <tr key={absence.eleve.id}>
                                                 <td>{absence.eleve.numero_incorporation}</td>
                                                 <td>{`${absence.eleve.nom} ${absence.eleve.prenom}`}</td>
@@ -288,12 +338,13 @@ const GestionAbsences = () => {
                                                 </td>
                                             </tr>
                                         )) : (
-                                            <tr><td colSpan="5" className="text-center">Aucune absence enregistrée.</td></tr>
+                                            <tr><td colSpan="5" className="text-center">Aucune absence pour cette promotion.</td></tr>
                                         )}
                                     </tbody>
                                 </table>
                             )}
                         </div>
+                        
                     </div>
                 </div>
             )}

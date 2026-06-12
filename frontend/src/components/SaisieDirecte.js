@@ -70,11 +70,15 @@ const ValidationModal = ({ isOpen, onClose, saisies, onValider, onVider, onSuppr
                 <div className="modal-body">
                     <div className="table-responsive">
                         <table className="results-table">
-                            <thead><tr><th>Élève</th><th>Note / Motif</th><th>Action</th></tr></thead>
+                            <thead><tr><th>N° Incorp</th><th>Élève</th><th>Esc</th><th>Pon</th><th>Sexe</th><th>Note / Motif</th><th>Action</th></tr></thead>
                             <tbody>
                                 {saisies.map((saisie) => (
                                     <tr key={saisie.temp_id} className={saisie.type === 'absence' ? 'absence-row' : ''}>
+                                       <td>{saisie.numero_incorporation || '-'}</td>
                                         <td>{saisie.eleve_nom}</td>
+                                        <td>{saisie.escadron || '-'}</td>
+                                        <td>{saisie.peloton || '-'}</td>
+                                        <td>{saisie.sexe === 'feminin' ? 'F' : saisie.sexe === 'masculin' ? 'M' : '-'}</td>
                                         <td onClick={() => handleStartEditing(saisie)}>
                                             {editingId === saisie.temp_id ? (
                                                 <input ref={editInputRef} type="number" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onBlur={handleSaveEdit} onKeyDown={(e) => e.key === 'Enter' && handleSaveEdit()} min="0" max="20" step="0.01" style={{ width: '80px', textAlign: 'center' }} />
@@ -255,11 +259,25 @@ const SaisieDirecte = () => {
             if (response.data.length === 0) {
                 setMessage("Aucun élève trouvé.");
                 setListeElevesSerie([]);
-            } else {
-                setListeElevesSerie(response.data);
-                setCurrentIndex(0);
-                setIsSaisieSerieActive(true);
-            }
+           } else {
+    const sorted = [...response.data].sort((a, b) => {
+        // 1. Tri par peloton d'abord
+        const pelotonA = parseInt(a.peloton) || 0;
+        const pelotonB = parseInt(b.peloton) || 0;
+        if (pelotonA !== pelotonB) return pelotonA - pelotonB;
+
+        // 2. Ensuite féminin avant masculin
+        const sexeOrder = (s) => (s === 'feminin') ? 0 : 1;
+        const diff = sexeOrder(a.sexe) - sexeOrder(b.sexe);
+        if (diff !== 0) return diff;
+
+        // 3. Enfin par nom alphabétique
+        return (a.nom || '').localeCompare(b.nom || '', 'fr', { sensitivity: 'base' });
+    });
+    setListeElevesSerie(sorted);
+    setCurrentIndex(0);
+    setIsSaisieSerieActive(true);
+}
         } catch (err) { setError("Erreur."); }
         setIsLoading(false);
     };
@@ -269,7 +287,19 @@ const SaisieDirecte = () => {
         const noteNum = parseFloat(note);
         if (note === '' || isNaN(noteNum) || noteNum < 0 || noteNum > 20) { setError("Note invalide."); return; }
         const currentEleve = listeElevesSerie[currentIndex];
-        const nouvelleSaisie = { type: 'note', eleve_id: currentEleve.id, eleve_nom: `${currentEleve.nom} ${currentEleve.prenom}`, matiere_id: selectedMatiereId, note: note, type_examen: selectedTypeExamen, temp_id: `${Date.now()}-${currentEleve.id}` };
+       const nouvelleSaisie = {
+            type: 'note',
+            eleve_id: currentEleve.id,
+            eleve_nom: `${currentEleve.nom} ${currentEleve.prenom}`,
+            numero_incorporation: currentEleve.numero_incorporation,
+            escadron: currentEleve.escadron,
+            peloton: currentEleve.peloton,
+            sexe: currentEleve.sexe,
+            matiere_id: selectedMatiereId,
+            note: note,
+            type_examen: selectedTypeExamen,
+            temp_id: `${Date.now()}-${currentEleve.id}`
+        };
         setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
         setNote('');
         if (currentIndex < listeElevesSerie.length - 1) { setCurrentIndex(prev => prev + 1); }
@@ -278,8 +308,19 @@ const SaisieDirecte = () => {
 
     const handleConfirmAbsence = (motif) => {
         const eleve = listeElevesSerie[currentIndex];
-        const nouvelleSaisie = { type: 'absence', eleve_id: eleve.id, eleve_nom: `${eleve.nom} ${eleve.prenom}`, matiere_id: selectedMatiereId, motif: motif || 'Non spécifié', type_examen: selectedTypeExamen, temp_id: `${Date.now()}-${eleve.id}` };
-        setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
+        const nouvelleSaisie = {
+            type: 'absence',
+            eleve_id: eleve.id,
+            eleve_nom: `${eleve.nom} ${eleve.prenom}`,
+            numero_incorporation: eleve.numero_incorporation,
+            escadron: eleve.escadron,
+            peloton: eleve.peloton,
+            sexe: eleve.sexe,
+            matiere_id: selectedMatiereId,
+            motif: motif || 'Non spécifié',
+            type_examen: selectedTypeExamen,
+            temp_id: `${Date.now()}-${eleve.id}`
+        };
         setIsAbsenceModalOpen(false);
         if (currentIndex < listeElevesSerie.length - 1) { setCurrentIndex(prev => prev + 1); }
         else { setIsSaisieSerieActive(false); setIsValidationModalOpen(true); }
@@ -308,7 +349,19 @@ const SaisieDirecte = () => {
         e.preventDefault();
         const noteNum = parseFloat(note);
         if (!selectedEleve || isNaN(noteNum)) return;
-        const nouvelleSaisie = { type: 'note', eleve_id: selectedEleve.id, eleve_nom: `${selectedEleve.nom} ${selectedEleve.prenom}`, matiere_id: selectedMatiereId, note: note, type_examen: selectedTypeExamen, temp_id: `${Date.now()}-${selectedEleve.id}` };
+        const nouvelleSaisie = {
+        type: 'note',
+        eleve_id: selectedEleve.id,
+        eleve_nom: `${selectedEleve.nom} ${selectedEleve.prenom}`,
+        numero_incorporation: selectedEleve.numero_incorporation,
+        escadron: selectedEleve.escadron,
+        peloton: selectedEleve.peloton,
+        sexe: selectedEleve.sexe,
+        matiere_id: selectedMatiereId,
+        note: note,
+        type_examen: selectedTypeExamen,
+        temp_id: `${Date.now()}-${selectedEleve.id}`
+};
         setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
         setNote(''); setSelectedEleve(null); setRechercheEleve(''); rechercheEleveInputRef.current?.focus();
     };
