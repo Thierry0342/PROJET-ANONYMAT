@@ -1490,7 +1490,7 @@ app.get('/api/eleves-par-groupe', authenticateToken, checkRole(['admin','operate
         }
 
         const query = `
-            SELECT e.id, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton, e.statut
+           SELECT e.id, e.nom, e.prenom, e.numero_incorporation, e.sexe, e.escadron, e.peloton, e.statut
             FROM eleves e
             LEFT JOIN copies c ON e.id = c.eleve_id AND c.matiere_id = ? AND c.type_examen = ?
             LEFT JOIN absences a ON e.id = a.eleve_id AND a.matiere_id = ?
@@ -2885,6 +2885,7 @@ app.get('/api/dashboard/exam-subject-stats/:typeExamen', authenticateToken, chec
         res.status(500).json({ error: err.message });
     }
 });
+
 
 app.get('/api/dashboard-details/general/matieres-reussite', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
