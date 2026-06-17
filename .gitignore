@@ -1,23 +1,24 @@
-# Ignorer le dossier node_modules
-node_modules/
+# Ignorer le dossier node_modules partout dans le projet
+**/node_modules/
 
-# Ignorer les fichiers .env
-.env
+# Ignorer tous les fichiers .env partout
+**/.env
 
-# Ignorer les fichiers systèmes (optionnel, mais utile sur macOS/Linux)
+# Ignorer les fichiers systèmes
 .DS_Store
 Thumbs.db
 
 # Ignorer les fichiers de logs
 *.log
 
-# Ignorer les fichiers de sortie (ex : build, dist)
-dist/
-build/
+# Ignorer les fichiers de sortie (dans le frontend ou le backend)
+**/dist/
+**/build/
 
-# Ignorer les fichiers de configuration IDE (si tu utilises un IDE comme VSCode)
+# Ignorer les fichiers de configuration IDE et extensions
 .vscode/
 .idea/
+.qodo/
 
 # Ignorer les fichiers temporaires
 *.tmp
