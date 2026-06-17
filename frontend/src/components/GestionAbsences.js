@@ -145,17 +145,18 @@ const GestionAbsences = () => {
         }
     };
 
-    const fetchAbsences = async () => {
-        setLoading(true);
-        try {
-            const res = await axios.get('/api/absences');
-            setListeAbsences(res.data);
-        } catch (err) {
-            setError("Impossible de charger la liste des absences.");
-        } finally {
-            setLoading(false);
-        }
-    };
+const fetchAbsences = async (promotion = '') => {
+    setLoading(true);
+    try {
+        const params = promotion ? `?promotion=${promotion}` : '';
+        const res = await axios.get(`/api/absences${params}`);
+        setListeAbsences(res.data);
+    } catch (err) {
+        setError("Impossible de charger la liste des absences.");
+    } finally {
+        setLoading(false);
+    }
+};
 
     const handleOpenModal = () => {
         clearMessages();
@@ -203,6 +204,8 @@ const GestionAbsences = () => {
                         value={selectedPromotion}
                         onChange={(e) => {
                             setSelectedPromotion(e.target.value);
+                            setFiltrePromotion(e.target.value);
+                            fetchAbsences(e.target.value);
                             setSelectedEleve(null);
                             setSearchTerm('');
                             setSearchResults([]);
@@ -298,7 +301,10 @@ const GestionAbsences = () => {
                                  <select
                                     className="form-control"
                                     value={filtrePromotion}
-                                    onChange={(e) => setFiltrePromotion(e.target.value)}
+                                   onChange={(e) => {
+                                        setFiltrePromotion(e.target.value);
+                                        fetchAbsences(e.target.value); 
+                                    }}
                                 >
                                     <option value="">-- Toutes les promotions --</option>
                                     {promotionsList.map(p => (
@@ -312,19 +318,14 @@ const GestionAbsences = () => {
                             {loading ? <p>Chargement...</p> : (
                                 <table className="table table-bordered">
                                     <thead><tr><th>N° Incorp.</th><th>Nom & Prénom</th><th>Détails (Type : Matière)</th><th>Motif</th><th>Actions</th></tr></thead>
-                                    <tbody>
-                                       {listeAbsences
-                                        .filter(absence => !filtrePromotion || absence.eleve.promotion === filtrePromotion)
-                                        .length > 0 
-                                        ? listeAbsences
-                                            .filter(absence => !filtrePromotion || absence.eleve.promotion === filtrePromotion)
-                                            .map(absence => (
+                                  <tbody>
+                                    {listeAbsences.length > 0 
+                                        ? listeAbsences.map(absence => (
                                             <tr key={absence.eleve.id}>
                                                 <td>{absence.eleve.numero_incorporation}</td>
                                                 <td>{`${absence.eleve.nom} ${absence.eleve.prenom}`}</td>
                                                 <td>
                                                     <ul className="matieres-tags">
-                                                        {/* Affichage modifié pour montrer le type */}
                                                         {absence.details && absence.details.map((d, i) => (
                                                             <li key={i}>
                                                                 <strong>{d.type_examen}</strong> : {d.nom_matiere}
@@ -334,13 +335,19 @@ const GestionAbsences = () => {
                                                 </td>
                                                 <td>{absence.motif || <span className="text-muted">Aucun</span>}</td>
                                                 <td className="actions-cell">
-                                                    <button className="btn btn-danger btn-sm" onClick={() => handleDeleteFromList(absence.eleve.id)} title="Supprimer toutes les absences de cet élève"><FaTrash /></button>
+                                                    <button 
+                                                        className="btn btn-danger btn-sm" 
+                                                        onClick={() => handleDeleteFromList(absence.eleve.id)}
+                                                    >
+                                                        <FaTrash />
+                                                    </button>
                                                 </td>
                                             </tr>
                                         )) : (
                                             <tr><td colSpan="5" className="text-center">Aucune absence pour cette promotion.</td></tr>
-                                        )}
-                                    </tbody>
+                                        )
+                                    }
+                                </tbody>
                                 </table>
                             )}
                         </div>
