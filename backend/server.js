@@ -1315,45 +1315,58 @@ app.post('/api/absences/bulk', authenticateToken, checkRole(['admin']), async (r
     }
 });
 
-app.get('/api/absences', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/absences', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    const { promotion } = req.query;
+      
+
     try {
-        const query = `
-            SELECT
-                a.eleve_id, a.matiere_id, a.motif, a.type_examen,
-                e.nom, e.prenom, e.numero_incorporation,
-                m.nom_matiere
+        let sql = `
+            SELECT 
+                e.id, e.nom, e.prenom, e.numero_incorporation, e.promotion,
+                a.motif, a.type_examen,
+                m.id AS matiere_id, m.nom_matiere
             FROM absences a
             JOIN eleves e ON a.eleve_id = e.id
             JOIN matieres m ON a.matiere_id = m.id
-            ORDER BY e.nom, e.prenom;
         `;
-        const [rows] = await db.query(query);
 
-        const absencesGroupees = rows.reduce((acc, row) => {
-            if (!acc[row.eleve_id]) {
-                acc[row.eleve_id] = {
+        const params = [];
+        if (promotion) {
+            sql += ` WHERE e.promotion = ?`;
+            params.push(promotion);
+        }
+
+        sql += ` ORDER BY e.nom, e.prenom`;
+
+        const [rows] = await db.query(sql, params);
+
+        const grouped = {};
+        for (const row of rows) {
+            if (!grouped[row.id]) {
+                grouped[row.id] = {
                     eleve: {
-                        id: row.eleve_id,
+                        id: row.id,
                         nom: row.nom,
                         prenom: row.prenom,
-                        numero_incorporation: row.numero_incorporation
+                        numero_incorporation: row.numero_incorporation,
+                        promotion: row.promotion
                     },
-                    details: [], 
-                    motif: row.motif
+                    motif: row.motif,
+                    details: []
                 };
             }
-            acc[row.eleve_id].details.push({
+            grouped[row.id].details.push({
                 matiere_id: row.matiere_id,
                 nom_matiere: row.nom_matiere,
                 type_examen: row.type_examen
             });
-            return acc;
-        }, {});
+        }
 
-        res.json(Object.values(absencesGroupees));
+        res.json(Object.values(grouped));
 
     } catch (err) {
-        res.status(500).json({ message: "Erreur interne lors de la récupération des absences." });
+        console.error("Erreur GET /api/absences", err);
+        res.status(500).json({ message: "Erreur serveur." });
     }
 });
 
@@ -2736,66 +2749,7 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
     }
 });
 
-app.post('/api/absences/direct-bulk', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
-    const { absences } = req.body;
-    const utilisateurId = req.user.id;
 
-    if (!Array.isArray(absences) || absences.length === 0) {
-        return res.status(400).json({ message: "Aucune absence à enregistrer." });
-    }
-
-    const connection = await db.getConnection();
-    try {
-        await connection.beginTransaction();
-
-        const valuesToInsert = [];
-        const conflicts = []; 
-
-        for (const abs of absences) {
-            if (!abs.eleve_id || !abs.matiere_id) {
-                throw new Error("Données d'absence incomplètes. Opération annulée.");
-            }
-
-            if (abs.type_examen) {
-                const [existingCopy] = await connection.query(
-                    "SELECT note FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
-                    [abs.eleve_id, abs.matiere_id, abs.type_examen]
-                );
-
-                if (existingCopy.length > 0) {
-                    conflicts.push(abs.eleve_nom || `ID ${abs.eleve_id}`);
-                    continue; 
-                }
-            }
-
-            valuesToInsert.push([abs.eleve_id, abs.matiere_id, utilisateurId, abs.motif || null, abs.type_examen || null]);
-        }
-
-        let insertedCount = 0;
-        if (valuesToInsert.length > 0) {
-            const sql = "INSERT IGNORE INTO absences (eleve_id, matiere_id, enregistre_par_utilisateur_id, motif, type_examen) VALUES ?";
-            const [result] = await connection.query(sql, [valuesToInsert]);
-            insertedCount = result.affectedRows;
-        }
-
-        await connection.commit();
-
-        let message = `${insertedCount} absence(s) validée(s).`;
-
-        if (conflicts.length > 0) {
-            message += ` Attention : ${conflicts.length} absence(s) ignorée(s) car une note existe déjà pour : ${conflicts.join(', ')}.`;
-        }
-
-        res.status(201).json({ message: message });
-
-    } catch (err) {
-        await connection.rollback();
-        console.error("Erreur sur /api/absences/direct-bulk", err);
-        res.status(409).json({ message: err.message || "Erreur lors de l'enregistrement." });
-    } finally {
-        connection.release();
-    }
-});
 
 app.get('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
