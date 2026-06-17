@@ -20,7 +20,7 @@ const formatPrenom = (prenom) => {
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(' ');
 };
-
+//test
 const formatStatutLabel = (statut) => {
     if (!statut) return 'N/A';
     switch (statut.toLowerCase()) {
@@ -1017,13 +1017,13 @@ const Dashboard = () => {
                                         </div>
                                     )}
                                 </div>
-                                <div className="panel-footer-btn">
+                                <div className="panel-footer-btn"> 
                                   <Link 
                                         to="/dashboard/general" 
                                         state={{ promotion: selectedPromotion, population: selectedPopulation }}
                                         className="btn-full-view"
                                     >
-                                        Accéder au Dashboard Détaillé
+                                        Accéder au Dashboard Détaillé 
                                     </Link>
                                 </div>
                             </div>
