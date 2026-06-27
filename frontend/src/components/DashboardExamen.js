@@ -8,6 +8,7 @@ import * as xlsx from 'xlsx';
 import DashboardModal from './DashboardModal';
 import StudentDetailsModal from './StudentDetailsModal';
 import './DashboardRedesign.css';
+import { EXTERNAL_API_BASE_URL } from '../config/apiConfig';
 
 const normalizeStudentData = (s) => {
     if (!s) return s;
@@ -84,33 +85,41 @@ const exportDataToPdf = (title, columns, data) => {
 const DashboardExamen = () => {
     const { typeExamen } = useParams();
     const location = useLocation();
+    const [elevesIncomplets, setElevesIncomplets] = useState([]);
+    const [searchIncomplets, setSearchIncomplets] = useState('');
+
+    // ✅ DÉPLACEZ CES LIGNES ICI - AVANT les useEffect
+    const selectedPromotion = location.state?.promotion 
+        || localStorage.getItem('selectedPromotion') 
+        || 'all';
+    const selectedPopulation = location.state?.population || 'actif';
+    const apiPopulation = selectedPopulation === 'total' ? 'actif' : selectedPopulation; // ✅ ICI
 
     const [summary, setSummary] = useState(null);
     const [details, setDetails] = useState(null);
     const [subjectStats, setSubjectStats] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
-
     const [modalData, setModalData] = useState(null);
     const [modalTitle, setModalTitle] = useState('');
     const [modalColumns, setModalColumns] = useState([]);
     const [isModalLoading, setIsModalLoading] = useState(false);
     const [selectedStudent, setSelectedStudent] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
-
     const [classementWithRawDetails, setClassementWithRawDetails] = useState([]);
     const [isDataReady, setIsDataReady] = useState(false);
-     // Récupérer la promotion passée depuis Dashboard
-    const selectedPromotion = location.state?.promotion 
-    || localStorage.getItem('selectedPromotion') 
-    || 'all';
-    const selectedPopulation = location.state?.population || 'actif';
-
+const getFilteredIncomplets = (term) => {
+    return elevesIncomplets.filter(s => {
+        const search = term.toLowerCase();
+        const nomComplet = `${s.prenom} ${s.nom}`.toLowerCase();
+        const incorp = String(s.numero_incorporation || '').toLowerCase();
+        return nomComplet.includes(search) || incorp.includes(search);
+    });
+};
+    
     useEffect(() => {
-
         if (!typeExamen) return;
 
         setClassementWithRawDetails([]);
@@ -121,12 +130,15 @@ const DashboardExamen = () => {
             try {
                 const token = localStorage.getItem('token');
                 const headers = { Authorization: `Bearer ${token}` };
-               const [summaryRes, detailsRes, subjectsRes, configRes] = await Promise.all([
+                
+                const [summaryRes, detailsRes, subjectsRes, configRes,incompletRes] = await Promise.all([
                     axios.get(`/api/dashboard/summary-by-exam-type?promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
                     axios.get(`/api/resultats/classement-details?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
-                   axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}?promotion=${selectedPromotion}`, { headers }) ,
-                    axios.get('/api/configuration/examens', { headers })
+                    axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}?promotion=${selectedPromotion}`, { headers }),
+                    axios.get('/api/configuration/examens', { headers }),
+                    axios.get(`/api/resultats/sans-note-complete?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers })
                 ]);
+                setElevesIncomplets(incompletRes.data || []);
 
                 const examConfig = configRes.data.find(c => c.nom_modele === typeExamen);
                 if (examConfig) {
@@ -134,16 +146,29 @@ const DashboardExamen = () => {
                     if (examConfig.date_fin) setEndDate(examConfig.date_fin.split('T')[0]);
                 }
 
+               
                 const examSummary = summaryRes.data.find(e => e.typeExamen === typeExamen);
-
-                if (examSummary && detailsRes.data && subjectsRes.data) {
-                    setSummary(examSummary);
+            
+                if (detailsRes.data) {
+                   
+                    setSummary(examSummary || { 
+                        typeExamen, 
+                        stats: { 
+                            totalEleves: 0, 
+                            participants: 0, 
+                            complets: 0, 
+                            incomplets: 0, 
+                            moyenne: '0.00', 
+                            min: '0.00', 
+                            max: '0.00' 
+                        } 
+                    });
                     const normalizedClassement = (detailsRes.data.classement || []).map(normalizeStudentData);
                     setDetails({
                         ...detailsRes.data,
                         classement: normalizedClassement
                     });
-                    setSubjectStats(subjectsRes.data);
+                    setSubjectStats(subjectsRes.data || []);
                 } else {
                     setError(`Aucune donnée pour l'examen : ${typeExamen.replace(/_/g, ' ')}`);
                 }
@@ -153,9 +178,12 @@ const DashboardExamen = () => {
                 setLoading(false);
             }
         };
+
         fetchData();
-    }, [typeExamen]);
-    const apiPopulation = selectedPopulation === 'total' ? 'actif' : selectedPopulation;
+    }, [typeExamen, apiPopulation, selectedPromotion]);
+
+    
+   
 
 useEffect(() => {
     if (!details || details.classement.length === 0) return;
@@ -164,103 +192,119 @@ useEffect(() => {
     let isMounted = true;
 
     const fetchAllExtraData = async () => {
-        const rawStudents = details.classement;
-        const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
-        const incorporations = rawStudents.map(s => String(s.numero_incorporation));
+    const rawStudents = details.classement;
+    const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
+    const incorporations = rawStudents.map(s => String(s.numero_incorporation));
 
-        try {
-            // 3 requêtes parallèles au lieu de N*2
-           const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
-                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
-                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
-                    { incorporations, cour: courNormalise }, 
-                    { timeout: 5000 }
-                ),
-                axios.post('http://192.168.241.169:4000/api/absence/bulk',
-                    { incorporations, cour: courNormalise }, 
-                    { timeout: 5000 }
-                )
-            ]);
-            const allSanctions     = sancRes.status    === 'fulfilled' ? sancRes.value.data    : [];
-            const allConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
-            const allAbsences      = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
+    try {
+        // ✅ REMPLACEZ sancRes - GET → POST /bulk
+        const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
+            axios.post(`${EXTERNAL_API_BASE_URL}/api/sanctions/bulk`,
+                { incorporations, cour: courNormalise },
+                { timeout: 5000 }
+            ),
+            axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
+                { incorporations, cour: courNormalise },
+                { timeout: 5000 }
+            ),
+            axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+                { incorporations, cour: courNormalise },
+                { timeout: 5000 }
+            )
+        ]);
 
-            // Grouper consultations par incorporation
-            const consultationsMap = {};
-            allConsultations.forEach(c => {
-                const incorp = String(c.Eleve?.numeroIncorporation || '');
-                if (!consultationsMap[incorp]) consultationsMap[incorp] = [];
-                consultationsMap[incorp].push(c);
-            });
+        const allSanctions     = sancRes.status    === 'fulfilled' ? sancRes.value.data    : [];
+        const allConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
+        const allAbsences      = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
 
-            // Grouper absences par incorporation
-            const absencesMap = {};
-            allAbsences.forEach(a => {
-                const incorp = String(a.Eleve?.numeroIncorporation || '');
-                if (!absencesMap[incorp]) absencesMap[incorp] = [];
-                absencesMap[incorp].push(a);
-            });
+        // Grouper consultations par incorporation
+        const consultationsMap = {};
+        allConsultations.forEach(c => {
+            const incorp = String(c.Eleve?.numeroIncorporation || '');
+            if (!consultationsMap[incorp]) consultationsMap[incorp] = [];
+            consultationsMap[incorp].push(c);
+        });
 
-            const allEnrichedStudents = rawStudents.map(student => {
-                const incorp = String(student.numero_incorporation || '').trim();
+        // Grouper absences par incorporation
+        const absencesMap = {};
+        allAbsences.forEach(a => {
+            const incorp = String(a.Eleve?.numeroIncorporation || '');
+            if (!absencesMap[incorp]) absencesMap[incorp] = [];
+            absencesMap[incorp].push(a);
+        });
 
-                const rawConsultations = consultationsMap[incorp] || [];
-                const rawAbsences      = absencesMap[incorp]      || [];
+        // ✅ NOUVEAU - Grouper sanctions par incorporation (depuis bulk)
+        const sanctionsMap = {};
+        allSanctions.forEach(s => {
+            const incorp = String(s.Eleve?.numeroIncorporation || '');
+            if (!sanctionsMap[incorp]) sanctionsMap[incorp] = [];
+            sanctionsMap[incorp].push(s);
+        });
 
-                const sanctionsForStudent = allSanctions.filter(s =>
-                    s.Eleve && String(s.Eleve.numeroIncorporation).trim() === incorp
-                );
+        const allEnrichedStudents = rawStudents.map(student => {
+            const incorp = String(student.numero_incorporation || '').trim();
 
-                return {
-                    ...student,
-                    rawConsultations,
-                    rawAbsences,
-                    sanctionCount: sanctionsForStudent.length
-                };
-            });
+            const rawConsultations = consultationsMap[incorp] || [];
+            const rawAbsences      = absencesMap[incorp]      || [];
 
-            if (isMounted) {
-                setClassementWithRawDetails(allEnrichedStudents);
-                setIsDataReady(true);
-            }
-        } catch (err) {
-            console.error("Erreur bulk load", err);
-            if (isMounted) {
-                setClassementWithRawDetails(rawStudents);
-                setIsDataReady(true);
-            }
+            // ✅ REMPLACEZ l'ancien filtre par sanctionsMap
+            const studentSanc = sanctionsMap[incorp] || [];
+
+            return {
+                ...student,
+                rawConsultations,
+                rawAbsences,
+                sanctionCount: studentSanc.length
+            };
+        });
+
+        if (isMounted) {
+            setClassementWithRawDetails(allEnrichedStudents);
+            setIsDataReady(true);
         }
-    };
+    } catch (err) {
+        console.error("Erreur bulk load", err);
+        if (isMounted) {
+            setClassementWithRawDetails(rawStudents);
+            setIsDataReady(true);
+        }
+    }
+};
 
     fetchAllExtraData();
     return () => { isMounted = false; };
 }, [details, isDataReady, selectedPromotion]);
 
-    const sourceDataDynamique = useMemo(() => {
-        if (!isDataReady) return details ? details.classement : [];
-        return classementWithRawDetails.map(student => {
-            let consultationDays = 0;
-            if (Array.isArray(student.rawConsultations)) {
-                student.rawConsultations.forEach(c => {
-                    consultationDays += getOverlappingDays(c.dateDepart, c.dateArrive, startDate, endDate);
-                });
-            }
+  const sourceDataDynamique = useMemo(() => {
+    if (!isDataReady) return details ? details.classement : [];
+    return classementWithRawDetails.map(student => {
+        let consultationDays = 0;
+        if (Array.isArray(student.rawConsultations)) {
+            student.rawConsultations.forEach(c => {
+                // ✅ Si pas de dateArrive, on utilise aujourd'hui
+                const dateArriveEffective = c.dateArrive || new Date().toISOString();
+                consultationDays += getOverlappingDays(
+                    c.dateDepart, 
+                    dateArriveEffective, 
+                    startDate, 
+                    endDate
+                );
+            });
+        }
 
-            let absenceDays = 0;
-            if (Array.isArray(student.rawAbsences)) {
-                student.rawAbsences.forEach(a => {
-                    const dateCible = a.date || a.dateDebut || a.createdAt || new Date();
-                    if (getOverlappingDays(dateCible, dateCible, startDate, endDate) > 0) {
-                        absenceDays++;
-                    }
-                });
-            }
+        let absenceDays = 0;
+        if (Array.isArray(student.rawAbsences)) {
+            student.rawAbsences.forEach(a => {
+                const dateCible = a.date || a.dateDebut || a.createdAt || new Date();
+                if (getOverlappingDays(dateCible, dateCible, startDate, endDate) > 0) {
+                    absenceDays++;
+                }
+            });
+        }
 
-            return { ...student, consultationDays, absenceDays };
-        });
-    }, [classementWithRawDetails, isDataReady, startDate, endDate, details]);
-
-
+        return { ...student, consultationDays, absenceDays };
+    });
+}, [classementWithRawDetails, isDataReady, startDate, endDate, details]);
     const showModalWithData = (title, columns, data) => {
         setModalTitle(title);
         setModalColumns(columns);
@@ -344,16 +388,26 @@ useEffect(() => {
         showModalWithData('Liste des Élèves Sanctionnés', modalCols, mappedData);
     };
 
-    if (loading) return <div className="card"><h2>Chargement...</h2></div>;
-    if (error) return <div className="card"><h2>{error}</h2></div>;
-    if (!summary || !details) return <div className="card"><h2>Aucune donnée disponible.</h2></div>;
-
-    const filteredClassement = sourceData.filter(student => {
-        const search = (searchTerm || '').toLowerCase();
+const filteredClassement = useMemo(() => {
+    const search = (searchTerm || '').toLowerCase();
+    
+    const filtered = (sourceData || []).filter(student => {
         const fullName = `${student.prenom || ''} ${student.nom || ''}`.toLowerCase();
         const incorp = (student.numero_incorporation || '').toLowerCase();
         return fullName.includes(search) || incorp.includes(search);
     });
+
+    const classes = filtered.filter(s => s.rang != null);
+    const nonClasses = filtered.filter(s => s.rang == null);
+
+    return [...classes, ...nonClasses];
+}, [sourceData, searchTerm]);
+
+    if (loading) return <div className="card"><h2>Chargement...</h2></div>;
+    if (error) return <div className="card"><h2>{error}</h2></div>;
+    if (!summary || !details) return <div className="card"><h2>Aucune donnée disponible.</h2></div>;
+
+
 
     return (
         <div className="dashboard-redesign-container">
@@ -405,6 +459,101 @@ useEffect(() => {
 
             <div className="dashboard-redesign-header">
                 <div className="stats-grid">
+                    <StatCardRedesign 
+    title="Total Promotion" 
+    value={summary?.stats?.totalEleves || 0}
+    subValue="Élèves inscrits"
+    icon="fa-graduation-cap" 
+/>
+<StatCardRedesign 
+    title="Dossiers Complets" 
+    value={summary?.stats?.complets || 0}
+    subValue={`${summary?.stats?.totalEleves > 0 
+        ? ((summary.stats.complets / summary.stats.totalEleves) * 100).toFixed(1) 
+        : 0}% complétés`}
+    highlight={summary?.stats?.complets === summary?.stats?.totalEleves}
+    icon="fa-check-square" 
+/>
+<StatCardRedesign 
+    title="Dossiers Incomplets" 
+    value={summary?.stats?.incomplets || 0}
+    subValue="Notes manquantes"
+    highlight={summary?.stats?.incomplets > 0}
+    icon="fa-exclamation-circle"
+    onClick={() => {
+        const filtered = getFilteredIncomplets(searchIncomplets);
+        const data = filtered.map((s, index) => ({
+            ...s,
+            numeroOrdre: index + 1,
+            nomComplet: `${s.prenom} ${s.nom}`,
+            matiereManquantesDisplay: s.matiereManquantes.join(', '),
+            progression: `${s.notesPresentes}/${s.totalMatieres} matières`,
+            actionBtn: (
+                <button 
+                    className="btn-details-action" 
+                    onClick={(e) => { 
+                        e.stopPropagation(); 
+                        handleStudentSelectFromModal(s); 
+                    }}
+                >
+                    <i className="fa fa-eye"></i> Détail
+                </button>
+            )
+        }));
+
+        // ✅ Ajout barre recherche dans le titre via un composant inline
+        setModalTitle(
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <span>Élèves Incomplets ({elevesIncomplets.length})</span>
+                <input
+                    type="text"
+                    placeholder="Rechercher nom ou N° inc..."
+                    style={{
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0',
+                        fontSize: '0.85rem',
+                        width: '220px'
+                    }}
+                    onChange={(e) => {
+                        setSearchIncomplets(e.target.value);
+                        // Rafraîchit les données filtrées
+                        const newFiltered = getFilteredIncomplets(e.target.value);
+                        setModalData(newFiltered.map((s, index) => ({
+                            ...s,
+                            numeroOrdre: index + 1,
+                            nomComplet: `${s.prenom} ${s.nom}`,
+                            matiereManquantesDisplay: s.matiereManquantes.join(', '),
+                            progression: `${s.notesPresentes}/${s.totalMatieres} matières`,
+                            actionBtn: (
+                                <button 
+                                    className="btn-details-action" 
+                                    onClick={(ev) => { 
+                                        ev.stopPropagation(); 
+                                        handleStudentSelectFromModal(s); 
+                                    }}
+                                >
+                                    <i className="fa fa-eye"></i> Détail
+                                </button>
+                            )
+                        })));
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                />
+            </div>
+        );
+        setModalColumns([
+            { key: 'numeroOrdre', header: 'N° Ordre' },
+            { key: 'nomComplet', header: 'Nom Complet' },
+            { key: 'numero_incorporation', header: 'N° Inc.' },
+            { key: 'progression', header: 'Progression' },
+            { key: 'matiereManquantesDisplay', header: 'Matières Manquantes' },
+            { key: 'actionBtn', header: 'Action' }
+        ]);
+        setModalData(data);
+        setIsModalLoading(false);
+    }}
+/>
                     <StatCardRedesign title="Participants" value={summary.stats.participants} icon="fa-users" />
                     
                     <StatCardRedesign title="Moyenne Max" value={maxMoyenneVal} subValue="Note la plus haute" onClick={handleMaxClick} highlight={true} icon="fa-trophy" 
@@ -503,6 +652,15 @@ useEffect(() => {
                                             <td>{s.numero_incorporation}</td>
                                             <td>{s.moyenne}</td>
                                             <td>
+                                               {s.rang == null ? (
+                                                    <span
+                                                        className="status-badge"
+                                                        style={{ backgroundColor: '#6b7280' }}
+                                                        title={s.motif_non_classe || 'Notes incomplètes'}
+                                                    >
+                                                        <i className="fa fa-ban"></i> NON CLASSÉ
+                                                    </span>
+                                                ) : null}
                                                 <div className="badges-container">
                                                     {s.consultationDays > 0 && (
                                                         <span className="status-badge consultation-badge" title={`${s.consultationDays} jour(s) de consultation`}>

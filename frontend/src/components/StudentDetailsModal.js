@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import './StudentDetailsModal.css';
-
+import { EXTERNAL_API_BASE_URL } from '../config/apiConfig';
 const DEFAULT_AVATAR_URL = "https://www.w3schools.com/w3images/avatar_hat.jpg";
 
 
@@ -33,7 +33,7 @@ const calculateDaysBetween = (startDate, endDate) => {
     const end = new Date(endDate);
     if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
     const diffTime = Math.abs(end - start);
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
 // Fonction pour déterminer le chevauchement avec la période d'examen
@@ -75,7 +75,10 @@ const SanctionItem = ({ sanction }) => {
 
 const ConsultationItem = ({ consult }) => {
     const [isExpanded, setIsExpanded] = useState(false);
-    const duration = calculateDaysBetween(consult.dateDepart, consult.dateArrive);
+    
+    // ✅ Si dateArrive est null/undefined, on utilise aujourd'hui
+    const dateArriveEffective = consult.dateArrive || new Date().toISOString();
+    const duration = calculateDaysBetween(consult.dateDepart, dateArriveEffective);
 
     return (
         <li className="consultation-item">
@@ -85,7 +88,14 @@ const ConsultationItem = ({ consult }) => {
             </div>
             {isExpanded && (
                 <div className="consultation-details">
-                    <p><strong>Période :</strong> Du {formatDate(consult.dateDepart)} au {formatDate(consult.dateArrive)}</p>
+                    <p>
+                        <strong>Période :</strong> Du {formatDate(consult.dateDepart)} au{' '}
+                        {/* ✅ Si pas de dateArrive, affiche "Aujourd'hui (en cours)" */}
+                        {consult.dateArrive 
+                            ? formatDate(consult.dateArrive) 
+                            : `${formatDate(new Date().toISOString())} (en cours)`
+                        }
+                    </p>
                     <p><strong>Cadre référent :</strong> {consult.Cadre?.nom} ({consult.Cadre?.grade})</p>
                     <p><strong>Référence message :</strong> {consult.refMessage}</p>
                     <p><strong>Contact :</strong> {consult.phone}</p>
@@ -182,22 +192,26 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
         try {
             const [sancRes, consultRes, absenceRes, detailsRes] = await Promise.allSettled([
                 // Sanctions : même appel global que DashboardExamen, filtrage côté client
-                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
+               axios.post(`${EXTERNAL_API_BASE_URL}/api/sanctions/bulk`,
+                { incorporations: [currentIncorp], cour: courNormalise },
+                { timeout: 5000 }
+            ),
 
                 // Consultation bulk avec cour/promotion — même principe que DashboardExamen
-                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
-                    { incorporations: [currentIncorp], cour: courNormalise  },
+                axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
+                    { incorporations: [currentIncorp], cour: courNormalise },
                     { timeout: 5000 }
                 ),
 
+
                 // Absence bulk avec cour/promotion — même principe que DashboardExamen
-                axios.post('http://192.168.241.169:4000/api/absence/bulk',
-                    { incorporations: [currentIncorp], cour: courNormalise  },
+                axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+                    { incorporations: [currentIncorp], cour: courNormalise },
                     { timeout: 5000 }
                 ),
 
                 // Détails élève — inchangé
-                axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${currentIncorp}?cour=${courNormalise}`)
+                axios.get(`${EXTERNAL_API_BASE_URL}/api/eleve/incorporation/${currentIncorp}?cour=${courNormalise}`)
             ]);
 
             // Sanctions — filtrage par incorporation (identique à DashboardExamen)
@@ -234,7 +248,7 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
                 const eleveInfo = detailsRes.value.data.eleve;
                 setStudentDetails(eleveInfo);
                 if (eleveInfo.image) {
-                    setPhotoUrl(`http://192.168.241.169:4000${eleveInfo.image}`);
+                   setPhotoUrl(`${EXTERNAL_API_BASE_URL}${eleveInfo.image}`);
                 }
             }
         } catch (err) {
@@ -261,7 +275,9 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
                         average: stat.moyenne,
                         rank: stat.rang,
                         isPassed: parseFloat(stat.moyenne) >= 12,
-                        hasNote: true
+                         hasNote: stat.moyenne !== null,
+                            estComplet: stat.est_complet,           
+                            notesPresentes: stat.notes_presentes    
                     }));
                     setGeneralResults(results);
                 } catch (e) {
@@ -328,11 +344,17 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
     // ------------------------------------------------------
 
     const consultationStats = useMemo(() => {
-        if (consultations.length === 0) return null;
-        const totalDays = consultations.reduce((sum, c) => sum + calculateDaysBetween(c.dateDepart, c.dateArrive), 0);
-        let label = consultations.length === 1 ? `${totalDays} jours continue` : `${totalDays} jours discontinus`;
-        return { totalDays, label };
-    }, [consultations]);
+    if (consultations.length === 0) return null;
+    const totalDays = consultations.reduce((sum, c) => {
+        
+        const dateArriveEffective = c.dateArrive || new Date().toISOString();
+        return sum + calculateDaysBetween(c.dateDepart, dateArriveEffective);
+    }, 0);
+    let label = consultations.length === 1 
+        ? `${totalDays} jours continue` 
+        : `${totalDays} jours discontinus`;
+    return { totalDays, label };
+}, [consultations]);
 
     if (!student) return null;
 
@@ -427,28 +449,62 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
                                     </div>
                                 ) : (
                                     generalResults.length > 0 ? (
-                                        generalResults.map(res => (
-                                            <div className="note-item" key={res.id} style={{
-                                                display: 'flex',
-                                                justifyContent: 'space-between',
-                                                alignItems: 'center',
-                                                width: '100%',
-                                                padding: '12px 15px',
-                                                background: '#f8f9fa',
-                                                marginBottom: '8px',
-                                                borderRadius: '6px',
-                                                borderLeft: res.isPassed ? '5px solid #28a745' : '5px solid #dc3545',
-                                                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-                                            }}>
-                                                <span className="note-subject" style={{flex: 1.5, fontWeight: '700', color: '#333'}}>{res.name}</span>
-                                                <span className="note-score" style={{flex: 1, textAlign: 'center', fontWeight: 'bold', color: res.isPassed ? '#28a745' : '#dc3545'}}>
-                                                    {res.average} / 20
-                                                </span>
-                                                <span style={{flex: 1, textAlign: 'right', fontSize: '0.95em', color: '#666'}}>
-                                                    Rang: <strong style={{color: '#007bff'}}>{res.rank}</strong>
-                                                </span>
-                                            </div>
-                                        ))
+                                      generalResults.map(res => (
+    <div className="note-item" key={res.id} style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        width: '100%',
+        padding: '12px 15px',
+        background: '#f8f9fa',
+        marginBottom: '8px',
+        borderRadius: '6px',
+        // ✅ Orange si partiel, vert si complet et admis, rouge si échoué
+        borderLeft: !res.estComplet 
+            ? '5px solid #f59e0b'    // Orange = partiel
+            : res.isPassed 
+                ? '5px solid #28a745'  // Vert = admis
+                : '5px solid #dc3545', // Rouge = échoué
+        boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+    }}>
+        <span style={{flex: 1.5, fontWeight: '700', color: '#333'}}>
+            {res.name}
+            {/* ✅ Badge partiel */}
+            {!res.estComplet && res.average && (
+                <span style={{
+                    marginLeft: '8px',
+                    fontSize: '0.7em',
+                    background: '#fef3c7',
+                    color: '#d97706',
+                    padding: '2px 6px',
+                    borderRadius: '4px'
+                }}>
+                    Partiel ({res.notesPresentes} note(s))
+                </span>
+            )}
+        </span>
+        <span style={{
+            flex: 1, 
+            textAlign: 'center', 
+            fontWeight: 'bold', 
+            color: !res.average 
+                ? '#94a3b8'           // Gris si pas de note
+                : res.isPassed 
+                    ? '#28a745'        // Vert si admis
+                    : '#dc3545'        // Rouge si échoué
+        }}>
+            {res.average ? `${res.average} / 20` : 'N/A'}
+        </span>
+        <span style={{flex: 1, textAlign: 'right', fontSize: '0.95em', color: '#666'}}>
+            {res.rank 
+                ? <>Rang: <strong style={{color: '#007bff'}}>{res.rank}</strong></>
+                : <span style={{color: '#94a3b8', fontSize: '0.85em'}}>
+                    {res.average ? 'Non classé (incomplet)' : 'Aucune note'}
+                  </span>
+            }
+        </span>
+    </div>
+))
                                     ) : (
                                         examSubjects && examSubjects.length > 0 ? (
                                             examSubjects.map(subject => {

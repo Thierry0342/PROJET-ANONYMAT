@@ -7,6 +7,7 @@ import WelcomePage from './WelcomePage';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import './Dashboard.css';
+import { EXTERNAL_API_BASE_URL } from '../config/apiConfig';
 
 const formatNom = (nom) => {
     return nom ? nom.toUpperCase() : '';
@@ -58,12 +59,15 @@ const calculateCombinedHealthStats = (consultations, absences) => {
 
     if (consultations && Array.isArray(consultations)) {
         consultations.forEach(c => {
-            if (!c.dateDepart || !c.dateArrive) return;
+            if (!c.dateDepart) return;
             const start = new Date(c.dateDepart);
-            const end = new Date(c.dateArrive);
+            // ✅ Si pas de dateArrive, on utilise aujourd'hui
+            const dateArriveEffective = c.dateArrive 
+                ? new Date(c.dateArrive) 
+                : new Date();
             start.setHours(0, 0, 0, 0);
-            end.setHours(0, 0, 0, 0);
-            for (let dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
+            dateArriveEffective.setHours(0, 0, 0, 0);
+            for (let dt = new Date(start); dt <= dateArriveEffective; dt.setDate(dt.getDate() + 1)) {
                 const ts = dt.getTime();
                 uniqueDaysSet.add(ts);
                 daysConsult.add(ts);
@@ -238,7 +242,7 @@ const Dashboard = () => {
                         const batch = rawData.slice(i, i + BATCH_SIZE);
                         const batchPromises = batch.map(async (st) => {
                             try {
-                                const detailRes = await axios.get(`http://192.168.241.169:4000/api/eleve/incorporation/${st.numero_incorporation}?cour=${courNormalise}`, { timeout: 3000 });
+                                const detailRes = await axios.get(`${EXTERNAL_API_BASE_URL}/api/eleve/incorporation/${st.numero_incorporation}?cour=${courNormalise}`, { timeout: 3000 });
                                 const eleveInfo = detailRes.data?.eleve;
 
                                 const decisionMatch = decisionsList.find(d => String(d.eleve_id) === String(st.id) || String(d.numero_incorporation) === String(st.numero_incorporation));
@@ -246,7 +250,7 @@ const Dashboard = () => {
                                 return {
                                     ...st,
                                     matricule: eleveInfo?.matricule || st.matricule,
-                                    imagePath: eleveInfo?.image ? `http://192.168.241.169:4000${eleveInfo.image}` : null,
+                                    imagePath: eleveInfo?.image ? `${EXTERNAL_API_BASE_URL}${eleveInfo.image}` : null,
                                     motif_conseil: decisionMatch?.motif || 'Non renseigné'
                                 };
                             } catch(e) {
@@ -288,15 +292,15 @@ const Dashboard = () => {
         try {
             // 3 requêtes parallèles au lieu de N*2 requêtes séquentielles
           const [sancRes, absenceRes, consultRes] = await Promise.allSettled([
-                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
-                axios.post('http://192.168.241.169:4000/api/absence/bulk',
-                    { incorporations, cour: courNormalise }, // ✅
+               axios.get(`${EXTERNAL_API_BASE_URL}/api/sanctions`, { timeout: 5000 }),
+                axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+                    { incorporations, cour: courNormalise },
                     { timeout: 5000 }
                 ),
-                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
-                    { incorporations, cour: courNormalise }, // ✅
-                    { timeout: 5000 }
-                )
+                axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
+                { incorporations, cour: courNormalise },
+                { timeout: 5000 }
+            )
             ]);
 
             const allSanctions     = sancRes.status     === 'fulfilled' ? sancRes.value.data     : [];
@@ -732,6 +736,7 @@ const Dashboard = () => {
     }).sort((a, b) => {
         const order = (t) => {
             const up = t.toUpperCase();
+             if (up === 'GENERAL') return 0;
             if (up.includes('FETTA')) return 1;
             if (up.includes('TEST')) return 2;
             if (up.includes('MI')) return 3;
@@ -783,42 +788,73 @@ const Dashboard = () => {
                 {!isSelectionComplete ? renderInstructionGuide() : (
                     <div className="main-data-dashboard animate-fade">
                         <div className="exam-summary-grid">
-                            {sortedExams.map(exam => (
-                                <div key={exam.typeExamen} className="exam-card-stat-unit">
-                                    <div className="card-top">
-                                        <h4>{exam.typeExamen.replace(/_/g, ' ')}</h4>
-                                        <span className="tag-ok">Statut OK</span>
-                                    </div>
-                                    <div className="card-middle-grid">
-                                        <div className="m-item">
-                                            <span className="m-val">{exam.stats.moyenne}</span>
-                                            <span className="m-lab">Moyenne</span>
-                                        </div>
-                                        <div className="m-item">
-                                            <span className="m-val">{exam.stats.participants}</span>
-                                            <span className="m-lab">Effectif</span>
-                                        </div>
-                                        <div className="m-item">
-                                            <span className="m-val max">{exam.stats.max || '0.00'}</span>
-                                            <span className="m-lab">Max Elève</span>
-                                        </div>
-                                        <div className="m-item">
-                                            <span className="m-val min">{exam.stats.min || '0.00'}</span>
-                                            <span className="m-lab">Min Elève</span>
-                                        </div>
-                                    </div>
-                                    <div className="card-bottom">
-                                       
-                                        <Link 
-                                                 to={`/dashboard/${exam.typeExamen}`} 
-                                                 state={{ promotion: selectedPromotion, population: selectedPopulation }}
-                                                    className="btn-explore"
-                                                >
-                                                  Analyser
-                                        </Link>
-                                    </div>
+                         {sortedExams.map(exam => (
+                        <div key={exam.typeExamen} className="exam-card-stat-unit">
+                            <div className="card-top">
+                                <h4>{exam.typeExamen.replace(/_/g, ' ')}</h4>
+                                <span className="tag-ok">Statut OK</span>
+                            </div>
+
+                            {/* Barre de progression complétion */}
+                            <div className="completion-bar-wrapper">
+                                <div className="completion-bar-labels">
+                                    <span>Complétion</span>
+                                    <span>
+                                        {exam.stats.complets} / {exam.stats.totalEleves}
+                                    </span>
                                 </div>
-                            ))}
+                                <div className="completion-bar-track">
+                                    <div 
+                                        className="completion-bar-fill"
+                                        style={{ 
+                                            width: `${exam.stats.totalEleves > 0 
+                                                ? (exam.stats.complets / exam.stats.totalEleves * 100) 
+                                                : 0}%`,
+                                            backgroundColor: exam.stats.complets === exam.stats.totalEleves 
+                                                ? '#10b981' : '#f59e0b'
+                                        }}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="card-middle-grid">
+                                <div className="m-item">
+                                    <span className="m-val">{exam.stats.moyenne}</span>
+                                    <span className="m-lab">Moyenne</span>
+                                </div>
+                                <div className="m-item">
+                                    <span className="m-val">{exam.stats.totalEleves}</span>
+                                    <span className="m-lab">Total Promo</span>
+                                </div>
+                                <div className="m-item highlight-green">
+                                    <span className="m-val">{exam.stats.complets}</span>
+                                    <span className="m-lab">Complétés</span>
+                                </div>
+                                <div className="m-item highlight-orange">
+                                    <span className="m-val">{exam.stats.incomplets}</span>
+                                    <span className="m-lab">Incomplets</span>
+                                </div>
+                                <div className="m-item">
+                                    <span className="m-val max">{exam.stats.max}</span>
+                                    <span className="m-lab">Max Élève</span>
+                                </div>
+                                <div className="m-item">
+                                    <span className="m-val min">{exam.stats.min}</span>
+                                    <span className="m-lab">Min Élève</span>
+                                </div>
+                            </div>
+
+                            <div className="card-bottom">
+                                <Link 
+                                    to={`/dashboard/${exam.typeExamen}`} 
+                                    state={{ promotion: selectedPromotion, population: selectedPopulation }}
+                                    className="btn-explore"
+                                >
+                                    Analyser
+                                </Link>
+                            </div>
+                        </div>
+                    ))}
                         </div>
 
                         {selectedPopulation === 'conseil' && (

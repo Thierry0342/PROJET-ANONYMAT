@@ -16,6 +16,34 @@
 }
 
 * { box-sizing: border-box; }
+.completion-bar-wrapper {
+    padding: 0 12px;
+    margin-bottom: 10px;
+}
+
+.completion-bar-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-bottom: 4px;
+}
+
+.completion-bar-track {
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 99px;
+    overflow: hidden;
+}
+
+.completion-bar-fill {
+    height: 100%;
+    border-radius: 99px;
+    transition: width 0.5s ease;
+}
+
+.m-item.highlight-green .m-val { color: #10b981; }
+.m-item.highlight-orange .m-val { color: #f59e0b; }
 
 .dashboard-root-layout {
     display: flex;

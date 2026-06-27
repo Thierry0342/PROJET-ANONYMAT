@@ -7,6 +7,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import './DashboardRedesign.css';
+import { EXTERNAL_API_BASE_URL } from '../config/apiConfig';
 
 const documentsList = [
     { id: 1, title: 'Liste des matieres aux examens', file: '/documents/LISTE DES MATIERES AUX EXAMENS.pdf' },
@@ -151,13 +152,13 @@ const DashboardGeneral = () => {
         try {
             // 3 requêtes parallèles au lieu de N*2
            const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
-                axios.get('http://192.168.241.169:4000/api/sanctions', { timeout: 5000 }),
-                axios.post('http://192.168.241.169:4000/api/consultation/bulk',
-                    { incorporations, cour: courNormalise }, 
+              axios.get(`${EXTERNAL_API_BASE_URL}/api/sanctions`, { timeout: 5000 }),
+               axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
+                    { incorporations, cour: courNormalise },
                     { timeout: 5000 }
                 ),
-                axios.post('http://192.168.241.169:4000/api/absence/bulk',
-                    { incorporations, cour: courNormalise }, 
+                axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+                    { incorporations, cour: courNormalise },
                     { timeout: 5000 }
                 )
             ]);
@@ -360,6 +361,16 @@ const DashboardGeneral = () => {
                                             <td>{s.numero_incorporation}</td>
                                             <td>{s.moyenne}</td>
                                             <td>
+                                                {s.rang == null ? (
+                                                    <span
+                                                        className="status-badge"
+                                                        style={{ backgroundColor: '#6b7280' }}
+                                                        title={s.motif_non_classe || 'Notes incomplètes'}
+                                                    >
+                                                        <i className="fa fa-ban"></i> NON CLASSÉ
+                                                    </span>
+                                                ) : null}
+                                                
                                                 <div className="badges-container">
                                                     {decisionsSaved.some(d => d.eleve_id === s.id) && <span className="status-badge" style={{ backgroundColor: '#6f42c1' }}><i className="fa fa-gavel"></i> CONSEIL</span>}
                                                     {((s.consultationDays || 0) >= 60 || parseFloat(s.moyenne) < 8) && <span className="status-badge" style={{ backgroundColor: '#000' }}><i className="fa fa-history"></i> RED?</span>}

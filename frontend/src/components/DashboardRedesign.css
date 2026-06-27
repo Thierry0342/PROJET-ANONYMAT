@@ -439,6 +439,15 @@
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0,0,0,0.15);
 }
+.badge-non-classe {
+    background-color: #6b7280;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    cursor: help;
+}
 
 .pdf-btn { background-color: #dc3545; }
 .excel-btn { background-color: #217346; }
