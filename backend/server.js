@@ -30,6 +30,22 @@ const db = mysql.createPool({
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_DATABASE
 }).promise();
+const runMigrations = async () => {
+    try {
+        await db.query(`
+            ALTER TABLE statistiques_classement 
+            ADD COLUMN IF NOT EXISTS motif_non_classe VARCHAR(255) NULL DEFAULT NULL
+        `);
+        console.log('✅ Migration OK : motif_non_classe');
+    } catch (err) {
+        // La colonne existe déjà → on ignore
+        if (err.code !== 'ER_DUP_FIELDNAME') {
+            console.error('❌ Erreur migration:', err.message);
+        }
+    }
+};
+
+runMigrations();
 
 const logActivity = async (userId, userName, actionType, description) => {
     try {
@@ -1697,6 +1713,7 @@ async function calculerClassementDetaille(typeExamen) {
             if (totalCoeffsGeneral > 0) {
                 moyenneFinale = (totalPointsGeneral / totalCoeffsGeneral).toFixed(2);
             }
+          
         }
 
         const statutFinal = moyenneFinale !== null ? 'Classé' : 'Non classé';
@@ -1736,10 +1753,11 @@ app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admi
             JOIN eleves e ON s.eleve_id = e.id
             WHERE s.type_examen = ?
         `;
+        
         const params = [typeExamen || 'General'];
         if (promotion && promotion !== 'all') { queryBase += " AND s.promotion = ?"; params.push(promotion); }
         if (population && population !== 'all') { queryBase += " AND s.population = ?"; params.push(population); }
-        queryBase += " ORDER BY CAST(s.rang AS UNSIGNED) ASC";
+        queryBase += " ORDER BY CAST(s.rang AS UNSIGNED) ASC, s.rang IS NULL ASC";
 
         const [elevesCibles] = await db.query(queryBase, params);
 
@@ -2518,24 +2536,45 @@ const getMentionForNote = (note) => {
 app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const { promotion, population } = req.query;
+
+        // 1. Total élèves
+        let eleveQuery = `SELECT COUNT(*) as total FROM eleves WHERE 1=1`;
+        const eleveParams = [];
+        if (promotion && promotion !== 'all') {
+            eleveQuery += " AND promotion = ?";
+            eleveParams.push(promotion);
+        }
+        const apiPop = population === 'total' ? null : population;
+        if (apiPop && apiPop !== 'all') {
+            if (apiPop === 'actif') {
+                eleveQuery += " AND (statut = 'actif' OR statut IS NULL OR statut = 'approuve')";
+            } else if (apiPop === 'conseil') {
+                eleveQuery += " AND statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')";
+            }
+        }
+        const [[{ total: totalEleves }]] = await db.query(eleveQuery, eleveParams);
+
+        // 2. Stats
         let query = `
             SELECT 
-                type_examen, 
-                AVG(CAST(moyenne AS DECIMAL(10,2))) as moyenne_globale,
-                MIN(CAST(moyenne AS DECIMAL(10,2))) as moyenne_min,
-                MAX(CAST(moyenne AS DECIMAL(10,2))) as moyenne_max,
-                COUNT(eleve_id) as participants
+                type_examen,
+                AVG(CASE WHEN moyenne IS NOT NULL THEN CAST(moyenne AS DECIMAL(10,2)) END) as moyenne_globale,
+                MIN(CASE WHEN moyenne IS NOT NULL THEN CAST(moyenne AS DECIMAL(10,2)) END) as moyenne_min,
+                MAX(CASE WHEN moyenne IS NOT NULL THEN CAST(moyenne AS DECIMAL(10,2)) END) as moyenne_max,
+                COUNT(eleve_id) as participants,
+                COUNT(CASE WHEN moyenne IS NOT NULL THEN 1 END) as complets,
+                COUNT(CASE WHEN moyenne IS NULL THEN 1 END) as incomplets
             FROM statistiques_classement
-            WHERE 1=1
+              WHERE 1=1
         `;
         const params = [];
         if (promotion && promotion !== 'all') {
             query += " AND promotion = ?";
             params.push(promotion);
         }
-        if (population && population !== 'all' && population !== 'total') {
+        if (apiPop && apiPop !== 'all') {
             query += " AND population = ?";
-            params.push(population);
+            params.push(apiPop);
         }
         query += " GROUP BY type_examen";
 
@@ -2544,15 +2583,19 @@ app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['ad
         const finalSummary = rows.map(r => ({
             typeExamen: r.type_examen,
             stats: {
-                participants: r.participants,
-                moyenne: parseFloat(r.moyenne_globale).toFixed(2),
-                min: parseFloat(r.moyenne_min).toFixed(2),
-                max: parseFloat(r.moyenne_max).toFixed(2)
+                totalEleves: parseInt(totalEleves),     
+                participants: parseInt(r.participants),
+                complets: parseInt(r.complets),          
+               incomplets: parseInt(totalEleves) - parseInt(r.complets),
+                moyenne: r.moyenne_globale ? parseFloat(r.moyenne_globale).toFixed(2) : '0.00',
+                min: r.moyenne_min ? parseFloat(r.moyenne_min).toFixed(2) : '0.00',
+                max: r.moyenne_max ? parseFloat(r.moyenne_max).toFixed(2) : '0.00'
             }
         }));
 
         res.json(finalSummary);
     } catch (err) {
+        console.error('Erreur summary-by-exam-type:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -3626,43 +3669,78 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
                     const configsM = configs.filter(c => c.modele_examen_id === modele.id);
                     let pts = 0;
                     let coef = 0;
+                    let matiereManquante = false;   // ← AJOUT
+
                     configsM.forEach(c => {
                         const noteTrouvee = notesDeLExamen[c.matiere_id];
                         if (noteTrouvee !== undefined) {
                             pts += noteTrouvee * parseFloat(c.coefficient);
                             coef += parseFloat(c.coefficient);
+                        } else {
+                            matiereManquante = true;   // ← AJOUT : au moins une matière sans note
                         }
                     });
-                    if (coef > 0) moyenneFinale = pts / coef;
+
+                    // ← MODIFIÉ : classé seulement si TOUTES les matières sont notées
+                    if (coef > 0 && !matiereManquante) {
+                        moyenneFinale = pts / coef;
+                    }
                 }
 
-                if (moyenneFinale === null) return null;
+                // APRÈS — on retourne aussi le motif et les élèves non classés
+                let motifNonClasse = null;
+
+                if (moyenneFinale === null) {
+                    if (!isGeneral) {
+                        const nomExamen = String(modele.nom_modele).trim();
+                        const notesDeLExamen = (notesIndex[eleve.id] || {})[nomExamen] || {};
+                        const configsM = configs.filter(c => c.modele_examen_id === modele.id);
+                        const nb = configsM.filter(c => notesDeLExamen[c.matiere_id] !== undefined).length;
+                        motifNonClasse = configsM.length === 0
+                            ? 'Aucune matière configurée'
+                            : `Notes incomplètes (${nb}/${configsM.length} matières)`;
+                    } else {
+                        motifNonClasse = 'Examen(s) manquant(s)';
+                    }
+                }
+
                 return {
                     id: eleve.id,
                     promotion: eleve.promotion,
                     population: getPopulation(eleve.statut),
-                    moyenne: moyenneFinale
+                    moyenne: moyenneFinale,
+                    motifNonClasse
                 };
-            }).filter(e => e !== null);
+            });
 
             const promos = [...new Set(eleves.map(e => e.promotion))];
             promos.forEach(promo => {
-                const groupePromo = moyennesEleves.filter(e => e.promotion === promo);
+                // Séparer classés et non classés
+                const groupePromo = moyennesEleves.filter(e => e.promotion === promo && e.moyenne !== null);
+                const nonClasses  = moyennesEleves.filter(e => e.promotion === promo && e.moyenne === null);
+
                 groupePromo.sort((a, b) => b.moyenne - a.moyenne);
                 let rang = 0; let lastMoy = -1; let countAtRank = 1;
+
                 groupePromo.forEach((eleve, index) => {
                     const moyArrondie = parseFloat(eleve.moyenne.toFixed(2));
-                    if (moyArrondie !== lastMoy) {
-                        rang += countAtRank;
-                        countAtRank = 1;
-                    } else {
-                        countAtRank++;
-                    }
+                    if (moyArrondie !== lastMoy) { rang += countAtRank; countAtRank = 1; }
+                    else { countAtRank++; }
                     lastMoy = moyArrondie;
                     const isEx = (groupePromo[index + 1] && parseFloat(groupePromo[index + 1].moyenne.toFixed(2)) === moyArrondie) ||
-                                 (groupePromo[index - 1] && parseFloat(groupePromo[index - 1].moyenne.toFixed(2)) === moyArrondie);
-                    const rangFinal = isEx ? `${rang} ex` : `${rang}`;
-                    statsToInsert.push([eleve.id, promo, eleve.population, modele.nom_modele, eleve.moyenne.toFixed(2), rangFinal]);
+                                (groupePromo[index - 1] && parseFloat(groupePromo[index - 1].moyenne.toFixed(2)) === moyArrondie);
+                    statsToInsert.push([
+                        eleve.id, promo, eleve.population, modele.nom_modele,
+                        eleve.moyenne.toFixed(2), isEx ? `${rang} ex` : `${rang}`, null
+                    ]);
+                });
+
+                // Insérer les non classés avec moyenne NULL et rang NULL
+                nonClasses.forEach(eleve => {
+                    statsToInsert.push([
+                        eleve.id, promo, eleve.population, modele.nom_modele,
+                        null, null, eleve.motifNonClasse
+                    ]);
                 });
             });
         }
@@ -3672,7 +3750,10 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
             const chunkSize = 1000;
             for (let i = 0; i < statsToInsert.length; i += chunkSize) {
                 const chunk = statsToInsert.slice(i, i + chunkSize);
-                await connection.query("INSERT INTO statistiques_classement (eleve_id, promotion, population, type_examen, moyenne, rang) VALUES ?", [chunk]);
+              await connection.query(
+    "INSERT INTO statistiques_classement (eleve_id, promotion, population, type_examen, moyenne, rang, motif_non_classe) VALUES ?",
+    [chunk]
+);
             }
         }
         await connection.commit();
@@ -3688,15 +3769,160 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
 app.get('/api/resultats/stats-eleve/:id', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const query = `
+
+        // ✅ Récupère depuis statistiques_classement (moyennes calculées)
+        const [statsClassement] = await db.query(`
             SELECT type_examen, moyenne, rang 
             FROM statistiques_classement 
             WHERE eleve_id = ?
-        `;
-        const [rows] = await db.query(query, [id]);
-        res.json(rows);
+        `, [id]);
+
+        // ✅ Récupère AUSSI les notes brutes par matière pour chaque type examen
+        const [notesDetail] = await db.query(`
+            SELECT 
+                c.type_examen,
+                c.note,
+                m.nom_matiere,
+                m.id as matiere_id,
+                ec.coefficient,
+                me.coefficient_general
+            FROM copies c
+            JOIN matieres m ON c.matiere_id = m.id
+            JOIN examens_configurations ec ON ec.matiere_id = m.id
+            JOIN modeles_examens me ON ec.modele_examen_id = me.id AND me.nom_modele = c.type_examen
+            WHERE c.eleve_id = ? AND c.note IS NOT NULL
+        `, [id]);
+
+        // Grouper les notes par type_examen
+        const notesParExamen = {};
+        notesDetail.forEach(n => {
+            if (!notesParExamen[n.type_examen]) {
+                notesParExamen[n.type_examen] = {
+                    notes: [],
+                    totalPts: 0,
+                    totalCoef: 0
+                };
+            }
+            notesParExamen[n.type_examen].notes.push(n);
+            notesParExamen[n.type_examen].totalPts += parseFloat(n.note) * parseFloat(n.coefficient);
+            notesParExamen[n.type_examen].totalCoef += parseFloat(n.coefficient);
+        });
+
+        // Fusionner avec statsClassement
+        const results = statsClassement.map(stat => {
+            const notesExamen = notesParExamen[stat.type_examen];
+            // Calculer moyenne partielle si pas de moyenne officielle
+            let moyenneAffichee = stat.moyenne;
+            if (!moyenneAffichee && notesExamen && notesExamen.totalCoef > 0) {
+                moyenneAffichee = (notesExamen.totalPts / notesExamen.totalCoef).toFixed(2);
+            }
+
+            return {
+                type_examen: stat.type_examen,
+                moyenne: moyenneAffichee,
+                rang: stat.rang,
+                // ✅ Indique si c'est une moyenne partielle ou complète
+                est_complet: stat.moyenne !== null,
+                notes_presentes: notesExamen ? notesExamen.notes.length : 0
+            };
+        });
+
+        // ✅ Ajouter les examens avec notes mais pas encore dans statistiques_classement
+        Object.keys(notesParExamen).forEach(typeExamen => {
+            const existeDeja = results.find(r => r.type_examen === typeExamen);
+            if (!existeDeja) {
+                const notesExamen = notesParExamen[typeExamen];
+                results.push({
+                    type_examen: typeExamen,
+                    moyenne: notesExamen.totalCoef > 0 
+                        ? (notesExamen.totalPts / notesExamen.totalCoef).toFixed(2) 
+                        : null,
+                    rang: null,
+                    est_complet: false,
+                    notes_presentes: notesExamen.notes.length
+                });
+            }
+        });
+
+        res.json(results);
     } catch (err) {
         res.status(500).json({ error: "Erreur lors de la récupération des statistiques." });
+    }
+});
+app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { typeExamen, promotion, population } = req.query;
+
+        // 1. Récupérer les matières de ce type d'examen
+        const [configsMatieres] = await db.query(`
+            SELECT ec.matiere_id, m.nom_matiere
+            FROM examens_configurations ec
+            JOIN modeles_examens me ON ec.modele_examen_id = me.id
+            JOIN matieres m ON ec.matiere_id = m.id
+            WHERE me.nom_modele = ?
+        `, [typeExamen]);
+
+        if (configsMatieres.length === 0) {
+            return res.json([]);
+        }
+
+        const matiereIds = configsMatieres.map(c => c.matiere_id);
+
+        // 2. Récupérer tous les élèves de la promotion
+        let eleveQuery = `SELECT id, nom, prenom, numero_incorporation, escadron, peloton, statut FROM eleves WHERE 1=1`;
+        const eleveParams = [];
+        if (promotion && promotion !== 'all') {
+            eleveQuery += " AND promotion = ?";
+            eleveParams.push(promotion);
+        }
+        if (population && population !== 'all') {
+            if (population === 'actif') {
+                eleveQuery += " AND (statut = 'actif' OR statut IS NULL OR statut = 'approuve')";
+            } else if (population === 'conseil') {
+                eleveQuery += " AND statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')";
+            }
+        }
+        const [eleves] = await db.query(eleveQuery, eleveParams);
+
+        // 3. Pour chaque élève, vérifier quelles matières manquent
+        const placeholders = matiereIds.map(() => '?').join(',');
+        const [toutesLesNotes] = await db.query(`
+            SELECT eleve_id, matiere_id
+            FROM copies
+            WHERE type_examen = ?
+              AND matiere_id IN (${placeholders})
+              AND note IS NOT NULL
+              AND eleve_id IS NOT NULL
+        `, [typeExamen, ...matiereIds]);
+
+        // Grouper les notes par élève
+        const notesParEleve = {};
+        toutesLesNotes.forEach(n => {
+            if (!notesParEleve[n.eleve_id]) notesParEleve[n.eleve_id] = new Set();
+            notesParEleve[n.eleve_id].add(n.matiere_id);
+        });
+
+        // 4. Filtrer les élèves incomplets
+        const incomplets = eleves
+            .map(eleve => {
+                const notesEleve = notesParEleve[eleve.id] || new Set();
+                const matiereManquantes = configsMatieres
+                    .filter(c => !notesEleve.has(c.matiere_id))
+                    .map(c => c.nom_matiere);
+
+                return {
+                    ...eleve,
+                    notesPresentes: notesEleve.size,
+                    totalMatieres: matiereIds.length,
+                    matiereManquantes
+                };
+            })
+            .filter(eleve => eleve.matiereManquantes.length > 0);
+
+        res.json(incomplets);
+    } catch (err) {
+        console.error('Erreur sans-note-complete:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
