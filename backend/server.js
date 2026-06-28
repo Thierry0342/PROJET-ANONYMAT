@@ -38,10 +38,77 @@ const runMigrations = async () => {
         `);
         console.log('✅ Migration OK : motif_non_classe');
     } catch (err) {
-        // La colonne existe déjà → on ignore
-        if (err.code !== 'ER_DUP_FIELDNAME') {
-            console.error('❌ Erreur migration:', err.message);
+        if (err.code !== 'ER_DUP_FIELDNAME') console.error('❌ Erreur migration:', err.message);
+    }
+
+    try {
+        await db.query(`
+            ALTER TABLE modeles_examens 
+            ADD COLUMN IF NOT EXISTS promotion VARCHAR(50) NULL DEFAULT NULL
+        `);
+        console.log('✅ Migration OK : modeles_examens.promotion');
+    } catch (err) {
+        if (err.code !== 'ER_DUP_FIELDNAME') console.error('❌ Erreur migration:', err.message);
+    }
+
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS migrations_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                migration_name VARCHAR(255) UNIQUE NOT NULL,
+                executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // ── Migration one-time : assigner les modèles existants à 79E ──
+        const [[alreadyDone79E]] = await db.query(`
+            SELECT id FROM migrations_log 
+            WHERE migration_name = 'assign_modeles_to_79E'
+        `);
+        if (!alreadyDone79E) {
+            await db.query(`
+                UPDATE modeles_examens 
+                SET promotion = '79E' 
+                WHERE promotion IS NULL
+            `);
+            await db.query(`
+                INSERT INTO migrations_log (migration_name) 
+                VALUES ('assign_modeles_to_79E')
+            `);
+            console.log('✅ Migration ONE-TIME OK : modèles existants assignés à 79E');
+        } else {
+            console.log('⏭️  Migration already done : assign_modeles_to_79E (skipped)');
         }
+
+        // ── Migration one-time : contrainte unique (nom_modele + promotion) ──
+        const [[alreadyDoneUnique]] = await db.query(`
+            SELECT id FROM migrations_log 
+            WHERE migration_name = 'unique_modele_par_promotion'
+        `);
+        if (!alreadyDoneUnique) {
+            try {
+                // Supprimer l'ancienne contrainte unique sur nom_modele seul
+                await db.query(`ALTER TABLE modeles_examens DROP INDEX nom_modele`);
+            } catch (e) {
+                // Si elle n'existe plus, on ignore
+                console.log('⚠️  Index nom_modele déjà supprimé ou inexistant, on continue.');
+            }
+            // Créer la nouvelle contrainte sur (nom_modele + promotion)
+            await db.query(`
+                ALTER TABLE modeles_examens 
+                ADD UNIQUE KEY unique_modele_par_promotion (nom_modele, promotion)
+            `);
+            await db.query(`
+                INSERT INTO migrations_log (migration_name) 
+                VALUES ('unique_modele_par_promotion')
+            `);
+            console.log('✅ Migration ONE-TIME OK : contrainte unique (nom_modele + promotion)');
+        } else {
+            console.log('⏭️  Migration already done : unique_modele_par_promotion (skipped)');
+        }
+
+    } catch (err) {
+        console.error('❌ Erreur migration log:', err.message);
     }
 };
 
@@ -1642,18 +1709,32 @@ const getMention = (moyenne) => {
     return 'Insuffisant';
 };
 
-async function calculerClassementDetaille(typeExamen) {
+async function calculerClassementDetaille(typeExamen, promotion) {
     const [modeles] = await db.query("SELECT id, nom_modele, coefficient_general FROM modeles_examens");
     const [configs] = await db.query("SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations");
     const [toutesLesMatieres] = await db.query("SELECT id, nom_matiere, code_prefixe FROM matieres ORDER BY nom_matiere");
-    const [eleves] = await db.query("SELECT id, prenom, nom, numero_incorporation, escadron, peloton FROM eleves ORDER BY nom, prenom");
+       const modelesHorsRepechage = modeles.filter(m => 
+        !m.nom_modele.toUpperCase().includes('REPECHAGE')
+    );
+    // Filtrer les élèves par promotion
+    let eleveQuery = "SELECT id, prenom, nom, numero_incorporation, escadron, peloton, promotion FROM eleves";
+    const eleveParams = [];
+    if (promotion && promotion !== '') {
+        eleveQuery += " WHERE promotion = ?";
+        eleveParams.push(promotion);
+    }
+    eleveQuery += " ORDER BY nom, prenom";
+    const [eleves] = await db.query(eleveQuery, eleveParams);
+
     const [notes] = await db.query("SELECT eleve_id, matiere_id, note, type_examen FROM copies WHERE note IS NOT NULL");
 
     let matieresAffiches = [];
     if (typeExamen && typeExamen !== 'General') {
         const modeleSelectionne = modeles.find(m => m.nom_modele === typeExamen);
         if (modeleSelectionne) {
-            const idsMatieresDuModele = configs.filter(c => c.modele_examen_id === modeleSelectionne.id).map(c => c.matiere_id);
+            const idsMatieresDuModele = configs
+                .filter(c => c.modele_examen_id === modeleSelectionne.id)
+                .map(c => c.matiere_id);
             matieresAffiches = toutesLesMatieres.filter(m => idsMatieresDuModele.includes(m.id));
         }
     }
@@ -1669,31 +1750,43 @@ async function calculerClassementDetaille(typeExamen) {
                 const configsModele = configs.filter(c => c.modele_examen_id === modele.id);
                 let totalPoints = 0;
                 let totalCoeffs = 0;
+
                 configsModele.forEach(config => {
-                    const noteTrouvee = notesEleve.find(n => n.matiere_id === config.matiere_id && n.type_examen === typeExamen);
+                    const noteTrouvee = notesEleve.find(n => 
+                        n.matiere_id === config.matiere_id && 
+                        n.type_examen === typeExamen
+                    );
                     if (noteTrouvee) {
                         totalPoints += parseFloat(noteTrouvee.note) * parseFloat(config.coefficient);
                         totalCoeffs += parseFloat(config.coefficient);
                         notesDetail[config.matiere_id] = parseFloat(noteTrouvee.note).toFixed(2);
                     }
                 });
+
                 if (totalCoeffs > 0) {
                     moyenneFinale = (totalPoints / totalCoeffs).toFixed(2);
                 }
             }
         } else {
+            // Calcul General = moyenne des moyennes pondérées par coefficient_general
             const moyennesParModele = {};
-            modeles.forEach(modele => {
+
+            modelesHorsRepechage.forEach(modele => {
                 const configsModele = configs.filter(c => c.modele_examen_id === modele.id);
                 let totalPointsModele = 0;
                 let totalCoeffsModele = 0;
+
                 configsModele.forEach(config => {
-                    const noteTrouvee = notesEleve.find(n => n.matiere_id === config.matiere_id && n.type_examen === modele.nom_modele);
+                    const noteTrouvee = notesEleve.find(n => 
+                        n.matiere_id === config.matiere_id && 
+                        n.type_examen === modele.nom_modele
+                    );
                     if (noteTrouvee) {
                         totalPointsModele += parseFloat(noteTrouvee.note) * parseFloat(config.coefficient);
                         totalCoeffsModele += parseFloat(config.coefficient);
                     }
                 });
+
                 if (totalCoeffsModele > 0) {
                     moyennesParModele[modele.nom_modele] = totalPointsModele / totalCoeffsModele;
                 }
@@ -1701,7 +1794,8 @@ async function calculerClassementDetaille(typeExamen) {
 
             let totalPointsGeneral = 0;
             let totalCoeffsGeneral = 0;
-            modeles.forEach(modele => {
+
+           modelesHorsRepechage.forEach(modele => {
                 const coeffGeneral = parseFloat(modele.coefficient_general);
                 if (coeffGeneral > 0) {
                     totalCoeffsGeneral += coeffGeneral;
@@ -1710,23 +1804,33 @@ async function calculerClassementDetaille(typeExamen) {
                     }
                 }
             });
+
             if (totalCoeffsGeneral > 0) {
                 moyenneFinale = (totalPointsGeneral / totalCoeffsGeneral).toFixed(2);
             }
-          
         }
 
         const statutFinal = moyenneFinale !== null ? 'Classé' : 'Non classé';
-        return { ...eleve, moyenne: moyenneFinale, statut: statutFinal, notesDetail };
+        return { 
+            ...eleve, 
+            moyenne: moyenneFinale, 
+            statut: statutFinal, 
+            notesDetail 
+        };
     });
 
+    // ✅ Séparer classés et non classés
     const classes = resultatsCalcules.filter(r => r.statut === 'Classé');
     const nonClasses = resultatsCalcules.filter(r => r.statut === 'Non classé');
 
+    // ✅ Trier les classés par moyenne décroissante
     classes.sort((a, b) => parseFloat(b.moyenne) - parseFloat(a.moyenne));
+
+    // ✅ Calcul des rangs avec ex aequo
     let rang = 0;
     let lastMoyenne = -1;
     let studentsAtCurrentRank = 1;
+
     const classesAvecRang = classes.map((eleve, index) => {
         if (eleve.moyenne !== lastMoyenne) {
             rang += studentsAtCurrentRank;
@@ -1735,35 +1839,56 @@ async function calculerClassementDetaille(typeExamen) {
             studentsAtCurrentRank++;
         }
         lastMoyenne = eleve.moyenne;
-        const isExAequo = (index > 0 && eleve.moyenne === classes[index - 1].moyenne) || (index < classes.length - 1 && eleve.moyenne === classes[index + 1].moyenne);
-        return { ...eleve, rang: isExAequo ? `${rang} ex` : rang };
+
+        const isExAequo = 
+            (index > 0 && eleve.moyenne === classes[index - 1].moyenne) || 
+            (index < classes.length - 1 && eleve.moyenne === classes[index + 1].moyenne);
+
+        return { 
+            ...eleve, 
+            rang: isExAequo ? `${rang} ex` : rang 
+        };
     });
 
-    return { classement: [...classesAvecRang, ...nonClasses], matieres: matieresAffiches };
+    // ✅ Non classés à la fin avec rang null
+    const nonClassesAvecRang = nonClasses.map(eleve => ({
+        ...eleve,
+        rang: null
+    }));
+
+    return { 
+        classement: [...classesAvecRang, ...nonClassesAvecRang], 
+        matieres: matieresAffiches 
+    };
 }
 
 app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const { typeExamen, promotion, population } = req.query;
         
-        // 1. On récupère d'abord les élèves ciblés (Conseil ou Actifs)
         let queryBase = `
-            SELECT s.eleve_id, s.rang, s.moyenne, e.prenom, e.nom, e.numero_incorporation, e.escadron, e.peloton, e.statut
+            SELECT s.eleve_id, s.rang, s.moyenne, s.motif_non_classe,
+                   e.prenom, e.nom, e.numero_incorporation, e.escadron, e.peloton, e.statut
             FROM statistiques_classement s
             JOIN eleves e ON s.eleve_id = e.id
             WHERE s.type_examen = ?
         `;
         
         const params = [typeExamen || 'General'];
-        if (promotion && promotion !== 'all') { queryBase += " AND s.promotion = ?"; params.push(promotion); }
-        if (population && population !== 'all') { queryBase += " AND s.population = ?"; params.push(population); }
+        if (promotion && promotion !== 'all') { 
+            queryBase += " AND s.promotion = ?"; 
+            params.push(promotion); 
+        }
+        if (population && population !== 'all') { 
+            queryBase += " AND s.population = ?"; 
+            params.push(population); 
+        }
         queryBase += " ORDER BY CAST(s.rang AS UNSIGNED) ASC, s.rang IS NULL ASC";
 
         const [elevesCibles] = await db.query(queryBase, params);
 
         if (elevesCibles.length === 0) return res.json({ classement: [], matieres: [] });
 
-        // 2. Pour ces élèves, on va chercher TOUTES leurs moyennes (historique complet)
         const ids = elevesCibles.map(e => e.eleve_id);
         const [historiqueNotes] = await db.query(`
             SELECT eleve_id, type_examen, moyenne 
@@ -1771,7 +1896,6 @@ app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admi
             WHERE eleve_id IN (?)
         `, [ids]);
 
-        // 3. On fusionne les données pour que chaque ligne d'élève contienne ses notes d'examen
         const classementFormate = elevesCibles.map(eleve => {
             const details = {};
             historiqueNotes
@@ -1779,16 +1903,20 @@ app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admi
                 .forEach(h => {
                     details[h.type_examen] = h.moyenne;
                 });
-            return { ...eleve, details }; // L'objet 'details' contiendra { "TEST JOURNALIER": 14, "FETTA": 12, ... }
+            return { 
+                ...eleve, 
+                details,
+                //  motif_non_classe déjà inclus depuis la requête
+            };
         });
 
-        // 4. Récupérer les matières pour l'affichage des colonnes (optionnel)
         const [matieres] = await db.query(`
             SELECT m.id, m.nom_matiere, m.code_prefixe
             FROM matieres m
             JOIN examens_configurations ec ON m.id = ec.matiere_id
             JOIN modeles_examens me ON ec.modele_examen_id = me.id
-            WHERE me.nom_modele = ?`, [typeExamen || 'General']);
+            WHERE me.nom_modele = ?
+        `, [typeExamen || 'General']);
 
         res.json({ classement: classementFormate, matieres });
     } catch (err) {
@@ -1800,19 +1928,30 @@ app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admi
 
 app.get('/api/resultats/exporter-classement-excel', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const { typeExamen } = req.query;
-        const { classement, matieres } = await calculerClassementDetaille(typeExamen);
+        const { typeExamen, promotion } = req.query;
+       const { classement, matieres } = await calculerClassementDetaille(typeExamen, promotion);
 
         if (!classement || classement.length === 0) {
             return res.status(404).json({ message: "Aucune donnée de classement à exporter." });
         }
 
+        // ✅ Filtrer par promotion si spécifiée
+        let classementFiltre = classement;
+        if (promotion && promotion !== '') {
+            classementFiltre = classement.filter(e => e.promotion === promotion);
+        }
+
+        // ✅ Séparer classés et non classés - non classés à la fin
+        const classes = classementFiltre.filter(e => e.rang !== null && e.statut !== 'Non classé');
+        const nonClasses = classementFiltre.filter(e => e.rang === null || e.statut === 'Non classé');
+        const classementOrdonne = [...classes, ...nonClasses];
+
         const workbook = xlsx.utils.book_new();
 
         const syntheseData = [
             ['RANG', 'NOM ET PRÉNOM', 'N° INCORP.', 'ESCADRON', 'PELOTON', 'MOYENNE', 'MENTION'],
-            ...classement.map(e => [
-                e.rang || e.statut,
+            ...classementOrdonne.map(e => [
+                e.rang || 'Non classé',
                 `${e.nom} ${e.prenom}`,
                 e.numero_incorporation,
                 e.escadron || '-',
@@ -1827,8 +1966,8 @@ app.get('/api/resultats/exporter-classement-excel', authenticateToken, checkRole
 
         if (typeExamen && typeExamen !== 'General' && matieres && matieres.length > 0) {
             const detailHeaders = ['RANG', 'NOM ET PRÉNOM', ...matieres.map(m => (m.code_prefixe || m.nom_matiere).toUpperCase()), 'MOYENNE'];
-            const detailBody = classement.map(eleve => [
-                eleve.rang || eleve.statut,
+            const detailBody = classementOrdonne.map(eleve => [
+                eleve.rang || 'Non classé',
                 `${eleve.nom} ${eleve.prenom}`,
                 ...matieres.map(m => eleve.notesDetail[m.id] || '-'),
                 eleve.moyenne !== null ? eleve.moyenne : '-'
@@ -1840,7 +1979,7 @@ app.get('/api/resultats/exporter-classement-excel', authenticateToken, checkRole
         }
 
         const buffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
-        const fileName = `Classement_${typeExamen || 'General'}.xlsx`;
+        const fileName = `Classement_${typeExamen || 'General'}${promotion ? '_' + promotion : ''}.xlsx`;
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.send(buffer);
@@ -2554,7 +2693,7 @@ app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['ad
         }
         const [[{ total: totalEleves }]] = await db.query(eleveQuery, eleveParams);
 
-        // 2. Stats
+        // 2. Stats depuis statistiques_classement
         let query = `
             SELECT 
                 type_examen,
@@ -2562,10 +2701,9 @@ app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['ad
                 MIN(CASE WHEN moyenne IS NOT NULL THEN CAST(moyenne AS DECIMAL(10,2)) END) as moyenne_min,
                 MAX(CASE WHEN moyenne IS NOT NULL THEN CAST(moyenne AS DECIMAL(10,2)) END) as moyenne_max,
                 COUNT(eleve_id) as participants,
-                COUNT(CASE WHEN moyenne IS NOT NULL THEN 1 END) as complets,
-                COUNT(CASE WHEN moyenne IS NULL THEN 1 END) as incomplets
+                COUNT(CASE WHEN moyenne IS NOT NULL THEN 1 END) as complets
             FROM statistiques_classement
-              WHERE 1=1
+            WHERE 1=1
         `;
         const params = [];
         if (promotion && promotion !== 'all') {
@@ -2580,13 +2718,66 @@ app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['ad
 
         const [rows] = await db.query(query, params);
 
+        // 3. Compter élèves avec au moins une note dans copies par type_examen
+        let notesQuery = `
+            SELECT 
+                c.type_examen,
+                COUNT(DISTINCT c.eleve_id) as eleves_avec_note
+            FROM copies c
+            JOIN eleves e ON c.eleve_id = e.id
+            WHERE c.note IS NOT NULL
+        `;
+        const notesParams = [];
+        if (promotion && promotion !== 'all') {
+            notesQuery += " AND e.promotion = ?";
+            notesParams.push(promotion);
+        }
+        if (apiPop && apiPop !== 'all') {
+            if (apiPop === 'actif') {
+                notesQuery += " AND (e.statut = 'actif' OR e.statut IS NULL OR e.statut = 'approuve')";
+            } else if (apiPop === 'conseil') {
+                notesQuery += " AND e.statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')";
+            }
+        }
+        notesQuery += " GROUP BY c.type_examen";
+        const [notesRows] = await db.query(notesQuery, notesParams);
+
+        const notesMap = {};
+        notesRows.forEach(r => {
+            notesMap[r.type_examen] = parseInt(r.eleves_avec_note);
+        });
+
+        // ✅ 4. Pour General : compter les élèves qui ont au moins un examen 
+        //    complet dans statistiques_classement (même si non classé au général)
+        let generalExisteQuery = `
+            SELECT COUNT(DISTINCT sc.eleve_id) as total_avec_examen
+            FROM statistiques_classement sc
+            WHERE sc.type_examen != 'General'
+            AND sc.moyenne IS NOT NULL
+        `;
+        const generalParams = [];
+        if (promotion && promotion !== 'all') {
+            generalExisteQuery += " AND sc.promotion = ?";
+            generalParams.push(promotion);
+        }
+        if (apiPop && apiPop !== 'all') {
+            generalExisteQuery += " AND sc.population = ?";
+            generalParams.push(apiPop);
+        }
+        const [[{ total_avec_examen }]] = await db.query(generalExisteQuery, generalParams);
+
         const finalSummary = rows.map(r => ({
             typeExamen: r.type_examen,
             stats: {
-                totalEleves: parseInt(totalEleves),     
+                totalEleves: parseInt(totalEleves),
                 participants: parseInt(r.participants),
-                complets: parseInt(r.complets),          
-               incomplets: parseInt(totalEleves) - parseInt(r.complets),
+                complets: parseInt(r.complets),
+                incomplets: parseInt(totalEleves) - parseInt(r.complets),
+                // ✅ General → nombre d'élèves ayant au moins un examen complet
+                // ✅ Autres → nombre d'élèves ayant au moins une note dans copies
+                elevesAvecNote: r.type_examen === 'General'
+                    ? parseInt(total_avec_examen)
+                    : (notesMap[r.type_examen] || 0),
                 moyenne: r.moyenne_globale ? parseFloat(r.moyenne_globale).toFixed(2) : '0.00',
                 min: r.moyenne_min ? parseFloat(r.moyenne_min).toFixed(2) : '0.00',
                 max: r.moyenne_max ? parseFloat(r.moyenne_max).toFixed(2) : '0.00'
@@ -2599,7 +2790,6 @@ app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['ad
         res.status(500).json({ error: err.message });
     }
 });
-
 app.get('/api/dashboard/global-summary', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
 
@@ -2794,19 +2984,29 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
 
 
 
+// APRÈS
 app.get('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const [modeles] = await db.query("SELECT id, nom_modele, coefficient_general, date_debut, date_fin FROM modeles_examens ORDER BY nom_modele");
+        const { promotion } = req.query;
+        
+        let query = "SELECT id, nom_modele, coefficient_general, date_debut, date_fin, promotion FROM modeles_examens WHERE 1=1";
+        const params = [];
+        
+        if (promotion && promotion !== 'all') {
+            query += " AND promotion = ?";
+            params.push(promotion);
+        }
+        query += " ORDER BY nom_modele";
+        
+        const [modeles] = await db.query(query, params);
         const [configs] = await db.query("SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations");
-
+        
         const configuration = modeles.map(modele => ({
             ...modele,
             configurations: configs.filter(c => c.modele_examen_id === modele.id)
         }));
-
         res.json(configuration);
     } catch (err) {
-        console.error("Erreur sur GET /api/configuration/examens", err);
         res.status(500).json({ message: "Erreur lors de la récupération de la configuration." });
     }
 });
@@ -2978,16 +3178,23 @@ app.get('/api/dashboard-details/general/eleves-par-mention/:mention', authentica
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+
 app.get('/api/examens', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code']), async (req, res) => {
     try {
-        const [examens] = await db.query("SELECT id, nom_modele FROM modeles_examens ORDER BY nom_modele");
+        const { promotion } = req.query;
+        let query = "SELECT id, nom_modele, promotion FROM modeles_examens WHERE 1=1";
+        const params = [];
+        if (promotion && promotion !== 'all') {
+            query += " AND promotion = ?";
+            params.push(promotion);
+        }
+        query += " ORDER BY nom_modele";
+        const [examens] = await db.query(query, params);
         res.json(examens);
     } catch (err) {
-        console.error("Erreur sur GET /api/examens", err);
         res.status(500).json({ message: "Erreur lors de la récupération des types d'examen." });
     }
 });
-
 app.post('/api/codes/generer', authenticateToken, checkRole(['admin']), async (req, res) => {
     const { matiereId, nombreCodes } = req.body;
 
@@ -3335,23 +3542,30 @@ app.get('/api/pelotons/:escadron', authenticateToken, checkRole(['admin','operat
     }
 });
 
+// APRÈS — ajouter promotion dans le body
 app.post('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
-    const { nom_modele, date_debut, date_fin } = req.body;
+    const { nom_modele, promotion } = req.body;
 
     if (!nom_modele || nom_modele.trim() === '') {
         return res.status(400).json({ message: "Le nom du modèle est requis." });
     }
+    if (!promotion || promotion.trim() === '') {
+        return res.status(400).json({ message: "La promotion est requise." });
+    }
 
     try {
-        const query = "INSERT INTO modeles_examens (nom_modele, coefficient_general, date_debut, date_fin) VALUES (?, ?, ?, ?)";
-        const [result] = await db.query(query, [nom_modele.trim(), 1, date_debut || null, date_fin || null]);
-
+        const query = "INSERT INTO modeles_examens (nom_modele, coefficient_general, promotion) VALUES (?, ?, ?)";
+        const [result] = await db.query(query, [nom_modele.trim(), 1, promotion.trim()]);
         const nouvelId = result.insertId;
         const [[nouveauModele]] = await db.query("SELECT * FROM modeles_examens WHERE id = ?", [nouvelId]);
-
         res.status(201).json({ ...nouveauModele, configurations: [] });
     } catch (err) {
-        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: "Un modèle avec ce nom existe déjà." });
+        if (err.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ 
+                //  Message précis avec la promotion
+                message: `Un modèle "${nom_modele.trim()}" existe déjà pour la promotion ${promotion.trim()}.` 
+            });
+        }
         res.status(500).json({ message: "Erreur lors de la création du modèle." });
     }
 });
@@ -3610,10 +3824,19 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
     req.setTimeout(600000);
     try {
         await connection.beginTransaction();
-        const [modeles] = await connection.query("SELECT id, nom_modele, coefficient_general FROM modeles_examens");
-        const [configs] = await connection.query("SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations");
-        const [eleves] = await connection.query("SELECT id, promotion, statut FROM eleves");
-        const [notes] = await connection.query("SELECT eleve_id, matiere_id, note, type_examen FROM copies WHERE note IS NOT NULL");
+        
+        // ✅ Récupérer toutes les promotions distinctes
+        const [promotions] = await connection.query(
+            "SELECT DISTINCT promotion FROM eleves WHERE promotion IS NOT NULL"
+        );
+        
+        const [tousLesEleves] = await connection.query("SELECT id, promotion, statut FROM eleves");
+        const [notes] = await connection.query(
+            "SELECT eleve_id, matiere_id, note, type_examen FROM copies WHERE note IS NOT NULL"
+        );
+        const [tousLesConfigs] = await connection.query(
+            "SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations"
+        );
 
         const notesIndex = {};
         notes.forEach(n => {
@@ -3631,118 +3854,155 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
         };
 
         let statsToInsert = [];
-        const tousLesModeles = [...modeles, { id: 0, nom_modele: 'General', coefficient_general: 0 }];
 
-        for (const modele of tousLesModeles) {
-            const isGeneral = modele.nom_modele === 'General';
+        // ✅ Traiter chaque promotion séparément
+        for (const promoRow of promotions) {
+            const promo = promoRow.promotion;
             
-            const moyennesEleves = eleves.map(eleve => {
-                let moyenneFinale = null;
-                const notesDeLEleve = notesIndex[eleve.id] || {};
+            // ✅ Récupérer les modèles spécifiques à cette promotion
+            const [modelesPromo] = await connection.query(
+                "SELECT id, nom_modele, coefficient_general FROM modeles_examens WHERE promotion = ?",
+                [promo]
+            );
+            
+            if (modelesPromo.length === 0) continue; // Pas de config pour cette promo
+            
+            const modelesHorsRepechage = modelesPromo.filter(m =>
+                !m.nom_modele.toUpperCase().includes('REPECHAGE')
+            );
+            
+            const elevesDePromo = tousLesEleves.filter(e => e.promotion === promo);
+            
+            const tousLesModeles = [
+                ...modelesPromo,
+                { id: 0, nom_modele: 'General', coefficient_general: 0 }
+            ];
 
-                if (isGeneral) {
-                    let totalPointsGen = 0;
-                    let totalCoeffsGen = 0;
-                    modeles.forEach(m => {
-                        const nomExamen = String(m.nom_modele).trim();
+            for (const modele of tousLesModeles) {
+                const isGeneral = modele.nom_modele === 'General';
+
+                const moyennesEleves = elevesDePromo.map(eleve => {
+                    let moyenneFinale = null;
+                    const notesDeLEleve = notesIndex[eleve.id] || {};
+                    let motifNonClasse = null;
+
+                    if (isGeneral) {
+                        let totalPointsGen = 0;
+                        let totalCoeffsGen = 0;
+                        let tousLesExamensComplets = true;
+                        const examensComplets = [];
+
+                        // ✅ Seulement les modèles de SA promotion, sans repêchage
+                        modelesHorsRepechage.forEach(m => {
+                            const nomExamen = String(m.nom_modele).trim();
+                            const notesDeLExamen = notesDeLEleve[nomExamen] || {};
+                            const configsM = tousLesConfigs.filter(c => c.modele_examen_id === m.id);
+
+                            if (configsM.length === 0) return;
+
+                            let ptsExamen = 0;
+                            let coefExamen = 0;
+                            let matiereManquante = false;
+
+                            configsM.forEach(c => {
+                                const noteTrouvee = notesDeLExamen[c.matiere_id];
+                                if (noteTrouvee !== undefined) {
+                                    ptsExamen += noteTrouvee * parseFloat(c.coefficient);
+                                    coefExamen += parseFloat(c.coefficient);
+                                } else {
+                                    matiereManquante = true;
+                                }
+                            });
+
+                            const coefModeleGlobal = parseFloat(m.coefficient_general);
+
+                            if (!matiereManquante && coefExamen > 0) {
+                                examensComplets.push(nomExamen);
+                                if (coefModeleGlobal > 0) {
+                                    totalPointsGen += (ptsExamen / coefExamen) * coefModeleGlobal;
+                                    totalCoeffsGen += coefModeleGlobal;
+                                }
+                            } else {
+                                tousLesExamensComplets = false;
+                            }
+                        });
+
+                        if (totalCoeffsGen > 0 && tousLesExamensComplets) {
+                            moyenneFinale = totalPointsGen / totalCoeffsGen;
+                        } else {
+                            moyenneFinale = null;
+                            motifNonClasse = examensComplets.length > 0
+                                ? `Incomplet — Complétés : ${examensComplets.join(', ')}`
+                                : 'Aucun examen complété';
+                        }
+
+                    } else {
+                        const nomExamen = String(modele.nom_modele).trim();
                         const notesDeLExamen = notesDeLEleve[nomExamen] || {};
-                        const configsM = configs.filter(c => c.modele_examen_id === m.id);
-                        let ptsExamen = 0;
-                        let coefExamen = 0;
+                        const configsM = tousLesConfigs.filter(c => c.modele_examen_id === modele.id);
+                        let pts = 0;
+                        let coef = 0;
+                        let matiereManquante = false;
+
                         configsM.forEach(c => {
                             const noteTrouvee = notesDeLExamen[c.matiere_id];
                             if (noteTrouvee !== undefined) {
-                                ptsExamen += noteTrouvee * parseFloat(c.coefficient);
-                                coefExamen += parseFloat(c.coefficient);
+                                pts += noteTrouvee * parseFloat(c.coefficient);
+                                coef += parseFloat(c.coefficient);
+                            } else {
+                                matiereManquante = true;
                             }
                         });
-                        const coefModeleGlobal = parseFloat(m.coefficient_general);
-                        if (coefExamen > 0 && coefModeleGlobal > 0) {
-                            totalPointsGen += (ptsExamen / coefExamen) * coefModeleGlobal;
-                            totalCoeffsGen += coefModeleGlobal;
-                        }
-                    });
-                    if (totalCoeffsGen > 0) moyenneFinale = totalPointsGen / totalCoeffsGen;
-                } else {
-                    const nomExamen = String(modele.nom_modele).trim();
-                    const notesDeLExamen = notesDeLEleve[nomExamen] || {};
-                    const configsM = configs.filter(c => c.modele_examen_id === modele.id);
-                    let pts = 0;
-                    let coef = 0;
-                    let matiereManquante = false;   // ← AJOUT
 
-                    configsM.forEach(c => {
-                        const noteTrouvee = notesDeLExamen[c.matiere_id];
-                        if (noteTrouvee !== undefined) {
-                            pts += noteTrouvee * parseFloat(c.coefficient);
-                            coef += parseFloat(c.coefficient);
+                        if (coef > 0 && !matiereManquante) {
+                            moyenneFinale = pts / coef;
                         } else {
-                            matiereManquante = true;   // ← AJOUT : au moins une matière sans note
+                            const nb = configsM.filter(c => notesDeLExamen[c.matiere_id] !== undefined).length;
+                            motifNonClasse = configsM.length === 0
+                                ? 'Aucune matière configurée'
+                                : `Notes incomplètes (${nb}/${configsM.length} matières)`;
                         }
+                    }
+
+                    return {
+                        id: eleve.id,
+                        promotion: promo,
+                        population: getPopulation(eleve.statut),
+                        moyenne: moyenneFinale,
+                        motifNonClasse
+                    };
+                });
+
+                // Calcul des rangs par population
+                const populations = ['actif', 'conseil'];
+                for (const pop of populations) {
+                    const groupePop = moyennesEleves.filter(e => e.population === pop && e.moyenne !== null);
+                    const nonClasses = moyennesEleves.filter(e => e.population === pop && e.moyenne === null);
+
+                    groupePop.sort((a, b) => b.moyenne - a.moyenne);
+                    let rang = 0; let lastMoy = -1; let countAtRank = 1;
+
+                    groupePop.forEach((eleve, index) => {
+                        const moyArrondie = parseFloat(eleve.moyenne.toFixed(2));
+                        if (moyArrondie !== lastMoy) { rang += countAtRank; countAtRank = 1; }
+                        else { countAtRank++; }
+                        lastMoy = moyArrondie;
+                        const isEx = (groupePop[index + 1] && parseFloat(groupePop[index + 1].moyenne.toFixed(2)) === moyArrondie) ||
+                                     (groupePop[index - 1] && parseFloat(groupePop[index - 1].moyenne.toFixed(2)) === moyArrondie);
+                        statsToInsert.push([
+                            eleve.id, promo, pop, modele.nom_modele,
+                            eleve.moyenne.toFixed(2), isEx ? `${rang} ex` : `${rang}`, null
+                        ]);
                     });
 
-                    // ← MODIFIÉ : classé seulement si TOUTES les matières sont notées
-                    if (coef > 0 && !matiereManquante) {
-                        moyenneFinale = pts / coef;
-                    }
+                    nonClasses.forEach(eleve => {
+                        statsToInsert.push([
+                            eleve.id, promo, pop, modele.nom_modele,
+                            null, null, eleve.motifNonClasse
+                        ]);
+                    });
                 }
-
-                // APRÈS — on retourne aussi le motif et les élèves non classés
-                let motifNonClasse = null;
-
-                if (moyenneFinale === null) {
-                    if (!isGeneral) {
-                        const nomExamen = String(modele.nom_modele).trim();
-                        const notesDeLExamen = (notesIndex[eleve.id] || {})[nomExamen] || {};
-                        const configsM = configs.filter(c => c.modele_examen_id === modele.id);
-                        const nb = configsM.filter(c => notesDeLExamen[c.matiere_id] !== undefined).length;
-                        motifNonClasse = configsM.length === 0
-                            ? 'Aucune matière configurée'
-                            : `Notes incomplètes (${nb}/${configsM.length} matières)`;
-                    } else {
-                        motifNonClasse = 'Examen(s) manquant(s)';
-                    }
-                }
-
-                return {
-                    id: eleve.id,
-                    promotion: eleve.promotion,
-                    population: getPopulation(eleve.statut),
-                    moyenne: moyenneFinale,
-                    motifNonClasse
-                };
-            });
-
-            const promos = [...new Set(eleves.map(e => e.promotion))];
-            promos.forEach(promo => {
-                // Séparer classés et non classés
-                const groupePromo = moyennesEleves.filter(e => e.promotion === promo && e.moyenne !== null);
-                const nonClasses  = moyennesEleves.filter(e => e.promotion === promo && e.moyenne === null);
-
-                groupePromo.sort((a, b) => b.moyenne - a.moyenne);
-                let rang = 0; let lastMoy = -1; let countAtRank = 1;
-
-                groupePromo.forEach((eleve, index) => {
-                    const moyArrondie = parseFloat(eleve.moyenne.toFixed(2));
-                    if (moyArrondie !== lastMoy) { rang += countAtRank; countAtRank = 1; }
-                    else { countAtRank++; }
-                    lastMoy = moyArrondie;
-                    const isEx = (groupePromo[index + 1] && parseFloat(groupePromo[index + 1].moyenne.toFixed(2)) === moyArrondie) ||
-                                (groupePromo[index - 1] && parseFloat(groupePromo[index - 1].moyenne.toFixed(2)) === moyArrondie);
-                    statsToInsert.push([
-                        eleve.id, promo, eleve.population, modele.nom_modele,
-                        eleve.moyenne.toFixed(2), isEx ? `${rang} ex` : `${rang}`, null
-                    ]);
-                });
-
-                // Insérer les non classés avec moyenne NULL et rang NULL
-                nonClasses.forEach(eleve => {
-                    statsToInsert.push([
-                        eleve.id, promo, eleve.population, modele.nom_modele,
-                        null, null, eleve.motifNonClasse
-                    ]);
-                });
-            });
+            }
         }
 
         if (statsToInsert.length > 0) {
@@ -3750,12 +4010,13 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
             const chunkSize = 1000;
             for (let i = 0; i < statsToInsert.length; i += chunkSize) {
                 const chunk = statsToInsert.slice(i, i + chunkSize);
-              await connection.query(
-    "INSERT INTO statistiques_classement (eleve_id, promotion, population, type_examen, moyenne, rang, motif_non_classe) VALUES ?",
-    [chunk]
-);
+                await connection.query(
+                    "INSERT INTO statistiques_classement (eleve_id, promotion, population, type_examen, moyenne, rang, motif_non_classe) VALUES ?",
+                    [chunk]
+                );
             }
         }
+
         await connection.commit();
         res.json({ message: "Statistiques et classements générés avec succès." });
     } catch (err) {
@@ -3827,7 +4088,7 @@ app.get('/api/resultats/stats-eleve/:id', authenticateToken, async (req, res) =>
             };
         });
 
-        // ✅ Ajouter les examens avec notes mais pas encore dans statistiques_classement
+       
         Object.keys(notesParExamen).forEach(typeExamen => {
             const existeDeja = results.find(r => r.type_examen === typeExamen);
             if (!existeDeja) {
