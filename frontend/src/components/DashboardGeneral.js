@@ -361,22 +361,76 @@ const DashboardGeneral = () => {
                                             <td>{s.numero_incorporation}</td>
                                             <td>{s.moyenne}</td>
                                             <td>
-                                                {s.rang == null ? (
+                                            {s.rang == null ? (
+                                                <div>
+                                                    {/* Badge Non Classé */}
                                                     <span
                                                         className="status-badge"
-                                                        style={{ backgroundColor: '#6b7280' }}
+                                                        style={{ backgroundColor: '#6b7280', display: 'inline-block', marginBottom: '4px' }}
                                                         title={s.motif_non_classe || 'Notes incomplètes'}
                                                     >
                                                         <i className="fa fa-ban"></i> NON CLASSÉ
                                                     </span>
-                                                ) : null}
-                                                
-                                                <div className="badges-container">
-                                                    {decisionsSaved.some(d => d.eleve_id === s.id) && <span className="status-badge" style={{ backgroundColor: '#6f42c1' }}><i className="fa fa-gavel"></i> CONSEIL</span>}
-                                                    {((s.consultationDays || 0) >= 60 || parseFloat(s.moyenne) < 8) && <span className="status-badge" style={{ backgroundColor: '#000' }}><i className="fa fa-history"></i> RED?</span>}
-                                                    {(s.consultationDays || 0) > 0 && <span className="status-badge consultation-badge"><i className="fa fa-heartbeat"></i> {s.consultationDays}j</span>}
+
+                                                    {/* ✅ Badge examens complétés */}
+                                                    {s.motif_non_classe && s.motif_non_classe.includes('Complétés :') && (
+                                                        <div style={{ marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                                                            {s.motif_non_classe
+                                                                .split('Complétés :')[1]
+                                                                .split(',')
+                                                                .map(ex => ex.trim())
+                                                                .filter(Boolean)
+                                                                .map((examen, idx) => (
+                                                                    <span key={idx} style={{
+                                                                        backgroundColor: '#059669',
+                                                                        color: 'white',
+                                                                        padding: '2px 6px',
+                                                                        borderRadius: '4px',
+                                                                        fontSize: '0.7em',
+                                                                        fontWeight: 'bold'
+                                                                    }}>
+                                                                        ✓ {examen}
+                                                                    </span>
+                                                                ))
+                                                            }
+                                                        </div>
+                                                    )}
+
+                                                    {/* ✅ Si aucun examen complet */}
+                                                    {s.motif_non_classe && s.motif_non_classe.includes('Aucun examen') && (
+                                                        <div style={{ marginTop: '4px' }}>
+                                                            <span style={{
+                                                                backgroundColor: '#ef4444',
+                                                                color: 'white',
+                                                                padding: '2px 6px',
+                                                                borderRadius: '4px',
+                                                                fontSize: '0.7em'
+                                                            }}>
+                                                                Aucun examen complété
+                                                            </span>
+                                                        </div>
+                                                    )}
                                                 </div>
-                                            </td>
+                                            ) : null}
+
+                                            <div className="badges-container">
+                                                {decisionsSaved?.some(d => d.eleve_id === s.id) && (
+                                                    <span className="status-badge" style={{ backgroundColor: '#6f42c1' }}>
+                                                        <i className="fa fa-gavel"></i> CONSEIL
+                                                    </span>
+                                                )}
+                                                {((s.consultationDays || 0) >= 60 || parseFloat(s.moyenne) < 8) && (
+                                                    <span className="status-badge" style={{ backgroundColor: '#000' }}>
+                                                        <i className="fa fa-history"></i> RED?
+                                                    </span>
+                                                )}
+                                                {(s.consultationDays || 0) > 0 && (
+                                                    <span className="status-badge consultation-badge">
+                                                        <i className="fa fa-heartbeat"></i> {s.consultationDays}j
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
                                         </tr>
                                     ))}
                                 </tbody>

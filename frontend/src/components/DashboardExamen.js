@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, Link,useLocation  } from 'react-router-dom';
+import { useParams, Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -17,6 +17,12 @@ const normalizeStudentData = (s) => {
         id: s.id || s.eleve_id || s.eleveId,
         numero_incorporation: s.numero_incorporation || s.numeroIncorporation || s.incorp
     };
+};
+
+const formatNom = (nom) => nom ? nom.toUpperCase() : '';
+const formatPrenom = (prenom) => {
+    if (!prenom) return '';
+    return prenom.toLowerCase().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 };
 
 const StatCardRedesign = ({ title, value, subValue, onClick, highlight = false, isLoading = false, icon, onExportExcel, onExportPdf }) => (
@@ -47,10 +53,8 @@ const getOverlappingDays = (start1, end1, limitStart, limitEnd) => {
     const e1 = end1 ? new Date(end1).getTime() : s1;
     const s2 = limitStart ? new Date(limitStart).getTime() : -Infinity;
     const e2 = limitEnd ? new Date(limitEnd).getTime() : Infinity;
-
     const maxStart = Math.max(s1, s2);
     const minEnd = Math.min(e1, e2);
-
     if (maxStart <= minEnd) {
         return Math.ceil((minEnd - maxStart) / (1000 * 60 * 60 * 24)) + 1;
     }
@@ -88,12 +92,11 @@ const DashboardExamen = () => {
     const [elevesIncomplets, setElevesIncomplets] = useState([]);
     const [searchIncomplets, setSearchIncomplets] = useState('');
 
-    // ✅ DÉPLACEZ CES LIGNES ICI - AVANT les useEffect
-    const selectedPromotion = location.state?.promotion 
-        || localStorage.getItem('selectedPromotion') 
+    const selectedPromotion = location.state?.promotion
+        || localStorage.getItem('selectedPromotion')
         || 'all';
     const selectedPopulation = location.state?.population || 'actif';
-    const apiPopulation = selectedPopulation === 'total' ? 'actif' : selectedPopulation; // ✅ ICI
+    const apiPopulation = selectedPopulation === 'total' ? 'actif' : selectedPopulation;
 
     const [summary, setSummary] = useState(null);
     const [details, setDetails] = useState(null);
@@ -110,18 +113,115 @@ const DashboardExamen = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [classementWithRawDetails, setClassementWithRawDetails] = useState([]);
     const [isDataReady, setIsDataReady] = useState(false);
-const getFilteredIncomplets = (term) => {
-    return elevesIncomplets.filter(s => {
-        const search = term.toLowerCase();
-        const nomComplet = `${s.prenom} ${s.nom}`.toLowerCase();
-        const incorp = String(s.numero_incorporation || '').toLowerCase();
-        return nomComplet.includes(search) || incorp.includes(search);
-    });
-};
-    
+
+    const getFilteredIncomplets = (term) => {
+        return elevesIncomplets.filter(s => {
+            const search = term.toLowerCase();
+            const nomComplet = `${s.prenom} ${s.nom}`.toLowerCase();
+            const incorp = String(s.numero_incorporation || '').toLowerCase();
+            return nomComplet.includes(search) || incorp.includes(search);
+        });
+    };
+
+    // ── Export classement complet PDF ─────────────────────────────────────────
+    const handleExportClassementPDF = () => {
+        const doc = new jsPDF();
+
+        // En-tête
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text("SECRETARIAT D'ETAT / CGN / EGN AMBOSITRA", 55, 15, { align: 'center' });
+        doc.text("REPOBLIKAN'I MADAGASIKARA", 155, 15, { align: 'center' });
+
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text(
+            `CLASSEMENT — ${typeExamen.replace(/_/g, ' ')}`,
+            105, 35, { align: 'center' }
+        );
+        if (selectedPromotion !== 'all') {
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`Promotion : ${selectedPromotion}`, 105, 43, { align: 'center' });
+        }
+
+        const classes = filteredClassement.filter(s => s.rang != null);
+        const nonClasses = filteredClassement.filter(s => s.rang == null);
+        const ordonne = [...classes, ...nonClasses];
+
+        const body = ordonne.map(s => [
+            s.rang != null ? s.rang : 'Non classé',
+            `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
+            s.numero_incorporation || '',
+            s.moyenne != null ? s.moyenne : '-'
+        ]);
+
+        autoTable(doc, {
+            startY: selectedPromotion !== 'all' ? 50 : 43,
+            head: [['RANG', 'NOM ET PRÉNOM', 'N° INCORPORATION', 'MOYENNE']],
+            body,
+            theme: 'plain',
+            styles: {
+                font: 'helvetica',
+                textColor: [0, 0, 0],
+                lineColor: [0, 0, 0],
+                lineWidth: 0.1,
+                fontSize: 10,
+                cellPadding: 3
+            },
+            headStyles: {
+                fontStyle: 'bold',
+                fillColor: false,
+                textColor: [0, 0, 0],
+                halign: 'center'
+            },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 25 },
+                1: { halign: 'left' },
+                2: { halign: 'center', cellWidth: 40 },
+                3: { halign: 'center', cellWidth: 25 }
+            }
+        });
+
+        const dateStr = new Date().toLocaleDateString('fr-FR');
+        const finalY = doc.lastAutoTable.finalY + 15;
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Édité le ${dateStr}`, 14, finalY);
+
+        doc.save(`Classement_${typeExamen}_${selectedPromotion}.pdf`);
+    };
+
+    // ── Export classement complet Excel ───────────────────────────────────────
+    const handleExportClassementExcel = () => {
+        const classes = filteredClassement.filter(s => s.rang != null);
+        const nonClasses = filteredClassement.filter(s => s.rang == null);
+        const ordonne = [...classes, ...nonClasses];
+
+        const data = ordonne.map(s => ({
+            'RANG': s.rang != null ? s.rang : 'Non classé',
+            'NOM ET PRÉNOM': `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
+            'N° INCORPORATION': s.numero_incorporation || '',
+            'MOYENNE': s.moyenne != null ? s.moyenne : '-'
+        }));
+
+        const ws = xlsx.utils.json_to_sheet(data);
+
+        // Largeurs colonnes
+        ws['!cols'] = [
+            { wch: 12 },
+            { wch: 35 },
+            { wch: 20 },
+            { wch: 12 }
+        ];
+
+        const wb = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(wb, ws, `${typeExamen}`);
+        xlsx.writeFile(wb, `Classement_${typeExamen}_${selectedPromotion}.xlsx`);
+    };
+
     useEffect(() => {
         if (!typeExamen) return;
-
         setClassementWithRawDetails([]);
         setIsDataReady(false);
         setLoading(true);
@@ -130,14 +230,15 @@ const getFilteredIncomplets = (term) => {
             try {
                 const token = localStorage.getItem('token');
                 const headers = { Authorization: `Bearer ${token}` };
-                
-                const [summaryRes, detailsRes, subjectsRes, configRes,incompletRes] = await Promise.all([
+
+                const [summaryRes, detailsRes, subjectsRes, configRes, incompletRes] = await Promise.all([
                     axios.get(`/api/dashboard/summary-by-exam-type?promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
                     axios.get(`/api/resultats/classement-details?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
                     axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}?promotion=${selectedPromotion}`, { headers }),
                     axios.get('/api/configuration/examens', { headers }),
                     axios.get(`/api/resultats/sans-note-complete?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers })
                 ]);
+
                 setElevesIncomplets(incompletRes.data || []);
 
                 const examConfig = configRes.data.find(c => c.nom_modele === typeExamen);
@@ -146,28 +247,15 @@ const getFilteredIncomplets = (term) => {
                     if (examConfig.date_fin) setEndDate(examConfig.date_fin.split('T')[0]);
                 }
 
-               
                 const examSummary = summaryRes.data.find(e => e.typeExamen === typeExamen);
-            
+
                 if (detailsRes.data) {
-                   
-                    setSummary(examSummary || { 
-                        typeExamen, 
-                        stats: { 
-                            totalEleves: 0, 
-                            participants: 0, 
-                            complets: 0, 
-                            incomplets: 0, 
-                            moyenne: '0.00', 
-                            min: '0.00', 
-                            max: '0.00' 
-                        } 
+                    setSummary(examSummary || {
+                        typeExamen,
+                        stats: { totalEleves: 0, participants: 0, complets: 0, incomplets: 0, moyenne: '0.00', min: '0.00', max: '0.00' }
                     });
                     const normalizedClassement = (detailsRes.data.classement || []).map(normalizeStudentData);
-                    setDetails({
-                        ...detailsRes.data,
-                        classement: normalizedClassement
-                    });
+                    setDetails({ ...detailsRes.data, classement: normalizedClassement });
                     setSubjectStats(subjectsRes.data || []);
                 } else {
                     setError(`Aucune donnée pour l'examen : ${typeExamen.replace(/_/g, ' ')}`);
@@ -182,129 +270,99 @@ const getFilteredIncomplets = (term) => {
         fetchData();
     }, [typeExamen, apiPopulation, selectedPromotion]);
 
-    
-   
+    useEffect(() => {
+        if (!details || details.classement.length === 0) return;
+        if (isDataReady) return;
 
-useEffect(() => {
-    if (!details || details.classement.length === 0) return;
-    if (isDataReady) return;
+        let isMounted = true;
 
-    let isMounted = true;
+        const fetchAllExtraData = async () => {
+            const rawStudents = details.classement;
+            const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
+            const incorporations = rawStudents.map(s => String(s.numero_incorporation));
 
-    const fetchAllExtraData = async () => {
-    const rawStudents = details.classement;
-    const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
-    const incorporations = rawStudents.map(s => String(s.numero_incorporation));
+            try {
+                const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
+                    axios.post(`${EXTERNAL_API_BASE_URL}/api/sanctions/bulk`,
+                        { incorporations, cour: courNormalise }, { timeout: 5000 }),
+                    axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
+                        { incorporations, cour: courNormalise }, { timeout: 5000 }),
+                    axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+                        { incorporations, cour: courNormalise }, { timeout: 5000 })
+                ]);
 
-    try {
-        // ✅ REMPLACEZ sancRes - GET → POST /bulk
-        const [sancRes, consultRes, absenceRes] = await Promise.allSettled([
-            axios.post(`${EXTERNAL_API_BASE_URL}/api/sanctions/bulk`,
-                { incorporations, cour: courNormalise },
-                { timeout: 5000 }
-            ),
-            axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
-                { incorporations, cour: courNormalise },
-                { timeout: 5000 }
-            ),
-            axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
-                { incorporations, cour: courNormalise },
-                { timeout: 5000 }
-            )
-        ]);
+                const allSanctions     = sancRes.status    === 'fulfilled' ? sancRes.value.data    : [];
+                const allConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
+                const allAbsences      = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
 
-        const allSanctions     = sancRes.status    === 'fulfilled' ? sancRes.value.data    : [];
-        const allConsultations = consultRes.status === 'fulfilled' ? consultRes.value.data : [];
-        const allAbsences      = absenceRes.status === 'fulfilled' ? absenceRes.value.data : [];
+                const consultationsMap = {};
+                allConsultations.forEach(c => {
+                    const incorp = String(c.Eleve?.numeroIncorporation || '');
+                    if (!consultationsMap[incorp]) consultationsMap[incorp] = [];
+                    consultationsMap[incorp].push(c);
+                });
 
-        // Grouper consultations par incorporation
-        const consultationsMap = {};
-        allConsultations.forEach(c => {
-            const incorp = String(c.Eleve?.numeroIncorporation || '');
-            if (!consultationsMap[incorp]) consultationsMap[incorp] = [];
-            consultationsMap[incorp].push(c);
-        });
+                const absencesMap = {};
+                allAbsences.forEach(a => {
+                    const incorp = String(a.Eleve?.numeroIncorporation || '');
+                    if (!absencesMap[incorp]) absencesMap[incorp] = [];
+                    absencesMap[incorp].push(a);
+                });
 
-        // Grouper absences par incorporation
-        const absencesMap = {};
-        allAbsences.forEach(a => {
-            const incorp = String(a.Eleve?.numeroIncorporation || '');
-            if (!absencesMap[incorp]) absencesMap[incorp] = [];
-            absencesMap[incorp].push(a);
-        });
+                const sanctionsMap = {};
+                allSanctions.forEach(s => {
+                    const incorp = String(s.Eleve?.numeroIncorporation || '');
+                    if (!sanctionsMap[incorp]) sanctionsMap[incorp] = [];
+                    sanctionsMap[incorp].push(s);
+                });
 
-        // ✅ NOUVEAU - Grouper sanctions par incorporation (depuis bulk)
-        const sanctionsMap = {};
-        allSanctions.forEach(s => {
-            const incorp = String(s.Eleve?.numeroIncorporation || '');
-            if (!sanctionsMap[incorp]) sanctionsMap[incorp] = [];
-            sanctionsMap[incorp].push(s);
-        });
+                const allEnrichedStudents = rawStudents.map(student => {
+                    const incorp = String(student.numero_incorporation || '').trim();
+                    return {
+                        ...student,
+                        rawConsultations: consultationsMap[incorp] || [],
+                        rawAbsences:      absencesMap[incorp]      || [],
+                        sanctionCount:    (sanctionsMap[incorp]    || []).length
+                    };
+                });
 
-        const allEnrichedStudents = rawStudents.map(student => {
-            const incorp = String(student.numero_incorporation || '').trim();
-
-            const rawConsultations = consultationsMap[incorp] || [];
-            const rawAbsences      = absencesMap[incorp]      || [];
-
-            // ✅ REMPLACEZ l'ancien filtre par sanctionsMap
-            const studentSanc = sanctionsMap[incorp] || [];
-
-            return {
-                ...student,
-                rawConsultations,
-                rawAbsences,
-                sanctionCount: studentSanc.length
-            };
-        });
-
-        if (isMounted) {
-            setClassementWithRawDetails(allEnrichedStudents);
-            setIsDataReady(true);
-        }
-    } catch (err) {
-        console.error("Erreur bulk load", err);
-        if (isMounted) {
-            setClassementWithRawDetails(rawStudents);
-            setIsDataReady(true);
-        }
-    }
-};
-
-    fetchAllExtraData();
-    return () => { isMounted = false; };
-}, [details, isDataReady, selectedPromotion]);
-
-  const sourceDataDynamique = useMemo(() => {
-    if (!isDataReady) return details ? details.classement : [];
-    return classementWithRawDetails.map(student => {
-        let consultationDays = 0;
-        if (Array.isArray(student.rawConsultations)) {
-            student.rawConsultations.forEach(c => {
-                // ✅ Si pas de dateArrive, on utilise aujourd'hui
-                const dateArriveEffective = c.dateArrive || new Date().toISOString();
-                consultationDays += getOverlappingDays(
-                    c.dateDepart, 
-                    dateArriveEffective, 
-                    startDate, 
-                    endDate
-                );
-            });
-        }
-
-        let absenceDays = 0;
-        if (Array.isArray(student.rawAbsences)) {
-            student.rawAbsences.forEach(a => {
-                const dateCible = a.date || a.dateDebut || a.createdAt || new Date();
-                if (getOverlappingDays(dateCible, dateCible, startDate, endDate) > 0) {
-                    absenceDays++;
+                if (isMounted) {
+                    setClassementWithRawDetails(allEnrichedStudents);
+                    setIsDataReady(true);
                 }
-            });
-        }
+            } catch (err) {
+                if (isMounted) {
+                    setClassementWithRawDetails(rawStudents);
+                    setIsDataReady(true);
+                }
+            }
+        };
 
-        return { ...student, consultationDays, absenceDays };
-    });
-}, [classementWithRawDetails, isDataReady, startDate, endDate, details]);
+        fetchAllExtraData();
+        return () => { isMounted = false; };
+    }, [details, isDataReady, selectedPromotion]);
+
+    const sourceDataDynamique = useMemo(() => {
+        if (!isDataReady) return details ? details.classement : [];
+        return classementWithRawDetails.map(student => {
+            let consultationDays = 0;
+            if (Array.isArray(student.rawConsultations)) {
+                student.rawConsultations.forEach(c => {
+                    const dateArriveEffective = c.dateArrive || new Date().toISOString();
+                    consultationDays += getOverlappingDays(c.dateDepart, dateArriveEffective, startDate, endDate);
+                });
+            }
+            let absenceDays = 0;
+            if (Array.isArray(student.rawAbsences)) {
+                student.rawAbsences.forEach(a => {
+                    const dateCible = a.date || a.dateDebut || a.createdAt || new Date();
+                    if (getOverlappingDays(dateCible, dateCible, startDate, endDate) > 0) absenceDays++;
+                });
+            }
+            return { ...student, consultationDays, absenceDays };
+        });
+    }, [classementWithRawDetails, isDataReady, startDate, endDate, details]);
+
     const showModalWithData = (title, columns, data) => {
         setModalTitle(title);
         setModalColumns(columns);
@@ -320,94 +378,110 @@ useEffect(() => {
     const sourceData = sourceDataDynamique;
     const totalStudents = sourceData.length;
 
-    const elevesEnDifficulte = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 10);
-    const matieresReussite = subjectStats.filter(m => m.moyenne >= 12);
-    const matieresEchec = subjectStats.filter(m => m.moyenne < 12);
-
-    const studentsSup12 = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) >= 12);
-    const countSup12 = studentsSup12.length;
-    const percentSup12 = totalStudents > 0 ? ((countSup12 / totalStudents) * 100).toFixed(1) : '0.0';
-
-    const studentsInf12 = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 12);
-    const countInf12 = studentsInf12.length;
-    const percentInf12 = totalStudents > 0 ? ((countInf12 / totalStudents) * 100).toFixed(1) : '0.0';
-
-    const validMoyennes = sourceData.filter(s => s.moyenne !== null).map(s => parseFloat(s.moyenne));
-    const minMoyenneVal = validMoyennes.length > 0 ? Math.min(...validMoyennes).toFixed(2) : '0.00';
-    const maxMoyenneVal = validMoyennes.length > 0 ? Math.max(...validMoyennes).toFixed(2) : '0.00';
-
-    const studentsWithMin = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne).toFixed(2) === minMoyenneVal);
-    const studentsWithMax = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne).toFixed(2) === maxMoyenneVal);
-
-    const elevesConsultation = sourceData.filter(s => s.consultationDays > 0).sort((a, b) => b.consultationDays - a.consultationDays);
-    const countConsultations = isDataReady ? elevesConsultation.length : '...';
-
-    const elevesSanctionnes = sourceData.filter(s => s.sanctionCount > 0).sort((a, b) => b.sanctionCount - a.sanctionCount);
-    const countSanctions = isDataReady ? elevesSanctionnes.length : '...';
-
-    // NOUVEAU : Regroupement Absences + Indisponibilités (Consultations) dans l'intervalle
-    const elevesIndisponibles = sourceData.filter(s => s.absenceDays > 0 || s.consultationDays > 0);
-    const countIndisponibles = isDataReady ? elevesIndisponibles.length : '...';
+    const elevesEnDifficulte   = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 10);
+    const matieresReussite     = subjectStats.filter(m => m.moyenne >= 12);
+    const matieresEchec        = subjectStats.filter(m => m.moyenne < 12);
+    const studentsSup12        = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) >= 12);
+    const countSup12           = studentsSup12.length;
+    const percentSup12         = totalStudents > 0 ? ((countSup12 / totalStudents) * 100).toFixed(1) : '0.0';
+    const studentsInf12        = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne) < 12);
+    const countInf12           = studentsInf12.length;
+    const percentInf12         = totalStudents > 0 ? ((countInf12 / totalStudents) * 100).toFixed(1) : '0.0';
+    const validMoyennes        = sourceData.filter(s => s.moyenne !== null).map(s => parseFloat(s.moyenne));
+    const minMoyenneVal        = validMoyennes.length > 0 ? Math.min(...validMoyennes).toFixed(2) : '0.00';
+    const maxMoyenneVal        = validMoyennes.length > 0 ? Math.max(...validMoyennes).toFixed(2) : '0.00';
+    const studentsWithMin      = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne).toFixed(2) === minMoyenneVal);
+    const studentsWithMax      = sourceData.filter(s => s.moyenne !== null && parseFloat(s.moyenne).toFixed(2) === maxMoyenneVal);
+    const elevesConsultation   = sourceData.filter(s => s.consultationDays > 0).sort((a, b) => b.consultationDays - a.consultationDays);
+    const countConsultations   = isDataReady ? elevesConsultation.length : '...';
+    const elevesSanctionnes    = sourceData.filter(s => s.sanctionCount > 0).sort((a, b) => b.sanctionCount - a.sanctionCount);
+    const countSanctions       = isDataReady ? elevesSanctionnes.length : '...';
+    const elevesIndisponibles  = sourceData.filter(s => s.absenceDays > 0 || s.consultationDays > 0);
+    const countIndisponibles   = isDataReady ? elevesIndisponibles.length : '...';
 
     const mapMoyenne = (list) => list.map(s => ({
-        ...s, nomComplet: `${s.prenom} ${s.nom}`,
+        ...s,
+        nomComplet: `${s.prenom} ${s.nom}`,
         actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
     }));
-    const standardColumns = [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'moyenne', header: 'Moyenne' }, { key: 'actionBtn', header: 'Action' }];
 
-    const handleSup12Click = () => showModalWithData('Élèves Moyenne ≥ 12', standardColumns, mapMoyenne(studentsSup12));
-    const handleInf12Click = () => showModalWithData('Élèves Moyenne < 12', standardColumns, mapMoyenne(studentsInf12));
-    const handleMaxClick = () => showModalWithData(`Meilleure Moyenne (${maxMoyenneVal})`, standardColumns, mapMoyenne(studentsWithMax));
-    const handleMinClick = () => showModalWithData(`Moyenne la plus basse (${minMoyenneVal})`, standardColumns, mapMoyenne(studentsWithMin));
+    const standardColumns = [
+        { key: 'rang',               header: 'Rang'          },
+        { key: 'nomComplet',         header: 'Nom'           },
+        { key: 'numero_incorporation', header: 'N° Inc.'     },
+        { key: 'moyenne',            header: 'Moyenne'       },
+        { key: 'actionBtn',          header: 'Action'        }
+    ];
+
+    const handleSup12Click      = () => showModalWithData('Élèves Moyenne ≥ 12', standardColumns, mapMoyenne(studentsSup12));
+    const handleInf12Click      = () => showModalWithData('Élèves Moyenne < 12', standardColumns, mapMoyenne(studentsInf12));
+    const handleMaxClick        = () => showModalWithData(`Meilleure Moyenne (${maxMoyenneVal})`, standardColumns, mapMoyenne(studentsWithMax));
+    const handleMinClick        = () => showModalWithData(`Moyenne la plus basse (${minMoyenneVal})`, standardColumns, mapMoyenne(studentsWithMin));
     const handleDifficulteClick = () => showModalWithData('Élèves en Difficulté (< 10/20)', standardColumns, mapMoyenne(elevesEnDifficulte));
 
     const handleAbsentsClick = () => {
         if (!isDataReady) return;
         const mappedData = elevesIndisponibles.map(s => ({
-            ...s, 
-            nomComplet: `${s.prenom} ${s.nom}`, 
-            motifIndisponibilite: s.consultationDays > 0 && s.absenceDays > 0 ? `Consultation (${s.consultationDays}j) & Absence (${s.absenceDays}j)` : (s.consultationDays > 0 ? `Consultation Médicale (${s.consultationDays}j)` : `Absence (${s.absenceDays}j)`),
+            ...s,
+            nomComplet: `EG ${s.prenom} ${s.nom}`,
+            numero: s.numero_incorporation,
+            motifIndisponibilite: s.consultationDays > 0 && s.absenceDays > 0
+                ? `Consultation Externe (${s.consultationDays}j) / Absence Total(${s.absenceDays}j)`
+                : (s.consultationDays > 0
+                    ? `Consultation Médicale (${s.consultationDays}j)`
+                    : `Absence (${s.absenceDays}j)`),
+            totalJours: s.absenceDays,
             actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
-        }));
-        showModalWithData('Absents / Indisponibles', [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }, { key: 'actionBtn', header: 'Action' }], mappedData);
+        })).sort((a, b) => b.totalJours - a.totalJours);
+
+        showModalWithData('Absents / Indisponibles', [
+            { key: 'rang',                 header: 'Rang'        },
+            { key: 'nomComplet',           header: 'Nom'         },
+            { key: 'numero',               header: 'N° Inc.'     },
+            { key: 'motifIndisponibilite', header: 'Motif'       },
+            { key: 'totalJours',           header: 'Total Jours' },
+            { key: 'actionBtn',            header: 'Action'      }
+        ], mappedData);
     };
 
     const handleConsultationClick = () => {
         if (!isDataReady) return;
-        const modalCols = [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom Complet' }, { key: 'consultationDays', header: 'Jours Consultation' }, { key: 'actionBtn', header: 'Action' }];
-        showModalWithData('Élèves avec le plus de jours de consultation', modalCols, mapMoyenne(elevesConsultation));
+        showModalWithData('Élèves avec le plus de jours de consultation',
+            [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom Complet' }, { key: 'consultationDays', header: 'Jours Consultation' }, { key: 'actionBtn', header: 'Action' }],
+            mapMoyenne(elevesConsultation)
+        );
     };
 
     const handleSanctionsClick = () => {
         if (!isDataReady) return;
         const mappedData = elevesSanctionnes.map(s => ({
-            ...s, nomComplet: `${s.prenom} ${s.nom}`, incorporation: s.numero_incorporation, sanctionCountDisplay: `${s.sanctionCount} sanction(s)`,
+            ...s,
+            nomComplet: `${s.prenom} ${s.nom}`,
+            incorporation: s.numero_incorporation,
+            sanctionCountDisplay: `${s.sanctionCount} sanction(s)`,
             actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
         }));
-        const modalCols = [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'incorporation', header: 'Incorp.' }, { key: 'sanctionCountDisplay', header: 'Nombre' }, { key: 'actionBtn', header: 'Action' }];
-        showModalWithData('Liste des Élèves Sanctionnés', modalCols, mappedData);
+        showModalWithData('Liste des Élèves Sanctionnés',
+            [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'incorporation', header: 'Incorp.' }, { key: 'sanctionCountDisplay', header: 'Nombre' }, { key: 'actionBtn', header: 'Action' }],
+            mappedData
+        );
     };
 
-const filteredClassement = useMemo(() => {
-    const search = (searchTerm || '').toLowerCase();
-    
-    const filtered = (sourceData || []).filter(student => {
-        const fullName = `${student.prenom || ''} ${student.nom || ''}`.toLowerCase();
-        const incorp = (student.numero_incorporation || '').toLowerCase();
-        return fullName.includes(search) || incorp.includes(search);
-    });
-
-    const classes = filtered.filter(s => s.rang != null);
-    const nonClasses = filtered.filter(s => s.rang == null);
-
-    return [...classes, ...nonClasses];
-}, [sourceData, searchTerm]);
+    const filteredClassement = useMemo(() => {
+        const search = (searchTerm || '').toLowerCase();
+        const filtered = (sourceData || []).filter(student => {
+            const fullName = `${student.prenom || ''} ${student.nom || ''}`.toLowerCase();
+            const incorp   = (student.numero_incorporation || '').toLowerCase();
+            return fullName.includes(search) || incorp.includes(search);
+        });
+        const classes    = filtered.filter(s => s.rang != null);
+        const nonClasses = filtered.filter(s => s.rang == null);
+        return [...classes, ...nonClasses];
+    }, [sourceData, searchTerm]);
 
     if (loading) return <div className="card"><h2>Chargement...</h2></div>;
-    if (error) return <div className="card"><h2>{error}</h2></div>;
+    if (error)   return <div className="card"><h2>{error}</h2></div>;
     if (!summary || !details) return <div className="card"><h2>Aucune donnée disponible.</h2></div>;
-
-
 
     return (
         <div className="dashboard-redesign-container">
@@ -434,174 +508,170 @@ const filteredClassement = useMemo(() => {
                 />
             )}
 
+            {/* ── En-tête ── */}
             <div className="top-header-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div className="header-left">
-                    <Link to="/dashboard" className="back-btn-circle" title="Retour au menu"><i className="fa fa-arrow-left"></i></Link>
-                    
+                    <Link to="/dashboard" className="back-btn-circle" title="Retour au menu">
+                        <i className="fa fa-arrow-left"></i>
+                    </Link>
                     <h1>{typeExamen.replace(/_/g, ' ')}</h1>
                     {selectedPromotion !== 'all' && (
-                    <span className="promotion-badge">
-                    Promotion : {selectedPromotion}
-                    </span>
-                     )}
+                        <span className="promotion-badge">Promotion : {selectedPromotion}</span>
+                    )}
                 </div>
+
                 <div className="header-right-filters" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                    {/* ── Boutons export classement complet ── */}
+                    <button
+                        onClick={handleExportClassementPDF}
+                        disabled={filteredClassement.length === 0}
+                        style={{
+                            backgroundColor: '#dc3545', color: 'white',
+                            padding: '0.6rem 1.1rem', borderRadius: '8px',
+                            border: 'none', cursor: 'pointer', fontWeight: 'bold',
+                            display: 'flex', alignItems: 'center', gap: '7px',
+                            opacity: filteredClassement.length === 0 ? 0.5 : 1
+                        }}
+                        title="Exporter le classement complet en PDF"
+                    >
+                        <i className="fa fa-file-pdf-o"></i> PDF
+                    </button>
+                    <button
+                        onClick={handleExportClassementExcel}
+                        disabled={filteredClassement.length === 0}
+                        style={{
+                            backgroundColor: '#28a745', color: 'white',
+                            padding: '0.6rem 1.1rem', borderRadius: '8px',
+                            border: 'none', cursor: 'pointer', fontWeight: 'bold',
+                            display: 'flex', alignItems: 'center', gap: '7px',
+                            opacity: filteredClassement.length === 0 ? 0.5 : 1
+                        }}
+                        title="Exporter le classement complet en Excel"
+                    >
+                        <i className="fa fa-file-excel-o"></i> Excel
+                    </button>
+
                     <div className="filter-group">
-                        <label style={{ fontSize: '12px', fontWeight: 'bold' }}>Début Période Examen :</label>
+                        <label style={{ fontSize: '12px', fontWeight: 'bold' }}>Début Période :</label>
                         <input type="date" className="form-control" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
                     </div>
                     <div className="filter-group">
-                        <label style={{ fontSize: '12px', fontWeight: 'bold' }}>Fin Période Examen :</label>
+                        <label style={{ fontSize: '12px', fontWeight: 'bold' }}>Fin Période :</label>
                         <input type="date" className="form-control" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
                     </div>
                 </div>
             </div>
 
+            {/* ── Cards stats ── */}
             <div className="dashboard-redesign-header">
                 <div className="stats-grid">
-                    <StatCardRedesign 
-    title="Total Promotion" 
-    value={summary?.stats?.totalEleves || 0}
-    subValue="Élèves inscrits"
-    icon="fa-graduation-cap" 
-/>
-<StatCardRedesign 
-    title="Dossiers Complets" 
-    value={summary?.stats?.complets || 0}
-    subValue={`${summary?.stats?.totalEleves > 0 
-        ? ((summary.stats.complets / summary.stats.totalEleves) * 100).toFixed(1) 
-        : 0}% complétés`}
-    highlight={summary?.stats?.complets === summary?.stats?.totalEleves}
-    icon="fa-check-square" 
-/>
-<StatCardRedesign 
-    title="Dossiers Incomplets" 
-    value={summary?.stats?.incomplets || 0}
-    subValue="Notes manquantes"
-    highlight={summary?.stats?.incomplets > 0}
-    icon="fa-exclamation-circle"
-    onClick={() => {
-        const filtered = getFilteredIncomplets(searchIncomplets);
-        const data = filtered.map((s, index) => ({
-            ...s,
-            numeroOrdre: index + 1,
-            nomComplet: `${s.prenom} ${s.nom}`,
-            matiereManquantesDisplay: s.matiereManquantes.join(', '),
-            progression: `${s.notesPresentes}/${s.totalMatieres} matières`,
-            actionBtn: (
-                <button 
-                    className="btn-details-action" 
-                    onClick={(e) => { 
-                        e.stopPropagation(); 
-                        handleStudentSelectFromModal(s); 
-                    }}
-                >
-                    <i className="fa fa-eye"></i> Détail
-                </button>
-            )
-        }));
-
-        // ✅ Ajout barre recherche dans le titre via un composant inline
-        setModalTitle(
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                <span>Élèves Incomplets ({elevesIncomplets.length})</span>
-                <input
-                    type="text"
-                    placeholder="Rechercher nom ou N° inc..."
-                    style={{
-                        padding: '6px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid #e2e8f0',
-                        fontSize: '0.85rem',
-                        width: '220px'
-                    }}
-                    onChange={(e) => {
-                        setSearchIncomplets(e.target.value);
-                        // Rafraîchit les données filtrées
-                        const newFiltered = getFilteredIncomplets(e.target.value);
-                        setModalData(newFiltered.map((s, index) => ({
-                            ...s,
-                            numeroOrdre: index + 1,
-                            nomComplet: `${s.prenom} ${s.nom}`,
-                            matiereManquantesDisplay: s.matiereManquantes.join(', '),
-                            progression: `${s.notesPresentes}/${s.totalMatieres} matières`,
-                            actionBtn: (
-                                <button 
-                                    className="btn-details-action" 
-                                    onClick={(ev) => { 
-                                        ev.stopPropagation(); 
-                                        handleStudentSelectFromModal(s); 
-                                    }}
-                                >
-                                    <i className="fa fa-eye"></i> Détail
-                                </button>
-                            )
-                        })));
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                />
-            </div>
-        );
-        setModalColumns([
-            { key: 'numeroOrdre', header: 'N° Ordre' },
-            { key: 'nomComplet', header: 'Nom Complet' },
-            { key: 'numero_incorporation', header: 'N° Inc.' },
-            { key: 'progression', header: 'Progression' },
-            { key: 'matiereManquantesDisplay', header: 'Matières Manquantes' },
-            { key: 'actionBtn', header: 'Action' }
-        ]);
-        setModalData(data);
-        setIsModalLoading(false);
-    }}
-/>
-                    <StatCardRedesign title="Participants" value={summary.stats.participants} icon="fa-users" />
-                    
-                    <StatCardRedesign title="Moyenne Max" value={maxMoyenneVal} subValue="Note la plus haute" onClick={handleMaxClick} highlight={true} icon="fa-trophy" 
+                    <StatCardRedesign
+                        title="Total Promotion"
+                        value={summary?.stats?.totalEleves || 0}
+                        subValue="Élèves inscrits"
+                        icon="fa-graduation-cap"
+                    />
+                    <StatCardRedesign
+                        title="Dossiers Complets"
+                        value={summary?.stats?.complets || 0}
+                        subValue={`${summary?.stats?.totalEleves > 0 ? ((summary.stats.complets / summary.stats.totalEleves) * 100).toFixed(1) : 0}% complétés`}
+                        highlight={summary?.stats?.complets === summary?.stats?.totalEleves}
+                        icon="fa-check-square"
+                    />
+                    <StatCardRedesign
+                        title="Dossiers Incomplets"
+                        value={summary?.stats?.incomplets || 0}
+                        subValue="Notes manquantes"
+                        highlight={summary?.stats?.incomplets > 0}
+                        icon="fa-exclamation-circle"
+                        onClick={() => {
+                            const filtered = getFilteredIncomplets(searchIncomplets);
+                            const data = filtered.map((s, index) => ({
+                                ...s,
+                                numeroOrdre: index + 1,
+                                nomComplet: `${s.prenom} ${s.nom}`,
+                                matiereManquantesDisplay: s.matiereManquantes.join(', '),
+                                progression: `${s.notesPresentes}/${s.totalMatieres} matières`,
+                                actionBtn: (
+                                    <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}>
+                                        <i className="fa fa-eye"></i> Détail
+                                    </button>
+                                )
+                            }));
+                            setModalTitle(`Élèves Incomplets (${elevesIncomplets.length})`);
+                            setModalColumns([
+                                { key: 'numeroOrdre',             header: 'N° Ordre'             },
+                                { key: 'nomComplet',              header: 'Nom Complet'          },
+                                { key: 'numero_incorporation',    header: 'N° Inc.'              },
+                                { key: 'progression',             header: 'Progression'          },
+                                { key: 'matiereManquantesDisplay', header: 'Matières Manquantes' },
+                                { key: 'actionBtn',               header: 'Action'               }
+                            ]);
+                            setModalData(data);
+                            setIsModalLoading(false);
+                        }}
+                    />
+                    <StatCardRedesign title="Participants"       value={summary.stats.participants} icon="fa-users" />
+                    <StatCardRedesign
+                        title="Moyenne Max" value={maxMoyenneVal} subValue="Note la plus haute"
+                        onClick={handleMaxClick} highlight icon="fa-trophy"
                         onExportExcel={() => exportDataToExcel("Meilleure_Moyenne", standardColumns, mapMoyenne(studentsWithMax))}
-                        onExportPdf={() => exportDataToPdf("Meilleure_Moyenne", standardColumns, mapMoyenne(studentsWithMax))}
+                        onExportPdf={()   => exportDataToPdf  ("Meilleure_Moyenne", standardColumns, mapMoyenne(studentsWithMax))}
                     />
-                    
-                    <StatCardRedesign title="Moyenne Min" value={minMoyenneVal} subValue="Note la plus basse" onClick={handleMinClick} icon="fa-arrow-down" 
+                    <StatCardRedesign
+                        title="Moyenne Min" value={minMoyenneVal} subValue="Note la plus basse"
+                        onClick={handleMinClick} icon="fa-arrow-down"
                         onExportExcel={() => exportDataToExcel("Pire_Moyenne", standardColumns, mapMoyenne(studentsWithMin))}
-                        onExportPdf={() => exportDataToPdf("Pire_Moyenne", standardColumns, mapMoyenne(studentsWithMin))}
+                        onExportPdf={()   => exportDataToPdf  ("Pire_Moyenne", standardColumns, mapMoyenne(studentsWithMin))}
                     />
-                    
-                    <StatCardRedesign title="Moyenne ≥ 12" value={countSup12} subValue={`${percentSup12}% des élèves`} onClick={handleSup12Click} highlight={true} icon="fa-check-circle" 
+                    <StatCardRedesign
+                        title="Moyenne ≥ 12" value={countSup12} subValue={`${percentSup12}% des élèves`}
+                        onClick={handleSup12Click} highlight icon="fa-check-circle"
                         onExportExcel={() => exportDataToExcel("Eleves_Admis", standardColumns, mapMoyenne(studentsSup12))}
-                        onExportPdf={() => exportDataToPdf("Eleves_Admis", standardColumns, mapMoyenne(studentsSup12))}
+                        onExportPdf={()   => exportDataToPdf  ("Eleves_Admis", standardColumns, mapMoyenne(studentsSup12))}
                     />
-                    
-                    <StatCardRedesign title="Moyenne < 12" value={countInf12} subValue={`${percentInf12}% des élèves`} onClick={handleInf12Click} highlight={countInf12 > 0} icon="fa-exclamation-triangle" 
+                    <StatCardRedesign
+                        title="Moyenne < 12" value={countInf12} subValue={`${percentInf12}% des élèves`}
+                        onClick={handleInf12Click} highlight={countInf12 > 0} icon="fa-exclamation-triangle"
                         onExportExcel={() => exportDataToExcel("Eleves_Echec", standardColumns, mapMoyenne(studentsInf12))}
-                        onExportPdf={() => exportDataToPdf("Eleves_Echec", standardColumns, mapMoyenne(studentsInf12))}
+                        onExportPdf={()   => exportDataToPdf  ("Eleves_Echec", standardColumns, mapMoyenne(studentsInf12))}
                     />
-                    
-                    <StatCardRedesign title="Consultations Externes" value={countConsultations} isLoading={!isDataReady} onClick={handleConsultationClick} highlight={isDataReady && typeof countConsultations === 'number' && countConsultations > 0} icon="fa-medkit" 
+                    <StatCardRedesign
+                        title="Consultations Externes" value={countConsultations} isLoading={!isDataReady}
+                        onClick={handleConsultationClick}
+                        highlight={isDataReady && typeof countConsultations === 'number' && countConsultations > 0}
+                        icon="fa-medkit"
                         onExportExcel={() => exportDataToExcel("Consultations", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'consultationDays', header: 'Jours' }], mapMoyenne(elevesConsultation))}
-                        onExportPdf={() => exportDataToPdf("Consultations", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'consultationDays', header: 'Jours' }], mapMoyenne(elevesConsultation))}
+                        onExportPdf={()   => exportDataToPdf  ("Consultations", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'consultationDays', header: 'Jours' }], mapMoyenne(elevesConsultation))}
                     />
-                    
-                    <StatCardRedesign title="Élèves Sanctionnés" value={countSanctions} isLoading={!isDataReady} onClick={handleSanctionsClick} highlight={isDataReady && typeof countSanctions === 'number' && countSanctions > 0} icon="fa-gavel" 
+                    <StatCardRedesign
+                        title="Élèves Sanctionnés" value={countSanctions} isLoading={!isDataReady}
+                        onClick={handleSanctionsClick}
+                        highlight={isDataReady && typeof countSanctions === 'number' && countSanctions > 0}
+                        icon="fa-gavel"
                         onExportExcel={() => exportDataToExcel("Sanctions", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'sanctionCount', header: 'Nombre' }], mapMoyenne(elevesSanctionnes))}
-                        onExportPdf={() => exportDataToPdf("Sanctions", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'sanctionCount', header: 'Nombre' }], mapMoyenne(elevesSanctionnes))}
+                        onExportPdf={()   => exportDataToPdf  ("Sanctions", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'sanctionCount', header: 'Nombre' }], mapMoyenne(elevesSanctionnes))}
                     />
-                    
-                    <StatCardRedesign title="Absents / Indisponibles" value={countIndisponibles} isLoading={!isDataReady} onClick={handleAbsentsClick} icon="fa-user-times" 
+                    <StatCardRedesign
+                        title="Absents / Indisponibles" value={countIndisponibles} isLoading={!isDataReady}
+                        onClick={handleAbsentsClick} icon="fa-user-times"
                         onExportExcel={() => exportDataToExcel("Absents_Indisponibles", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }], mapMoyenne(elevesIndisponibles))}
-                        onExportPdf={() => exportDataToPdf("Absents_Indisponibles", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }], mapMoyenne(elevesIndisponibles))}
+                        onExportPdf={()   => exportDataToPdf  ("Absents_Indisponibles", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }], mapMoyenne(elevesIndisponibles))}
                     />
-                    
-                    <StatCardRedesign title="Élèves < 10/20" value={elevesEnDifficulte.length} onClick={handleDifficulteClick} icon="fa-times-circle" 
+                    <StatCardRedesign
+                        title="Élèves < 10/20" value={elevesEnDifficulte.length}
+                        onClick={handleDifficulteClick} icon="fa-times-circle"
                         onExportExcel={() => exportDataToExcel("Eleves_Difficulte", standardColumns, mapMoyenne(elevesEnDifficulte))}
-                        onExportPdf={() => exportDataToPdf("Eleves_Difficulte", standardColumns, mapMoyenne(elevesEnDifficulte))}
+                        onExportPdf={()   => exportDataToPdf  ("Eleves_Difficulte", standardColumns, mapMoyenne(elevesEnDifficulte))}
                     />
                 </div>
             </div>
 
+            {/* ── Layout principal ── */}
             <div className="dashboard-examen-layout">
                 <div className="sidebar-area">
                     <div className="card">
-                        <h3 className="content-title"><i className="fa fa-thumbs-up" style={{color:'#28a745'}}></i> Matières ≥ 12/20 ({matieresReussite.length})</h3>
+                        <h3 className="content-title"><i className="fa fa-thumbs-up" style={{ color: '#28a745' }}></i> Matières ≥ 12/20 ({matieresReussite.length})</h3>
                         <ul className="sidebar-stats-list">
                             {matieresReussite.map(m => (
                                 <SidebarStatItem key={m.nom_matiere} label={m.nom_matiere} value={parseFloat(m.moyenne).toFixed(2)} />
@@ -609,7 +679,7 @@ const filteredClassement = useMemo(() => {
                         </ul>
                     </div>
                     <div className="card">
-                        <h3 className="content-title"><i className="fa fa-thumbs-down" style={{color:'#dc3545'}}></i> Matières &lt; 12/20 ({matieresEchec.length})</h3>
+                        <h3 className="content-title"><i className="fa fa-thumbs-down" style={{ color: '#dc3545' }}></i> Matières &lt; 12/20 ({matieresEchec.length})</h3>
                         <ul className="sidebar-stats-list">
                             {matieresEchec.map(m => (
                                 <SidebarStatItem key={m.nom_matiere} label={m.nom_matiere} value={parseFloat(m.moyenne).toFixed(2)} />
@@ -622,14 +692,16 @@ const filteredClassement = useMemo(() => {
                     <div className="ranking-card">
                         <div className="ranking-card-header">
                             <h3 className="content-title">Classement de l'Examen</h3>
-                            <div className="search-bar-container">
-                                <input
-                                    type="text"
-                                    placeholder="Rechercher par nom ou incorp..."
-                                    className="search-input"
-                                    value={searchTerm}
-                                    onChange={e => setSearchTerm(e.target.value)}
-                                />
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                <div className="search-bar-container">
+                                    <input
+                                        type="text"
+                                        placeholder="Rechercher par nom ou incorp..."
+                                        className="search-input"
+                                        value={searchTerm}
+                                        onChange={e => setSearchTerm(e.target.value)}
+                                    />
+                                </div>
                             </div>
                         </div>
 
@@ -646,13 +718,17 @@ const filteredClassement = useMemo(() => {
                                 </thead>
                                 <tbody>
                                     {filteredClassement.map(s => (
-                                        <tr key={s.id || s.numero_incorporation || Math.random()} onClick={() => setSelectedStudent(s)} className="clickable-row">
+                                        <tr
+                                            key={s.id || s.numero_incorporation || Math.random()}
+                                            onClick={() => setSelectedStudent(s)}
+                                            className="clickable-row"
+                                        >
                                             <td><strong>{s.rang}</strong></td>
                                             <td>{s.prenom} {s.nom}</td>
                                             <td>{s.numero_incorporation}</td>
                                             <td>{s.moyenne}</td>
                                             <td>
-                                               {s.rang == null ? (
+                                                {s.rang == null ? (
                                                     <span
                                                         className="status-badge"
                                                         style={{ backgroundColor: '#6b7280' }}

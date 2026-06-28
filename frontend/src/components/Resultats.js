@@ -88,14 +88,32 @@ const ExportModal = ({ onExport, onCancel }) => (
     </div>
 );
 
-const SelectionClassementModal = ({ onSelect, onClose, examTypes }) => {
+const SelectionClassementModal = ({ onSelect, onClose, examTypes, selectedPromotion }) => {
     const modeles = ['General', ...examTypes.map(et => et.nom_modele)];
     return (
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
-                <div className="modal-header"><h3>Choisir le modèle</h3><button className="close-button" onClick={onClose}>&times;</button></div>
-                <div className="modal-body"><div className="selection-classement-grid">{modeles.map(m => (<button key={m} className="btn-modele" onClick={() => onSelect(m)}>Classement {m}</button>))}</div></div>
-                <div className="modal-actions"><button className="btn-cancel" onClick={onClose}>Annuler</button></div>
+                <div className="modal-header">
+                    <h3>Choisir le modèle</h3>
+                    <button className="close-button" onClick={onClose}>&times;</button>
+                </div>
+                <div className="modal-body">
+                    {selectedPromotion && (
+                        <p style={{color: '#666', fontSize: '0.9rem', marginBottom: '10px'}}>
+                            Promotion sélectionnée : <strong>{selectedPromotion}</strong>
+                        </p>
+                    )}
+                    <div className="selection-classement-grid">
+                        {modeles.map(m => (
+                            <button key={m} className="btn-modele" onClick={() => onSelect(m)}>
+                                Classement {m}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button className="btn-cancel" onClick={onClose}>Annuler</button>
+                </div>
             </div>
         </div>
     );
@@ -238,8 +256,33 @@ function Resultats() {
             {isExportModalOpen && <ExportModal onExport={handleExport} onCancel={() => setIsExportModalOpen(false)} />}
             {editingResult && <ModificationModal resultat={editingResult} onClose={() => setEditingResult(null)} onSave={handleSaveModification} />}
             {viewingHistoryOf && <HistoryModal resultat={viewingHistoryOf} onClose={() => setViewingHistoryOf(null)} />}
-            {isConfigModalOpen && <ConfigurationModal matieres={matieres} onClose={() => {setIsConfigModalOpen(false); fetchAllData();}} />}
-            {isSelectionClassementOpen && <SelectionClassementModal examTypes={examTypes} onSelect={(m) => {setSelectedModeleClassement(m); setIsSelectionClassementOpen(false); setIsResultatClassementOpen(true);}} onClose={() => setIsSelectionClassementOpen(false)} />}
+                {isConfigModalOpen && (
+                <ConfigurationModal 
+                    matieres={matieres} 
+                    promotions={promotions}
+                    onClose={() => {setIsConfigModalOpen(false); fetchAllData();}}
+                />
+            )}
+            {isSelectionClassementOpen && (
+                    <SelectionClassementModal 
+                        examTypes={examTypes} 
+                        selectedPromotion={selectedPromotion} 
+                        onSelect={(m) => {
+                            setSelectedModeleClassement(m); 
+                            setIsSelectionClassementOpen(false); 
+                            setIsResultatClassementOpen(true);
+                        }} 
+                        onClose={() => setIsSelectionClassementOpen(false)} 
+                    />
+                )}
+
+                {isResultatClassementOpen && (
+                    <ClassementModal 
+                        modeleExamen={selectedModeleClassement} 
+                        promotion={selectedPromotion} // ✅ AJOUT
+                        onClose={() => setIsResultatClassementOpen(false)} 
+                    />
+                )}
             {isResultatClassementOpen && <ClassementModal modeleExamen={selectedModeleClassement} onClose={() => setIsResultatClassementOpen(false)} />}
             {isElevesSansNoteModalOpen && <ElevesSansNoteModal onClose={() => setIsElevesSansNoteModalOpen(false)} matiereId={selectedMatiere} typeExamen={selectedTypeExamen} promotion={selectedPromotion} />}
 

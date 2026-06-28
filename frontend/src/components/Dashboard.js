@@ -729,23 +729,28 @@ const Dashboard = () => {
         (s.moyenne !== null && parseFloat(s.moyenne) < 8) ||
         (s.totalARDays >= 20)
     ).length : 'Calcul...';
+const sortedExams = (examSummaries || []).filter(e => {
+    const nomUpper = e.typeExamen.toUpperCase();
 
-    const sortedExams = (examSummaries || []).filter(e => {
-        if (selectedPopulation === 'conseil') return e.typeExamen.toUpperCase().includes('REPECHAGE');
-        return !e.typeExamen.toUpperCase().includes('REPECHAGE');
-    }).sort((a, b) => {
-        const order = (t) => {
-            const up = t.toUpperCase();
-             if (up === 'GENERAL') return 0;
-            if (up.includes('FETTA')) return 1;
-            if (up.includes('TEST')) return 2;
-            if (up.includes('MI')) return 3;
-            if (up.includes('STAGE')) return 4;
-            return 99;
-        };
-        return order(a.typeExamen) - order(b.typeExamen);
-    });
+    //  N'afficher que si au moins un élève a une note ou un examen complet
+    if ((e.stats.elevesAvecNote || 0) === 0) return false;
 
+    if (selectedPopulation === 'conseil') {
+        return nomUpper.includes('REPECHAGE') || nomUpper === 'GENERAL';
+    }
+    return !nomUpper.includes('REPECHAGE');
+}).sort((a, b) => {
+    const order = (t) => {
+        const up = t.toUpperCase();
+        if (up === 'GENERAL') return 0;
+        if (up.includes('FETTA')) return 1;
+        if (up.includes('TEST')) return 2;
+        if (up.includes('MI')) return 3;
+        if (up.includes('STAGE')) return 4;
+        return 99;
+    };
+    return order(a.typeExamen) - order(b.typeExamen);
+});
     if (showIntro) return <WelcomePage onComplete={() => setShowIntro(false)} />;
 
     return (
