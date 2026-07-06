@@ -290,18 +290,20 @@ const Dashboard = () => {
 
 
         try {
-            // 3 requêtes parallèles au lieu de N*2 requêtes séquentielles
-          const [sancRes, absenceRes, consultRes] = await Promise.allSettled([
-               axios.get(`${EXTERNAL_API_BASE_URL}/api/sanctions`, { timeout: 5000 }),
-                axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+           const [sancRes, absenceRes, consultRes] = await Promise.allSettled([
+                    axios.post(`${EXTERNAL_API_BASE_URL}/api/sanctions/bulk`,
+                        { incorporations, cour: courNormalise },
+                        { timeout: 5000 }
+                    ),
+                    axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+                        { incorporations, cour: courNormalise },
+                        { timeout: 5000 }
+                    ),
+                    axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
                     { incorporations, cour: courNormalise },
                     { timeout: 5000 }
-                ),
-                axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
-                { incorporations, cour: courNormalise },
-                { timeout: 5000 }
-            )
-            ]);
+                )
+                ]);
 
             const allSanctions     = sancRes.status     === 'fulfilled' ? sancRes.value.data     : [];
             const allAbsences      = absenceRes.status  === 'fulfilled' ? absenceRes.value.data  : [];
