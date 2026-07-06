@@ -3599,29 +3599,37 @@ app.delete('/api/configuration/examens/:id', authenticateToken, checkRole(['admi
 });
 
 app.get('/api/matieres-par-examen', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
-    const { typeExamen } = req.query;
+    const { typeExamen, promotion } = req.query;
 
     if (!typeExamen) {
         return res.status(400).json({ message: "Le paramètre typeExamen est requis." });
     }
 
     try {
-        const query = `
+        let query = `
             SELECT m.id, m.nom_matiere
             FROM matieres m
             JOIN examens_configurations ec ON m.id = ec.matiere_id
             JOIN modeles_examens me ON ec.modele_examen_id = me.id
             WHERE me.nom_modele = ?
-            ORDER BY m.nom_matiere;
         `;
-        const [matieres] = await db.query(query, [typeExamen]);
+        const params = [typeExamen];
+
+        // ✅ Filtrer par promotion si fournie
+        if (promotion && promotion !== 'all') {
+            query += " AND me.promotion = ?";
+            params.push(promotion);
+        }
+
+        query += " ORDER BY m.nom_matiere";
+
+        const [matieres] = await db.query(query, params);
         res.json(matieres);
     } catch (err) {
         console.error("Erreur sur GET /api/matieres-par-examen", err);
         res.status(500).json({ message: "Erreur lors de la récupération des matières pour cet examen." });
     }
 });
-
 app.get('/api/stats/notes-utilisateur-specifique', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
     try {
         const { matiereId, typeExamen } = req.query;
@@ -3824,55 +3832,144 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
     req.setTimeout(600000);
     try {
         await connection.beginTransaction();
-        
-        // ✅ Récupérer toutes les promotions distinctes
-        const [promotions] = await connection.query(
-            "SELECT DISTINCT promotion FROM eleves WHERE promotion IS NOT NULL"
-        );
-        
-        const [tousLesEleves] = await connection.query("SELECT id, promotion, statut FROM eleves");
-        const [notes] = await connection.query(
-            "SELECT eleve_id, matiere_id, note, type_examen FROM copies WHERE note IS NOT NULL"
-        );
-        const [tousLesConfigs] = await connection.query(
-            "SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations"
-        );
 
+        // ── Données globales ──────────────────────────────────────────────────
+        const [promotions]     = await connection.query("SELECT DISTINCT promotion FROM eleves WHERE promotion IS NOT NULL");
+        const [tousLesEleves]  = await connection.query("SELECT id, promotion, statut FROM eleves");
+        const [notes]          = await connection.query("SELECT eleve_id, matiere_id, note, type_examen FROM copies WHERE note IS NOT NULL");
+        const [tousLesConfigs] = await connection.query("SELECT modele_examen_id, matiere_id, coefficient FROM examens_configurations");
+
+        // Index notes : notesIndex[eleve_id][type_examen][matiere_id] = note
         const notesIndex = {};
         notes.forEach(n => {
             const eId = n.eleve_id;
             const tEx = String(n.type_examen).trim();
             const mId = n.matiere_id;
-            if (!notesIndex[eId]) notesIndex[eId] = {};
-            if (!notesIndex[eId][tEx]) notesIndex[eId][tEx] = {};
+            if (!notesIndex[eId])        notesIndex[eId] = {};
+            if (!notesIndex[eId][tEx])   notesIndex[eId][tEx] = {};
             notesIndex[eId][tEx][mId] = parseFloat(n.note);
         });
 
-        const getPopulation = (statut) => {
-            const conseil = ['redoublant', 'ajourne_3m', 'ajourne_6m'];
-            return conseil.includes(statut) ? 'conseil' : 'actif';
+        const getPopulation = (statut) =>
+            ['redoublant', 'ajourne_3m', 'ajourne_6m'].includes(statut) ? 'conseil' : 'actif';
+
+        // ── PROMOTION SPÉCIALE : 79E ──────────────────────────────────────────
+        // Calcule la moyenne avec les notes DISPONIBLES (même incomplètes).
+        // Un élève est classé dès qu'il a au moins une note.
+        // Seule la 79E est en mode souple — toutes les autres sont strictes,
+        // quelle que soit leur valeur (80E, 81E, 82E...).
+        const PROMO_SOUPLE = '79E';
+        const estPromoSouple = (promo) => promo === PROMO_SOUPLE;
+
+        const calculerMoyenneSouple = (notesDeLEleve, configsModele) => {
+            // On ne prend que les matières qui ont une note
+            let pts  = 0;
+            let coef = 0;
+            configsModele.forEach(c => {
+                const note = notesDeLEleve[c.matiere_id];
+                if (note !== undefined) {
+                    pts  += note * parseFloat(c.coefficient);
+                    coef += parseFloat(c.coefficient);
+                }
+            });
+            return coef > 0 ? pts / coef : null;
         };
 
+        const calculerMoyenneGeneraleSouple = (notesDeLEleve, modelesHorsRepechage, configsParModele) => {
+            // Moyenne pondérée des moyennes par examen (avec notes disponibles)
+            let totalPts  = 0;
+            let totalCoef = 0;
+            modelesHorsRepechage.forEach(m => {
+                const configsM    = configsParModele[m.id] || [];
+                const coeffGlobal = parseFloat(m.coefficient_general);
+                if (coeffGlobal <= 0 || configsM.length === 0) return;
+
+                const moy = calculerMoyenneSouple(notesDeLEleve[String(m.nom_modele).trim()] || {}, configsM);
+                if (moy !== null) {
+                    totalPts  += moy * coeffGlobal;
+                    totalCoef += coeffGlobal;
+                }
+            });
+            return totalCoef > 0 ? totalPts / totalCoef : null;
+        };
+
+        // ── LOGIQUE STRICTE (autres promotions) ───────────────────────────────
+        // Toutes les notes d'un examen doivent être présentes pour être classé.
+
+        const calculerMoyenneStricte = (notesDeLExamen, configsModele) => {
+            let pts  = 0;
+            let coef = 0;
+            for (const c of configsModele) {
+                const note = notesDeLExamen[c.matiere_id];
+                if (note === undefined) return null; // manque une note → non classé
+                pts  += note * parseFloat(c.coefficient);
+                coef += parseFloat(c.coefficient);
+            }
+            return coef > 0 ? pts / coef : null;
+        };
+
+        const calculerMoyenneGeneraleStricte = (notesDeLEleve, modelesHorsRepechage, configsParModele) => {
+            let totalPts  = 0;
+            let totalCoef = 0;
+            let tousComplets = true;
+            const examensComplets = [];
+
+            for (const m of modelesHorsRepechage) {
+                const configsM    = configsParModele[m.id] || [];
+                const coeffGlobal = parseFloat(m.coefficient_general);
+                if (configsM.length === 0) continue;
+
+                const notesDeLExamen = notesDeLEleve[String(m.nom_modele).trim()] || {};
+                const moy = calculerMoyenneStricte(notesDeLExamen, configsM);
+
+                if (moy === null) {
+                    tousComplets = false;
+                } else {
+                    examensComplets.push(String(m.nom_modele).trim());
+                    if (coeffGlobal > 0) {
+                        totalPts  += moy * coeffGlobal;
+                        totalCoef += coeffGlobal;
+                    }
+                }
+            }
+
+            if (totalCoef > 0 && tousComplets) {
+                return { moyenne: totalPts / totalCoef, motif: null };
+            }
+            return {
+                moyenne: null,
+                motif: examensComplets.length > 0
+                    ? `Incomplet — Complétés : ${examensComplets.join(', ')}`
+                    : 'Aucun examen complété'
+            };
+        };
+
+        // ── Boucle principale par promotion ───────────────────────────────────
         let statsToInsert = [];
 
-        // ✅ Traiter chaque promotion séparément
         for (const promoRow of promotions) {
             const promo = promoRow.promotion;
-            
-            // ✅ Récupérer les modèles spécifiques à cette promotion
+
+            // Modèles de cette promotion
             const [modelesPromo] = await connection.query(
                 "SELECT id, nom_modele, coefficient_general FROM modeles_examens WHERE promotion = ?",
                 [promo]
             );
-            
-            if (modelesPromo.length === 0) continue; // Pas de config pour cette promo
-            
-            const modelesHorsRepechage = modelesPromo.filter(m =>
-                !m.nom_modele.toUpperCase().includes('REPECHAGE')
+            if (modelesPromo.length === 0) continue;
+
+            const modelesHorsRepechage = modelesPromo.filter(
+                m => !m.nom_modele.toUpperCase().includes('REPECHAGE')
             );
-            
+
+            // Index configs par modele_id (évite de refiltrer dans chaque élève)
+            const configsParModele = {};
+            modelesPromo.forEach(m => {
+                configsParModele[m.id] = tousLesConfigs.filter(c => c.modele_examen_id === m.id);
+            });
+
             const elevesDePromo = tousLesEleves.filter(e => e.promotion === promo);
-            
+            const isSouple      = estPromoSouple(promo); // ← souple uniquement pour 79E
+
             const tousLesModeles = [
                 ...modelesPromo,
                 { id: 0, nom_modele: 'General', coefficient_general: 0 }
@@ -3882,113 +3979,77 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
                 const isGeneral = modele.nom_modele === 'General';
 
                 const moyennesEleves = elevesDePromo.map(eleve => {
-                    let moyenneFinale = null;
                     const notesDeLEleve = notesIndex[eleve.id] || {};
-                    let motifNonClasse = null;
+                    let moyenneFinale   = null;
+                    let motifNonClasse  = null;
 
                     if (isGeneral) {
-                        let totalPointsGen = 0;
-                        let totalCoeffsGen = 0;
-                        let tousLesExamensComplets = true;
-                        const examensComplets = [];
-
-                        // ✅ Seulement les modèles de SA promotion, sans repêchage
-                        modelesHorsRepechage.forEach(m => {
-                            const nomExamen = String(m.nom_modele).trim();
-                            const notesDeLExamen = notesDeLEleve[nomExamen] || {};
-                            const configsM = tousLesConfigs.filter(c => c.modele_examen_id === m.id);
-
-                            if (configsM.length === 0) return;
-
-                            let ptsExamen = 0;
-                            let coefExamen = 0;
-                            let matiereManquante = false;
-
-                            configsM.forEach(c => {
-                                const noteTrouvee = notesDeLExamen[c.matiere_id];
-                                if (noteTrouvee !== undefined) {
-                                    ptsExamen += noteTrouvee * parseFloat(c.coefficient);
-                                    coefExamen += parseFloat(c.coefficient);
-                                } else {
-                                    matiereManquante = true;
-                                }
-                            });
-
-                            const coefModeleGlobal = parseFloat(m.coefficient_general);
-
-                            if (!matiereManquante && coefExamen > 0) {
-                                examensComplets.push(nomExamen);
-                                if (coefModeleGlobal > 0) {
-                                    totalPointsGen += (ptsExamen / coefExamen) * coefModeleGlobal;
-                                    totalCoeffsGen += coefModeleGlobal;
-                                }
-                            } else {
-                                tousLesExamensComplets = false;
-                            }
-                        });
-
-                        if (totalCoeffsGen > 0 && tousLesExamensComplets) {
-                            moyenneFinale = totalPointsGen / totalCoeffsGen;
+                        if (isSouple) {
+                            // ── 79E : moyenne générale souple ──
+                            moyenneFinale = calculerMoyenneGeneraleSouple(
+                                notesDeLEleve, modelesHorsRepechage, configsParModele
+                            );
+                            if (moyenneFinale === null) motifNonClasse = 'Aucune note disponible';
                         } else {
-                            moyenneFinale = null;
-                            motifNonClasse = examensComplets.length > 0
-                                ? `Incomplet — Complétés : ${examensComplets.join(', ')}`
-                                : 'Aucun examen complété';
+                            // ── Autres promos : stricte ──
+                            const res = calculerMoyenneGeneraleStricte(
+                                notesDeLEleve, modelesHorsRepechage, configsParModele
+                            );
+                            moyenneFinale  = res.moyenne;
+                            motifNonClasse = res.motif;
                         }
-
                     } else {
-                        const nomExamen = String(modele.nom_modele).trim();
+                        const nomExamen      = String(modele.nom_modele).trim();
                         const notesDeLExamen = notesDeLEleve[nomExamen] || {};
-                        const configsM = tousLesConfigs.filter(c => c.modele_examen_id === modele.id);
-                        let pts = 0;
-                        let coef = 0;
-                        let matiereManquante = false;
+                        const configsM       = configsParModele[modele.id] || [];
 
-                        configsM.forEach(c => {
-                            const noteTrouvee = notesDeLExamen[c.matiere_id];
-                            if (noteTrouvee !== undefined) {
-                                pts += noteTrouvee * parseFloat(c.coefficient);
-                                coef += parseFloat(c.coefficient);
-                            } else {
-                                matiereManquante = true;
+                        if (isSouple) {
+                            // ── 79E : moyenne d'examen souple ──
+                            moyenneFinale = calculerMoyenneSouple(notesDeLExamen, configsM);
+                            if (moyenneFinale === null) {
+                                motifNonClasse = configsM.length === 0
+                                    ? 'Aucune matière configurée'
+                                    : 'Aucune note disponible';
                             }
-                        });
-
-                        if (coef > 0 && !matiereManquante) {
-                            moyenneFinale = pts / coef;
                         } else {
-                            const nb = configsM.filter(c => notesDeLExamen[c.matiere_id] !== undefined).length;
-                            motifNonClasse = configsM.length === 0
-                                ? 'Aucune matière configurée'
-                                : `Notes incomplètes (${nb}/${configsM.length} matières)`;
+                            // ── Autres promos : stricte ──
+                            moyenneFinale = calculerMoyenneStricte(notesDeLExamen, configsM);
+                            if (moyenneFinale === null) {
+                                const nb = configsM.filter(c => notesDeLExamen[c.matiere_id] !== undefined).length;
+                                motifNonClasse = configsM.length === 0
+                                    ? 'Aucune matière configurée'
+                                    : `Notes incomplètes (${nb}/${configsM.length} matières)`;
+                            }
                         }
                     }
 
                     return {
-                        id: eleve.id,
-                        promotion: promo,
-                        population: getPopulation(eleve.statut),
-                        moyenne: moyenneFinale,
+                        id:           eleve.id,
+                        promotion:    promo,
+                        population:   getPopulation(eleve.statut),
+                        moyenne:      moyenneFinale,
                         motifNonClasse
                     };
                 });
 
-                // Calcul des rangs par population
-                const populations = ['actif', 'conseil'];
-                for (const pop of populations) {
-                    const groupePop = moyennesEleves.filter(e => e.population === pop && e.moyenne !== null);
+                // ── Calcul des rangs par population ───────────────────────────
+                for (const pop of ['actif', 'conseil']) {
+                    const classes    = moyennesEleves.filter(e => e.population === pop && e.moyenne !== null);
                     const nonClasses = moyennesEleves.filter(e => e.population === pop && e.moyenne === null);
 
-                    groupePop.sort((a, b) => b.moyenne - a.moyenne);
-                    let rang = 0; let lastMoy = -1; let countAtRank = 1;
+                    classes.sort((a, b) => b.moyenne - a.moyenne);
 
-                    groupePop.forEach((eleve, index) => {
+                    let rang = 0; let lastMoy = -1; let countAtRank = 1;
+                    classes.forEach((eleve, index) => {
                         const moyArrondie = parseFloat(eleve.moyenne.toFixed(2));
                         if (moyArrondie !== lastMoy) { rang += countAtRank; countAtRank = 1; }
                         else { countAtRank++; }
                         lastMoy = moyArrondie;
-                        const isEx = (groupePop[index + 1] && parseFloat(groupePop[index + 1].moyenne.toFixed(2)) === moyArrondie) ||
-                                     (groupePop[index - 1] && parseFloat(groupePop[index - 1].moyenne.toFixed(2)) === moyArrondie);
+
+                        const isEx =
+                            (classes[index + 1] && parseFloat(classes[index + 1].moyenne.toFixed(2)) === moyArrondie) ||
+                            (classes[index - 1] && parseFloat(classes[index - 1].moyenne.toFixed(2)) === moyArrondie);
+
                         statsToInsert.push([
                             eleve.id, promo, pop, modele.nom_modele,
                             eleve.moyenne.toFixed(2), isEx ? `${rang} ex` : `${rang}`, null
@@ -4005,14 +4066,14 @@ app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['a
             }
         }
 
+        // ── Écriture en base ──────────────────────────────────────────────────
         if (statsToInsert.length > 0) {
             await connection.query("DELETE FROM statistiques_classement");
             const chunkSize = 1000;
             for (let i = 0; i < statsToInsert.length; i += chunkSize) {
-                const chunk = statsToInsert.slice(i, i + chunkSize);
                 await connection.query(
                     "INSERT INTO statistiques_classement (eleve_id, promotion, population, type_examen, moyenne, rang, motif_non_classe) VALUES ?",
-                    [chunk]
+                    [statsToInsert.slice(i, i + chunkSize)]
                 );
             }
         }
@@ -4114,14 +4175,21 @@ app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admi
     try {
         const { typeExamen, promotion, population } = req.query;
 
-        // 1. Récupérer les matières de ce type d'examen
-        const [configsMatieres] = await db.query(`
+        // 1. Récupérer les matières configurées pour ce type d'examen ET cette promotion
+        const configParams = [typeExamen];
+        let configQuery = `
             SELECT ec.matiere_id, m.nom_matiere
             FROM examens_configurations ec
             JOIN modeles_examens me ON ec.modele_examen_id = me.id
             JOIN matieres m ON ec.matiere_id = m.id
             WHERE me.nom_modele = ?
-        `, [typeExamen]);
+        `;
+        if (promotion && promotion !== 'all') {
+            configQuery += " AND me.promotion = ?";
+            configParams.push(promotion);
+        }
+
+        const [configsMatieres] = await db.query(configQuery, configParams);
 
         if (configsMatieres.length === 0) {
             return res.json([]);
@@ -4129,9 +4197,10 @@ app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admi
 
         const matiereIds = configsMatieres.map(c => c.matiere_id);
 
-        // 2. Récupérer tous les élèves de la promotion
+        // 2. Récupérer tous les élèves de la promotion avec les filtres population
         let eleveQuery = `SELECT id, nom, prenom, numero_incorporation, escadron, peloton, statut FROM eleves WHERE 1=1`;
         const eleveParams = [];
+
         if (promotion && promotion !== 'all') {
             eleveQuery += " AND promotion = ?";
             eleveParams.push(promotion);
@@ -4143,27 +4212,32 @@ app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admi
                 eleveQuery += " AND statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')";
             }
         }
+
         const [eleves] = await db.query(eleveQuery, eleveParams);
 
-        // 3. Pour chaque élève, vérifier quelles matières manquent
+        if (eleves.length === 0) {
+            return res.json([]);
+        }
+
+        // 3. Récupérer toutes les notes existantes pour ce type d'examen et ces matières
         const placeholders = matiereIds.map(() => '?').join(',');
         const [toutesLesNotes] = await db.query(`
-            SELECT eleve_id, matiere_id
-            FROM copies
-            WHERE type_examen = ?
-              AND matiere_id IN (${placeholders})
-              AND note IS NOT NULL
-              AND eleve_id IS NOT NULL
+            SELECT c.eleve_id, c.matiere_id
+            FROM copies c
+            WHERE c.type_examen = ?
+              AND c.matiere_id IN (${placeholders})
+              AND c.note IS NOT NULL
+              AND c.eleve_id IS NOT NULL
         `, [typeExamen, ...matiereIds]);
 
-        // Grouper les notes par élève
+        // 4. Grouper les notes par élève (Set pour lookup O(1))
         const notesParEleve = {};
         toutesLesNotes.forEach(n => {
             if (!notesParEleve[n.eleve_id]) notesParEleve[n.eleve_id] = new Set();
             notesParEleve[n.eleve_id].add(n.matiere_id);
         });
 
-        // 4. Filtrer les élèves incomplets
+        // 5. Filtrer les élèves incomplets et calculer les matières manquantes
         const incomplets = eleves
             .map(eleve => {
                 const notesEleve = notesParEleve[eleve.id] || new Set();
@@ -4181,6 +4255,7 @@ app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admi
             .filter(eleve => eleve.matiereManquantes.length > 0);
 
         res.json(incomplets);
+
     } catch (err) {
         console.error('Erreur sans-note-complete:', err);
         res.status(500).json({ error: err.message });
