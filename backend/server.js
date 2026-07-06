@@ -31,26 +31,51 @@ const db = mysql.createPool({
     database: process.env.DB_DATABASE
 }).promise();
 const runMigrations = async () => {
+    // Fonction utilitaire pour vérifier l'existence d'une colonne
+    const columnExists = async (table, column) => {
+        const [rows] = await db.query(`
+            SELECT COUNT(*) as count 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+              AND TABLE_NAME = ? 
+              AND COLUMN_NAME = ?
+        `, [table, column]);
+        return rows[0].count > 0;
+    };
+
+    // 1. Migration : motif_non_classe
     try {
-        await db.query(`
-            ALTER TABLE statistiques_classement 
-            ADD COLUMN IF NOT EXISTS motif_non_classe VARCHAR(255) NULL DEFAULT NULL
-        `);
-        console.log('✅ Migration OK : motif_non_classe');
+        const hasMotif = await columnExists('statistiques_classement', 'motif_non_classe');
+        if (!hasMotif) {
+            await db.query(`
+                ALTER TABLE statistiques_classement 
+                ADD COLUMN motif_non_classe VARCHAR(255) NULL DEFAULT NULL
+            `);
+            console.log('✅ Migration OK : motif_non_classe créé');
+        } else {
+            console.log('⏭️  Migration skipped : motif_non_classe existe déjà');
+        }
     } catch (err) {
-        if (err.code !== 'ER_DUP_FIELDNAME') console.error('❌ Erreur migration:', err.message);
+        console.error('❌ Erreur migration statistiques_classement:', err.message);
     }
 
+    // 2. Migration : promotion
     try {
-        await db.query(`
-            ALTER TABLE modeles_examens 
-            ADD COLUMN IF NOT EXISTS promotion VARCHAR(50) NULL DEFAULT NULL
-        `);
-        console.log('✅ Migration OK : modeles_examens.promotion');
+        const hasPromotion = await columnExists('modeles_examens', 'promotion');
+        if (!hasPromotion) {
+            await db.query(`
+                ALTER TABLE modeles_examens 
+                ADD COLUMN promotion VARCHAR(50) NULL DEFAULT NULL
+            `);
+            console.log('✅ Migration OK : modeles_examens.promotion créé');
+        } else {
+            console.log('⏭️  Migration skipped : modeles_examens.promotion existe déjà');
+        }
     } catch (err) {
-        if (err.code !== 'ER_DUP_FIELDNAME') console.error('❌ Erreur migration:', err.message);
+        console.error('❌ Erreur migration modeles_examens:', err.message);
     }
 
+    // 3. Logique de logs et contraintes (One-time)
     try {
         await db.query(`
             CREATE TABLE IF NOT EXISTS migrations_log (
@@ -60,58 +85,48 @@ const runMigrations = async () => {
             )
         `);
 
-        // ── Migration one-time : assigner les modèles existants à 79E ──
-        const [[alreadyDone79E]] = await db.query(`
-            SELECT id FROM migrations_log 
-            WHERE migration_name = 'assign_modeles_to_79E'
-        `);
-        if (!alreadyDone79E) {
-            await db.query(`
-                UPDATE modeles_examens 
-                SET promotion = '79E' 
-                WHERE promotion IS NULL
+        // double vérification pour la suite pour éviter les crashs si la colonne n'est pas encore là
+        const hasPromotionNow = await columnExists('modeles_examens', 'promotion');
+        if (hasPromotionNow) {
+            // ── Migration one-time : assigner les modèles existants à 79E ──
+            const [[alreadyDone79E]] = await db.query(`
+                SELECT id FROM migrations_log WHERE migration_name = 'assign_modeles_to_79E'
             `);
-            await db.query(`
-                INSERT INTO migrations_log (migration_name) 
-                VALUES ('assign_modeles_to_79E')
-            `);
-            console.log('✅ Migration ONE-TIME OK : modèles existants assignés à 79E');
-        } else {
-            console.log('⏭️  Migration already done : assign_modeles_to_79E (skipped)');
-        }
-
-        // ── Migration one-time : contrainte unique (nom_modele + promotion) ──
-        const [[alreadyDoneUnique]] = await db.query(`
-            SELECT id FROM migrations_log 
-            WHERE migration_name = 'unique_modele_par_promotion'
-        `);
-        if (!alreadyDoneUnique) {
-            try {
-                // Supprimer l'ancienne contrainte unique sur nom_modele seul
-                await db.query(`ALTER TABLE modeles_examens DROP INDEX nom_modele`);
-            } catch (e) {
-                // Si elle n'existe plus, on ignore
-                console.log('⚠️  Index nom_modele déjà supprimé ou inexistant, on continue.');
+            if (!alreadyDone79E) {
+                await db.query(`
+                    UPDATE modeles_examens SET promotion = '79E' WHERE promotion IS NULL
+                `);
+                await db.query(`
+                    INSERT INTO migrations_log (migration_name) VALUES ('assign_modeles_to_79E')
+                `);
+                console.log('✅ Migration ONE-TIME OK : modèles existants assignés à 79E');
             }
-            // Créer la nouvelle contrainte sur (nom_modele + promotion)
-            await db.query(`
-                ALTER TABLE modeles_examens 
-                ADD UNIQUE KEY unique_modele_par_promotion (nom_modele, promotion)
+
+            // ── Migration one-time : contrainte unique (nom_modele + promotion) ──
+            const [[alreadyDoneUnique]] = await db.query(`
+                SELECT id FROM migrations_log WHERE migration_name = 'unique_modele_par_promotion'
             `);
-            await db.query(`
-                INSERT INTO migrations_log (migration_name) 
-                VALUES ('unique_modele_par_promotion')
-            `);
-            console.log('✅ Migration ONE-TIME OK : contrainte unique (nom_modele + promotion)');
-        } else {
-            console.log('⏭️  Migration already done : unique_modele_par_promotion (skipped)');
+            if (!alreadyDoneUnique) {
+                try {
+                    await db.query(`ALTER TABLE modeles_examens DROP INDEX nom_modele`);
+                } catch (e) {
+                    console.log('⚠️  Index nom_modele déjà supprimé ou inexistant.');
+                }
+                await db.query(`
+                    ALTER TABLE modeles_examens 
+                    ADD UNIQUE KEY unique_modele_par_promotion (nom_modele, promotion)
+                `);
+                await db.query(`
+                    INSERT INTO migrations_log (migration_name) VALUES ('unique_modele_par_promotion')
+                `);
+                console.log('✅ Migration ONE-TIME OK : contrainte unique (nom_modele + promotion)');
+            }
         }
 
     } catch (err) {
         console.error('❌ Erreur migration log:', err.message);
     }
 };
-
 runMigrations();
 
 const logActivity = async (userId, userName, actionType, description) => {
