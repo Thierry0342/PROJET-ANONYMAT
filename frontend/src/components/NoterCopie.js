@@ -54,6 +54,13 @@ function NoterCopie() {
     const [packetCurrentCount, setPacketCurrentCount] = useState(0);
     const [assignment, setAssignment] = useState(null);
 
+    // ── Sélecteurs cascadés (mode libre / admin) ──────────────────────────────
+    const [promotionsList, setPromotionsList] = useState([]);
+    const [selectedPromotion, setSelectedPromotion] = useState('');
+    const [filteredExamTypes, setFilteredExamTypes] = useState([]);
+    const [filteredMatieres, setFilteredMatieres] = useState([]);
+    const [isMatiereLoading, setIsMatiereLoading] = useState(false);
+
     const noteInputRef = useRef(null);
     const codeInputRef = useRef(null);
     const prevStatsUtilisateur = useRef(statsUtilisateur);
@@ -124,6 +131,7 @@ function NoterCopie() {
 
     useEffect(() => { fetchSpecificUserStats(); }, [fetchSpecificUserStats]);
 
+    // ── Chargement initial ────────────────────────────────────────────────────
     useEffect(() => {
         const fetchInitialData = async () => {
             try {
@@ -133,13 +141,19 @@ function NoterCopie() {
                     decodedToken = jwtDecode(token);
                     if (decodedToken.role === 'admin') setIsAdmin(true);
                 }
-                const [resMatieres, resExams] = await Promise.all([
+                const [resMatieres, resExams, resPromotions] = await Promise.all([
                     axios.get(`${API_BASE_URL}/api/matieres`, getAuthHeaders()),
-                    axios.get(`${API_BASE_URL}/api/examens`, getAuthHeaders())
+                    axios.get(`${API_BASE_URL}/api/examens`, getAuthHeaders()),
+                    axios.get(`${API_BASE_URL}/api/promotions`, getAuthHeaders())
                 ]);
                 setMatieres(resMatieres.data);
                 setExamTypes(resExams.data);
+
+                const promoList = resPromotions.data || [];
+                setPromotionsList(promoList);
+
                 if (decodedToken && decodedToken.assigned_matiere_id) {
+                    // ── Mode opérateur assigné ──
                     const assignedId = decodedToken.assigned_matiere_id;
                     const assignedExam = decodedToken.assigned_type_examen;
                     const assignedPromo = decodedToken.assigned_promotion;
@@ -156,13 +170,88 @@ function NoterCopie() {
                     if (matiereObj) setSelectedMatierePrefix(matiereObj.code_prefixe.trim().toUpperCase());
                     fetchStats(assignedId);
                 } else {
-                    if (resExams.data.length > 0) setSelectedTypeExamen(resExams.data[0].nom_modele);
+                    // ── Mode libre (admin) : présélectionner la dernière promo ──
+                    if (promoList.length > 0) {
+                        setSelectedPromotion(promoList[0]);
+                    } else if (resExams.data.length > 0) {
+                        setSelectedTypeExamen(resExams.data[0].nom_modele);
+                    }
                     fetchStats(null);
                 }
             } catch (error) { console.error(error); }
         };
         fetchInitialData();
     }, [getAuthHeaders, fetchStats]);
+
+    // ── Charger les examens selon la promotion (mode libre) ───────────────────
+    useEffect(() => {
+        if (assignment) return;
+        const fetchExamensByPromo = async () => {
+            if (!selectedPromotion) {
+                setFilteredExamTypes([]);
+                setSelectedTypeExamen('');
+                setSelectedMatiereId('');
+                setSelectedMatierePrefix('');
+                setFilteredMatieres([]);
+                return;
+            }
+            try {
+                const res = await axios.get(
+                    `${API_BASE_URL}/api/examens?promotion=${selectedPromotion}`,
+                    getAuthHeaders()
+                );
+                setFilteredExamTypes(res.data);
+                setSelectedTypeExamen(prev => {
+                    const exists = res.data.find(e => e.nom_modele === prev);
+                    if (!exists) {
+                        setSelectedMatiereId('');
+                        setSelectedMatierePrefix('');
+                        setFilteredMatieres([]);
+                        return '';
+                    }
+                    return prev;
+                });
+            } catch {
+                setFilteredExamTypes([]);
+                setSelectedTypeExamen('');
+            }
+        };
+        fetchExamensByPromo();
+    }, [selectedPromotion, assignment, getAuthHeaders]);
+
+    // ── Charger les matières selon l'examen + promo (mode libre) ─────────────
+    useEffect(() => {
+        if (assignment) return;
+        const fetchMatieresByExam = async () => {
+            if (!selectedTypeExamen || !selectedPromotion) {
+                setFilteredMatieres([]);
+                setSelectedMatiereId('');
+                setSelectedMatierePrefix('');
+                return;
+            }
+            setIsMatiereLoading(true);
+            try {
+                const res = await axios.get(
+                    `${API_BASE_URL}/api/matieres-par-examen?typeExamen=${selectedTypeExamen}&promotion=${selectedPromotion}`,
+                    getAuthHeaders()
+                );
+                setFilteredMatieres(res.data);
+                setSelectedMatiereId(prev => {
+                    if (!prev) return prev;
+                    const exists = res.data.find(m => m.id === parseInt(prev));
+                    if (!exists) { setSelectedMatierePrefix(''); return ''; }
+                    return prev;
+                });
+            } catch {
+                setFilteredMatieres([]);
+                setSelectedMatiereId('');
+                setSelectedMatierePrefix('');
+            } finally {
+                setIsMatiereLoading(false);
+            }
+        };
+        fetchMatieresByExam();
+    }, [selectedTypeExamen, selectedPromotion, assignment, getAuthHeaders]);
 
     const fetchReclamations = useCallback(async () => {
         if (!isAdmin) return;
@@ -194,19 +283,30 @@ function NoterCopie() {
     }, [codeValidation.status]);
 
     const resetFields = useCallback((resetMatiere = false) => {
-        if (resetMatiere && !assignment) { setSelectedMatiereId(''); setSelectedMatierePrefix(''); }
+        if (resetMatiere && !assignment) {
+            setSelectedMatiereId('');
+            setSelectedMatierePrefix('');
+        }
         setCodeSuffix(''); setNote(''); setCodeValidation({ status: 'idle', message: '' });
         setSubmitMessage(''); setIsSubmitError(false); setConflictData(null);
         codeInputRef.current?.focus();
     }, [assignment]);
 
+    // ── Changement de matière (mode libre) ───────────────────────────────────
     const handleMatiereChange = (e) => {
         const matiereId = e.target.value;
-        const selectedMatiere = matieres.find(m => m.id.toString() === matiereId);
+        const matiereList = assignment ? matieres : filteredMatieres;
+        const selectedMatiere = matiereId
+            ? matiereList.find(m => m.id.toString() === matiereId)
+            : undefined;
         setSelectedMatiereId(matiereId);
-        setSelectedMatierePrefix(selectedMatiere ? selectedMatiere.code_prefixe.trim().toUpperCase() : '');
+        setSelectedMatierePrefix(
+            selectedMatiere?.code_prefixe
+                ? selectedMatiere.code_prefixe.trim().toUpperCase()
+                : ''
+        );
         resetFields(false);
-        fetchStats(matiereId);
+        fetchStats(matiereId || null);
     };
 
     const handleCodeSuffixChange = (e) => {
@@ -335,6 +435,79 @@ function NoterCopie() {
         if (total && !isNaN(total)) { setPacketTotal(parseInt(total)); setPacketCurrentCount(0); setIsPacketMode(true); }
     };
 
+    // ── Sélecteurs cascadés (mode libre / admin) ──────────────────────────────
+    const renderFreeSelectors = () => (
+        <>
+            {/* Promotion */}
+            <div className="form-group">
+                <label>Promotion</label>
+                <select
+                    value={selectedPromotion}
+                    onChange={e => {
+                        setSelectedPromotion(e.target.value);
+                        setSelectedTypeExamen('');
+                        setSelectedMatiereId('');
+                        setSelectedMatierePrefix('');
+                        resetFields(false);
+                    }}
+                >
+                    <option value="">-- Toutes les promotions --</option>
+                    {promotionsList.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+            </div>
+
+            {/* Type d'examen (filtré par promotion) */}
+            <div className="form-group">
+                <label>Examen</label>
+                <select
+                    id="exam-select"
+                    value={selectedTypeExamen}
+                    onChange={e => {
+                        setSelectedTypeExamen(e.target.value);
+                        setSelectedMatiereId('');
+                        setSelectedMatierePrefix('');
+                        resetFields(false);
+                    }}
+                    disabled={!selectedPromotion}
+                    required
+                >
+                    <option value="">-- Sélectionnez --</option>
+                    {(selectedPromotion ? filteredExamTypes : examTypes).map(ex => (
+                        <option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>
+                    ))}
+                </select>
+                {selectedPromotion && filteredExamTypes.length === 0 && (
+                    <small className="selector-hint selector-hint--warn">
+                        Aucun examen configuré pour cette promotion
+                    </small>
+                )}
+            </div>
+
+            {/* Matière (filtrée par examen + promotion) */}
+            <div className="form-group">
+                <label>Matière</label>
+                <select
+                    id="matiere-select"
+                    value={selectedMatiereId}
+                    onChange={handleMatiereChange}
+                    disabled={!selectedTypeExamen || isMatiereLoading}
+                    required
+                >
+                    <option value="">-- Sélectionnez --</option>
+                    {filteredMatieres.map(m => (
+                        <option key={m.id} value={m.id}>{m.nom_matiere}</option>
+                    ))}
+                </select>
+                {isMatiereLoading && <small className="selector-hint">Chargement des matières...</small>}
+                {!isMatiereLoading && selectedTypeExamen && filteredMatieres.length === 0 && (
+                    <small className="selector-hint selector-hint--warn">
+                        Aucune matière configurée pour cet examen / cette promotion
+                    </small>
+                )}
+            </div>
+        </>
+    );
+
     return (
         <div className="noter-copie-container">
             <Joyride callback={handleJoyrideCallback} continuous run={runTour} steps={tourSteps} styles={{ options: { zIndex: 10000, primaryColor: '#2c5282' } }} />
@@ -357,6 +530,8 @@ function NoterCopie() {
             <div className="card noter-copie-form">
                 <form onSubmit={handleSubmit}>
                     <h2>Saisie des Notes</h2>
+
+                    {/* ── Mode opérateur assigné ── */}
                     {assignment ? (
                         <div className={`assignment-info-card pop-${assignment.population}`}>
                             <div className="assignment-header">
@@ -390,7 +565,7 @@ function NoterCopie() {
                             <div className="assignment-instruction-box">
                                 <FaInfoCircle className="info-icon" />
                                 <div className="instruction-text">
-                                    Toutes les informations de votre session sont pré-configurées ci-dessus. 
+                                    Toutes les informations de votre session sont pré-configurées ci-dessus.
                                     Il ne vous reste qu'à saisir le <strong>Code Anonyme</strong> et la <strong>Note</strong>.
                                     <p className="warning-text">
                                         <em>Vérifiez attentivement chaque saisie. En cas d'anomalie ou d'erreur, utilisez le bouton "Signaler incident" pour avertir l'administrateur.</em>
@@ -399,21 +574,126 @@ function NoterCopie() {
                             </div>
                         </div>
                     ) : (
-                        <>
-                            <div className="form-group"><label>Matière</label><select id="matiere-select" onChange={handleMatiereChange} value={selectedMatiereId} required><option value="">-- Sélectionnez --</option>{matieres.filter(m => m.code_prefixe).map(m => (<option key={m.id} value={m.id}>{m.nom_matiere}</option>))}</select></div>
-                            <div className="form-group"><label>Examen</label><select value={selectedTypeExamen} onChange={e => setSelectedTypeExamen(e.target.value)} required><option value="">-- Sélectionnez --</option>{examTypes.map(ex => (<option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>))}</select></div>
-                        </>
+                        /* ── Mode libre : sélecteurs cascadés ── */
+                        <div className="free-selectors-box">
+                            {renderFreeSelectors()}
+                        </div>
                     )}
-                    <div className="form-group"><label>Code Anonyme</label><div className="code-input-wrapper"><span className="code-prefix">{selectedMatierePrefix}</span><input id="code-input" ref={codeInputRef} type="text" value={codeSuffix} onChange={handleCodeSuffixChange} onBlur={verifyCode} onKeyDown={handleCodeKeyDown} disabled={!selectedMatiereId} autoComplete="off" required /><div className="val-icon-container">{codeValidation.status === 'checking' ? <FaSpinner className="spinner" /> : codeValidation.status === 'valid' ? <FaCheckCircle className="valid" /> : codeValidation.status === 'invalid' ? <FaTimesCircle className="invalid" /> : null}</div></div></div>
-                    <div className="form-group"><label>Note / 20</label><input id="note-input" ref={noteInputRef} type="number" step="0.25" min="0" max="20" value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={handleNoteKeyDown} disabled={codeValidation.status !== 'valid'} required /></div>
-                    <button ref={submitButtonRef} className="btn btn-primary btn-block" type="submit" disabled={codeValidation.status !== 'valid' || note === '' || !!conflictData}>Enregistrer</button>
-                    {conflictData && (<div className="message warning"><div><span><strong>Conflit :</strong> {conflictData.message}</span><div className="conflict-actions"><button type="button" className="btn btn-secondary" onClick={() => resetFields(false)}>Erreur de saisie</button><button type="button" className="btn btn-danger" onClick={handleSendReclamation}>Signaler incident</button></div></div></div>)}
-                    <div className="form-notification-container">{notification && (<div className="notif-toast"><FaCheckCircle /> {notification}</div>)}</div>
+
+                    {/* ── Champs communs Code + Note ── */}
+                    <div className="form-group">
+                        <label>Code Anonyme</label>
+                        <div className="code-input-wrapper">
+                            <span className="code-prefix">{selectedMatierePrefix}</span>
+                            <input
+                                id="code-input"
+                                ref={codeInputRef}
+                                type="text"
+                                value={codeSuffix}
+                                onChange={handleCodeSuffixChange}
+                                onBlur={verifyCode}
+                                onKeyDown={handleCodeKeyDown}
+                                disabled={!selectedMatiereId}
+                                autoComplete="off"
+                                required
+                            />
+                            <div className="val-icon-container">
+                                {codeValidation.status === 'checking' ? <FaSpinner className="spinner" /> :
+                                    codeValidation.status === 'valid' ? <FaCheckCircle className="valid" /> :
+                                        codeValidation.status === 'invalid' ? <FaTimesCircle className="invalid" /> : null}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label>Note / 20</label>
+                        <input
+                            id="note-input"
+                            ref={noteInputRef}
+                            type="number"
+                            step="0.25"
+                            min="0"
+                            max="20"
+                            value={note}
+                            onChange={(e) => setNote(e.target.value)}
+                            onKeyDown={handleNoteKeyDown}
+                            disabled={codeValidation.status !== 'valid'}
+                            required
+                        />
+                    </div>
+
+                    <button
+                        ref={submitButtonRef}
+                        className="btn btn-primary btn-block btn-submit-note"
+                        type="submit"
+                        disabled={codeValidation.status !== 'valid' || note === '' || !!conflictData}
+                    >
+                        Enregistrer
+                    </button>
+
+                    {conflictData && (
+                        <div className="message warning">
+                            <div>
+                                <span><strong>Conflit :</strong> {conflictData.message}</span>
+                                <div className="conflict-actions">
+                                    <button type="button" className="btn btn-secondary" onClick={() => resetFields(false)}>Erreur de saisie</button>
+                                    <button type="button" className="btn btn-danger" onClick={handleSendReclamation}>Signaler incident</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="form-notification-container">
+                        {notification && (<div className="notif-toast"><FaCheckCircle /> {notification}</div>)}
+                    </div>
                 </form>
             </div>
 
-            {isModalOpen && (<div className="modal-overlay"><div className="modal-content"><h2>Mes Saisies</h2>{isLoadingModal ? <p>...</p> : <table><thead><tr><th>Matière</th><th>Code</th><th>Note</th></tr></thead><tbody>{mesSaisies.map(s => (<tr key={s.id}><td>{s.nom_matiere}</td><td>{s.code_anonyme}</td><td>{s.note}</td></tr>))}</tbody></table>}<button onClick={() => setIsModalOpen(false)}>Fermer</button></div></div>)}
-            {isReclamationModalOpen && (<div className="modal-overlay"><div className="modal-content large"><h2>Réclamations</h2>{reclamations.map(r => (<div key={r.id}>{r.code_anonyme} - {r.note_proposee} <button onClick={() => handleFetchDetails(r)}>Détails</button></div>))}<button onClick={() => setIsReclamationModalOpen(false)}>Fermer</button></div></div>)}
+            {isModalOpen && (
+                <div className="modal-overlay">
+                    <div className="modal-content">
+                        <h2>Mes Saisies</h2>
+                        {isLoadingModal ? <p>...</p> : (
+                            <table>
+                                <thead><tr><th>Matière</th><th>Code</th><th>Note</th></tr></thead>
+                                <tbody>{mesSaisies.map(s => (<tr key={s.id}><td>{s.nom_matiere}</td><td>{s.code_anonyme}</td><td>{s.note}</td></tr>))}</tbody>
+                            </table>
+                        )}
+                        <button onClick={() => setIsModalOpen(false)}>Fermer</button>
+                    </div>
+                </div>
+            )}
+
+            {isReclamationModalOpen && (
+                <div className="modal-overlay">
+                    <div className="modal-content large">
+                        <h2>Réclamations</h2>
+                        {reclamations.map(r => (
+                            <div key={r.id}>{r.code_anonyme} - {r.note_proposee} <button onClick={() => handleFetchDetails(r)}>Détails</button></div>
+                        ))}
+                        <button onClick={() => setIsReclamationModalOpen(false)}>Fermer</button>
+                    </div>
+                </div>
+            )}
+
+            <style jsx>{`
+                .free-selectors-box {
+                    background: #f7fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 10px;
+                    padding: 16px 18px;
+                    margin-bottom: 20px;
+                }
+                .selector-hint {
+                    display: block;
+                    font-size: 0.75rem;
+                    color: #718096;
+                    margin-top: 3px;
+                }
+                .selector-hint--warn {
+                    color: #e53e3e;
+                }
+            `}</style>
         </div>
     );
 }

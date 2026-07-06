@@ -24,26 +24,36 @@ const HistoryModal = ({ resultat, onClose }) => {
         if (resultat?.copie_id) {
             const token = localStorage.getItem('token');
             axios.get(`/api/resultats/${resultat.copie_id}/historique`, { headers: { Authorization: `Bearer ${token}` } })
-            .then(response => setHistory(response.data)).catch(error => setHistory([])).finally(() => setLoading(false));
+                .then(response => setHistory(response.data))
+                .catch(() => setHistory([]))
+                .finally(() => setLoading(false));
         }
     }, [resultat]);
     return (
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal-content history-modal" onClick={e => e.stopPropagation()}>
-                <div className="modal-header"><h3>Historique : {resultat.prenom} {resultat.nom}</h3><button className="close-button" onClick={onClose}>&times;</button></div>
+                <div className="modal-header">
+                    <h3>Historique : {resultat.prenom} {resultat.nom}</h3>
+                    <button className="close-button" onClick={onClose}>&times;</button>
+                </div>
                 <div className="modal-body">
                     {loading ? <p>Chargement...</p> : (
                         <div className="history-list">
                             {history.length > 0 ? history.map((item, index) => (
                                 <div key={index} className="history-item">
-                                    <div className="history-meta"><strong>{item.modifie_par}</strong><br/><span>Le {new Date(item.date_modification).toLocaleString('fr-FR')}</span></div>
+                                    <div className="history-meta">
+                                        <strong>{item.modifie_par}</strong><br />
+                                        <span>Le {new Date(item.date_modification).toLocaleString('fr-FR')}</span>
+                                    </div>
                                     <p className="history-motif"><strong>Motif :</strong> {item.motif}</p>
                                 </div>
                             )) : <p>Aucun historique trouvé.</p>}
                         </div>
                     )}
                 </div>
-                <div className="modal-actions"><button className="btn-cancel" onClick={onClose}>Fermer</button></div>
+                <div className="modal-actions">
+                    <button className="btn-cancel" onClick={onClose}>Fermer</button>
+                </div>
             </div>
         </div>
     );
@@ -61,29 +71,48 @@ const ModificationModal = ({ resultat, onClose, onSave }) => {
     return (
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
-                <div className="modal-header"><h3>Modifier la note</h3><button className="close-button" onClick={onClose}>&times;</button></div>
+                <div className="modal-header">
+                    <h3>Modifier la note</h3>
+                    <button className="close-button" onClick={onClose}>&times;</button>
+                </div>
                 <div className="modal-body">
                     <div className="form-group"><label>Élève</label><input type="text" value={`${resultat.prenom} ${resultat.nom}`} disabled /></div>
-                    <div className="form-group"><label>Nouvelle Note</label><input type="number" min="0" max="20" step="0.25" value={nouvelleNote} onChange={(e) => setNouvelleNote(e.target.value)} /></div>
-                    <div className="form-group"><label>Raison</label><textarea rows="3" value={raison} onChange={(e) => setRaison(e.target.value)}></textarea></div>
+                    <div className="form-group"><label>Nouvelle Note</label><input type="number" min="0" max="20" step="0.25" value={nouvelleNote} onChange={e => setNouvelleNote(e.target.value)} /></div>
+                    <div className="form-group"><label>Raison</label><textarea rows="3" value={raison} onChange={e => setRaison(e.target.value)}></textarea></div>
                 </div>
-                <div className="modal-actions"><button className="btn-save" onClick={handleSave}>Enregistrer</button><button className="btn-cancel" onClick={onClose}>Annuler</button></div>
+                <div className="modal-actions">
+                    <button className="btn-save" onClick={handleSave}>Enregistrer</button>
+                    <button className="btn-cancel" onClick={onClose}>Annuler</button>
+                </div>
             </div>
         </div>
     );
 };
 
-const ExportAnimation = () => (<div className="export-overlay"><div><div className="typewriter"><div className="slide"><i></i></div><div className="paper"></div><div className="keyboard"></div></div><p>Génération en cours...</p></div></div>);
+const ExportAnimation = () => (
+    <div className="export-overlay">
+        <div>
+            <div className="typewriter">
+                <div className="slide"><i></i></div>
+                <div className="paper"></div>
+                <div className="keyboard"></div>
+            </div>
+            <p>Génération en cours...</p>
+        </div>
+    </div>
+);
 
 const ExportModal = ({ onExport, onCancel }) => (
     <div className="modal-overlay" onClick={onCancel}>
         <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header"><h3>Exporter les résultats</h3></div>
-            <div className="modal-body" style={{textAlign: 'center', padding: '2rem'}}>
-                <button className="btn-excel" onClick={() => onExport('excel')} style={{marginRight: '10px'}}>Excel</button>
+            <div className="modal-body" style={{ textAlign: 'center', padding: '2rem' }}>
+                <button className="btn-excel" onClick={() => onExport('excel')} style={{ marginRight: '10px' }}>Excel</button>
                 <button className="btn-pdf" onClick={() => onExport('pdf')}>PDF</button>
             </div>
-            <div className="modal-actions"><button className="btn-cancel" onClick={onCancel}>Annuler</button></div>
+            <div className="modal-actions">
+                <button className="btn-cancel" onClick={onCancel}>Annuler</button>
+            </div>
         </div>
     </div>
 );
@@ -99,7 +128,7 @@ const SelectionClassementModal = ({ onSelect, onClose, examTypes, selectedPromot
                 </div>
                 <div className="modal-body">
                     {selectedPromotion && (
-                        <p style={{color: '#666', fontSize: '0.9rem', marginBottom: '10px'}}>
+                        <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '10px' }}>
                             Promotion sélectionnée : <strong>{selectedPromotion}</strong>
                         </p>
                     )}
@@ -120,81 +149,157 @@ const SelectionClassementModal = ({ onSelect, onClose, examTypes, selectedPromot
 };
 
 function Resultats() {
-    const [resultats, setResultats] = useState([]);
-    const [matieres, setMatieres] = useState([]);
-    const [examTypes, setExamTypes] = useState([]);
-    const [promotions, setPromotions] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [selectedMatiere, setSelectedMatiere] = useState('');
-    const [selectedTypeExamen, setSelectedTypeExamen] = useState('');
-    const [selectedPromotion, setSelectedPromotion] = useState('');
-    const [searchTerm, setSearchTerm] = useState('');
-    const [currentPage, setCurrentPage] = useState(1);
-    const [resultsPerPage] = useState(10);
-    const [editingResult, setEditingResult] = useState(null);
-    const [viewingHistoryOf, setViewingHistoryOf] = useState(null);
-    const [isExporting, setIsExporting] = useState(false);
-    const [isExportModalOpen, setIsExportModalOpen] = useState(false);
-    const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+    const [resultats, setResultats]                         = useState([]);
+    const [matieres, setMatieres]                           = useState([]);
+    const [examTypes, setExamTypes]                         = useState([]);
+    const [promotions, setPromotions]                       = useState([]);
+    const [loading, setLoading]                             = useState(true);
+
+    // ✅ selectedPromotion initialisé à '' — sera mis à jour dès que les
+    //    promotions arrivent (premier élément = plus récente car ORDER BY DESC)
+    const [selectedPromotion, setSelectedPromotion]         = useState('');
+    const [selectedMatiere, setSelectedMatiere]             = useState('');
+    const [selectedTypeExamen, setSelectedTypeExamen]       = useState('');
+    const [searchTerm, setSearchTerm]                       = useState('');
+    const [currentPage, setCurrentPage]                     = useState(1);
+    const [resultsPerPage]                                  = useState(10);
+    const [editingResult, setEditingResult]                 = useState(null);
+    const [viewingHistoryOf, setViewingHistoryOf]           = useState(null);
+    const [isExporting, setIsExporting]                     = useState(false);
+    const [isExportModalOpen, setIsExportModalOpen]         = useState(false);
+    const [isConfigModalOpen, setIsConfigModalOpen]         = useState(false);
     const [isSelectionClassementOpen, setIsSelectionClassementOpen] = useState(false);
-    const [selectedModeleClassement, setSelectedModeleClassement] = useState(null);
-    const [isResultatClassementOpen, setIsResultatClassementOpen] = useState(false);
+    const [selectedModeleClassement, setSelectedModeleClassement]   = useState(null);
+    const [isResultatClassementOpen, setIsResultatClassementOpen]   = useState(false);
     const [isElevesSansNoteModalOpen, setIsElevesSansNoteModalOpen] = useState(false);
-    const [isActionMenuOpen, setIsActionMenuOpen] = useState(false);
-    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [isActionMenuOpen, setIsActionMenuOpen]           = useState(false);
+    const [showSuggestions, setShowSuggestions]             = useState(false);
 
-    const actionMenuRef = useRef(null);
-    const searchContainerRef = useRef(null);
+    const actionMenuRef       = useRef(null);
+    const searchContainerRef  = useRef(null);
 
-    const fetchAllData = () => {
+    // ── Chargement initial ────────────────────────────────────────────────────
+    const fetchAllData = (promoToSelect) => {
         setLoading(true);
-        const token = localStorage.getItem('token');
+        const token  = localStorage.getItem('token');
         const config = { headers: { Authorization: `Bearer ${token}` } };
+
         Promise.all([
             axios.get('/api/resultats', config),
             axios.get('/api/matieres', config),
             axios.get('/api/examens', config),
-            axios.get('/api/promotions', config)
+            axios.get('/api/promotions', config),
         ]).then(([resRes, resMat, resExam, resProm]) => {
             setResultats(resRes.data);
             setMatieres(resMat.data);
             setExamTypes(resExam.data);
-            setPromotions(resProm.data);
-        }).catch(err => console.error(err)).finally(() => setLoading(false));
+
+            const liste = resProm.data || [];
+            setPromotions(liste);
+
+            // ✅ Sélectionner automatiquement la dernière promotion
+            //    (liste triée DESC côté backend → index 0 = plus récente)
+            if (liste.length > 0) {
+                const derniere = promoToSelect || liste[0];
+                setSelectedPromotion(derniere);
+            }
+        }).catch(err => console.error(err))
+          .finally(() => setLoading(false));
     };
 
-    useEffect(() => { fetchAllData(); }, []);
+    useEffect(() => {
+        fetchAllData();
+    }, []);
 
+useEffect(() => {
+    if (!selectedPromotion) return;
+    const token = localStorage.getItem('token');
+    axios.get(`/api/examens?promotion=${selectedPromotion}`, {
+        headers: { Authorization: `Bearer ${token}` }
+    }).then(res => {
+        setExamTypes(res.data);
+        // Reset le type examen si plus disponible dans cette promo
+        setSelectedTypeExamen(prev => {
+            const exists = res.data.find(e => e.nom_modele === prev);
+            return exists ? prev : '';
+        });
+        setCurrentPage(1);
+    }).catch(err => console.error(err));
+}, [selectedPromotion]);
     useEffect(() => {
         const handleClickOutside = (event) => {
-            if (actionMenuRef.current && !actionMenuRef.current.contains(event.target)) setIsActionMenuOpen(false);
-            if (searchContainerRef.current && !searchContainerRef.current.contains(event.target)) setShowSuggestions(false);
+            if (actionMenuRef.current && !actionMenuRef.current.contains(event.target))
+                setIsActionMenuOpen(false);
+            if (searchContainerRef.current && !searchContainerRef.current.contains(event.target))
+                setShowSuggestions(false);
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    // ── Actions ───────────────────────────────────────────────────────────────
     const handleGenererStatistiques = () => {
         const token = localStorage.getItem('token');
         setIsActionMenuOpen(false);
         setLoading(true);
         axios.post('/api/resultats/generer-statistiques', {}, { headers: { Authorization: `Bearer ${token}` } })
             .then(res => alert(res.data.message))
-            .catch(err => alert("Erreur"))
+            .catch(() => alert("Erreur"))
             .finally(() => setLoading(false));
     };
 
+    const handleSaveModification = (copieId, nouvelleNote, motif) => {
+        const token = localStorage.getItem('token');
+        axios.put(`/api/resultats/${copieId}`, { nouvelle_note: nouvelleNote, motif },
+            { headers: { Authorization: `Bearer ${token}` } })
+            .then(() => { fetchAllData(selectedPromotion); setEditingResult(null); })
+            .catch(() => alert("Erreur"));
+    };
+
+    const handleDelete = (copieId, nomEleve) => {
+        if (window.confirm(`Supprimer la note de ${nomEleve} ?`)) {
+            const token = localStorage.getItem('token');
+            axios.delete(`/api/resultats/${copieId}`, { headers: { Authorization: `Bearer ${token}` } })
+                .then(() => fetchAllData(selectedPromotion));
+        }
+    };
+
+    const handleExport = (format) => {
+        setIsExportModalOpen(false);
+        setIsExporting(true);
+        const token = localStorage.getItem('token');
+        const url = format === 'excel'
+            ? `/api/resultats/exporter?matiereId=${selectedMatiere}`
+            : `/api/resultats/generer-document-pdf`;
+        axios({
+            url,
+            method: format === 'excel' ? 'GET' : 'POST',
+            data: { matiereId: selectedMatiere },
+            headers: { Authorization: `Bearer ${token}` },
+            responseType: 'blob',
+        }).then(response => {
+            const href = URL.createObjectURL(response.data);
+            const link = document.createElement('a');
+            link.href = href;
+            link.setAttribute('download', `Notes.${format === 'excel' ? 'xlsx' : 'pdf'}`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }).finally(() => setTimeout(() => setIsExporting(false), 2000));
+    };
+
+    // ── Filtres ───────────────────────────────────────────────────────────────
     const filteredResults = useMemo(() => {
         let results = resultats;
-        if (selectedMatiere) results = results.filter(r => r.matiere_id === parseInt(selectedMatiere, 10));
+        if (selectedMatiere)    results = results.filter(r => r.matiere_id === parseInt(selectedMatiere, 10));
         if (selectedTypeExamen) results = results.filter(r => r.type_examen === selectedTypeExamen);
-        if (selectedPromotion) results = results.filter(r => r.promotion === selectedPromotion);
+        if (selectedPromotion)  results = results.filter(r => r.promotion === selectedPromotion);
         if (searchTerm) {
-            const lowSearch = searchTerm.toLowerCase().trim();
+            const low = searchTerm.toLowerCase().trim();
             results = results.filter(r => {
                 const fullName = `${r.prenom} ${r.nom}`.toLowerCase();
-                const inc = r.numero_incorporation?.toString() || "";
-                return fullName.includes(lowSearch) || inc.includes(lowSearch);
+                const inc = r.numero_incorporation?.toString() || '';
+                return fullName.includes(low) || inc.includes(low);
             });
         }
         return results;
@@ -202,11 +307,11 @@ function Resultats() {
 
     const suggestions = useMemo(() => {
         if (!searchTerm || searchTerm.length < 1) return [];
-        const low = searchTerm.toLowerCase();
+        const low  = searchTerm.toLowerCase();
         const seen = new Set();
         return resultats.filter(r => {
             const fullName = `${r.prenom} ${r.nom}`.toLowerCase();
-            const inc = r.numero_incorporation?.toString() || "";
+            const inc      = r.numero_incorporation?.toString() || '';
             if ((fullName.includes(low) || inc.includes(low)) && !seen.has(fullName)) {
                 seen.add(fullName);
                 return true;
@@ -215,105 +320,160 @@ function Resultats() {
         }).slice(0, 5);
     }, [resultats, searchTerm]);
 
-    const handleSaveModification = (copieId, nouvelleNote, motif) => {
-        const token = localStorage.getItem('token');
-        axios.put(`/api/resultats/${copieId}`, { nouvelle_note: nouvelleNote, motif }, { headers: { Authorization: `Bearer ${token}` } })
-            .then(() => { fetchAllData(); setEditingResult(null); }).catch(e => alert("Erreur"));
-    };
-
-    const handleDelete = (copieId, nomEleve) => {
-        if (window.confirm(`Supprimer la note de ${nomEleve} ?`)) {
-            const token = localStorage.getItem('token');
-            axios.delete(`/api/resultats/${copieId}`, { headers: { Authorization: `Bearer ${token}` } }).then(() => fetchAllData());
-        }
-    };
-
-    const handleExport = (format) => {
-        setIsExportModalOpen(false);
-        setIsExporting(true);
-        const token = localStorage.getItem('token');
-        const url = format === 'excel' ? `/api/resultats/exporter?matiereId=${selectedMatiere}` : `/api/resultats/generer-document-pdf`;
-        axios({ url, method: format === 'excel' ? 'GET' : 'POST', data: { matiereId: selectedMatiere }, headers: { Authorization: `Bearer ${token}` }, responseType: 'blob' })
-            .then((response) => {
-                const href = URL.createObjectURL(response.data);
-                const link = document.createElement('a');
-                link.href = href;
-                link.setAttribute('download', `Notes.${format === 'excel' ? 'xlsx' : 'pdf'}`);
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            }).finally(() => { setTimeout(() => setIsExporting(false), 2000); });
-    };
-
-    const currentResults = filteredResults.slice((currentPage - 1) * resultsPerPage, currentPage * resultsPerPage);
+    const currentResults = filteredResults.slice(
+        (currentPage - 1) * resultsPerPage,
+        currentPage * resultsPerPage
+    );
     const totalPages = Math.ceil(filteredResults.length / resultsPerPage);
 
     if (loading) return <div className="loader">Chargement...</div>;
 
+    // ── Render ────────────────────────────────────────────────────────────────
     return (
         <div className="container-fluid">
             {isExporting && <ExportAnimation />}
             {isExportModalOpen && <ExportModal onExport={handleExport} onCancel={() => setIsExportModalOpen(false)} />}
-            {editingResult && <ModificationModal resultat={editingResult} onClose={() => setEditingResult(null)} onSave={handleSaveModification} />}
-            {viewingHistoryOf && <HistoryModal resultat={viewingHistoryOf} onClose={() => setViewingHistoryOf(null)} />}
-                {isConfigModalOpen && (
-                <ConfigurationModal 
-                    matieres={matieres} 
-                    promotions={promotions}
-                    onClose={() => {setIsConfigModalOpen(false); fetchAllData();}}
+            {editingResult && (
+                <ModificationModal
+                    resultat={editingResult}
+                    onClose={() => setEditingResult(null)}
+                    onSave={handleSaveModification}
                 />
             )}
+            {viewingHistoryOf && (
+                <HistoryModal
+                    resultat={viewingHistoryOf}
+                    onClose={() => setViewingHistoryOf(null)}
+                />
+            )}
+
+            {isConfigModalOpen && (
+                <ConfigurationModal
+                    matieres={matieres}
+                    promotions={promotions}
+                    // ✅ Passe la promotion actuellement sélectionnée au modal
+                    defaultPromotion={selectedPromotion}
+                    onClose={() => { setIsConfigModalOpen(false); fetchAllData(selectedPromotion); }}
+                />
+            )}
+
             {isSelectionClassementOpen && (
-                    <SelectionClassementModal 
-                        examTypes={examTypes} 
-                        selectedPromotion={selectedPromotion} 
-                        onSelect={(m) => {
-                            setSelectedModeleClassement(m); 
-                            setIsSelectionClassementOpen(false); 
-                            setIsResultatClassementOpen(true);
-                        }} 
-                        onClose={() => setIsSelectionClassementOpen(false)} 
-                    />
-                )}
+                <SelectionClassementModal
+                    examTypes={examTypes}
+                    selectedPromotion={selectedPromotion}
+                    onSelect={m => {
+                        setSelectedModeleClassement(m);
+                        setIsSelectionClassementOpen(false);
+                        setIsResultatClassementOpen(true);
+                    }}
+                    onClose={() => setIsSelectionClassementOpen(false)}
+                />
+            )}
 
-                {isResultatClassementOpen && (
-                    <ClassementModal 
-                        modeleExamen={selectedModeleClassement} 
-                        promotion={selectedPromotion} // ✅ AJOUT
-                        onClose={() => setIsResultatClassementOpen(false)} 
-                    />
-                )}
-            {isResultatClassementOpen && <ClassementModal modeleExamen={selectedModeleClassement} onClose={() => setIsResultatClassementOpen(false)} />}
-            {isElevesSansNoteModalOpen && <ElevesSansNoteModal onClose={() => setIsElevesSansNoteModalOpen(false)} matiereId={selectedMatiere} typeExamen={selectedTypeExamen} promotion={selectedPromotion} />}
+            {isResultatClassementOpen && (
+                <ClassementModal
+                    modeleExamen={selectedModeleClassement}
+                    promotion={selectedPromotion}
+                    onClose={() => setIsResultatClassementOpen(false)}
+                />
+            )}
 
-            <div className="page-header"><h2>Résultats des Examens</h2></div>
-            
+            {isElevesSansNoteModalOpen && (
+                <ElevesSansNoteModal
+                    onClose={() => setIsElevesSansNoteModalOpen(false)}
+                    matiereId={selectedMatiere}
+                    typeExamen={selectedTypeExamen}
+                    promotion={selectedPromotion}
+                />
+            )}
+
+            <div className="page-header">
+                <h2>Résultats des Examens</h2>
+                {selectedPromotion && (
+                    <span style={{
+                        background: '#4f46e5', color: 'white',
+                        padding: '4px 14px', borderRadius: '20px',
+                        fontSize: '0.85rem', fontWeight: '600', marginLeft: '12px'
+                    }}>
+                        Promotion {selectedPromotion}
+                    </span>
+                )}
+            </div>
+
             <div className="resultats-card">
                 <div className="toolbar">
                     <div className="filter-group">
-                        <select className="form-select" value={selectedPromotion} onChange={e => { setSelectedPromotion(e.target.value); setCurrentPage(1); }}>
+                        {/*  Sélecteur promotion — dernière pré-sélectionnée */}
+                     
+                            <select
+                                className="form-select"
+                                value={selectedPromotion}
+                                onChange={e => {
+                                    setSelectedPromotion(e.target.value);
+                                    setSelectedTypeExamen(''); // ← ajouter ce reset
+                                    setCurrentPage(1);
+                                }}
+>
                             <option value="">Toutes les promotions</option>
-                            {promotions.map(promo => (<option key={promo} value={promo}>{promo}</option>))}
+                            {promotions.map(promo => (
+                                <option key={promo} value={promo}>{promo}</option>
+                            ))}
                         </select>
-                        <select className="form-select" value={selectedMatiere} onChange={e => { setSelectedMatiere(e.target.value); setCurrentPage(1); }}>
+
+                        <select
+                            className="form-select"
+                            value={selectedMatiere}
+                            onChange={e => { setSelectedMatiere(e.target.value); setCurrentPage(1); }}
+                        >
                             <option value="">Toutes les matières</option>
-                            {matieres.map(m => (<option key={m.id} value={m.id}>{m.nom_matiere}</option>))}
+                            {matieres.map(m => (
+                                <option key={m.id} value={m.id}>{m.nom_matiere}</option>
+                            ))}
                         </select>
-                        <select className="form-select" value={selectedTypeExamen} onChange={e => { setSelectedTypeExamen(e.target.value); setCurrentPage(1); }}>
+
+                       <select
+                            className="form-select"
+                            value={selectedTypeExamen}
+                            onChange={e => { setSelectedTypeExamen(e.target.value); setCurrentPage(1); }}
+                        >
                             <option value="">Tous les types</option>
-                            {examTypes.map(ex => (<option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>))}
+                            {examTypes
+                                .filter(ex => !selectedPromotion || ex.promotion === selectedPromotion)
+                                .filter((ex, index, self) =>
+                                    // Dédoublonner par nom_modele au cas où
+                                    index === self.findIndex(e => e.nom_modele === ex.nom_modele)
+                                )
+                                .map(ex => (
+                                    <option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>
+                                ))
+                            }
                         </select>
                     </div>
+
                     <div className="action-group" ref={actionMenuRef}>
-                        <button className="btn-menu" onClick={() => setIsActionMenuOpen(!isActionMenuOpen)}><IconMoreVertical /></button>
+                        <button className="btn-menu" onClick={() => setIsActionMenuOpen(!isActionMenuOpen)}>
+                            <IconMoreVertical />
+                        </button>
                         {isActionMenuOpen && (
                             <div className="dropdown-panel">
-                                <button className="drop-item" onClick={handleGenererStatistiques}><IconCalculator /> Mettre à jour les calculs</button>
-                                <button className="drop-item" onClick={() => setIsSelectionClassementOpen(true)}><IconCalculator /> Voir le classement</button>
-                                <button className="drop-item" onClick={() => { setIsExportModalOpen(true); setIsActionMenuOpen(false); }} disabled={!selectedMatiere}><IconExport /> Exporter les notes</button>
-                                <button className="drop-item" onClick={() => { setIsElevesSansNoteModalOpen(true); setIsActionMenuOpen(false); }} disabled={!selectedMatiere || !selectedTypeExamen}><IconUserX /> Voir les manquants</button>
-                                <button className="drop-item" onClick={() => { setIsConfigModalOpen(true); setIsActionMenuOpen(false); }}><IconSettings /> Configuration</button>
-                                <button className="drop-item" onClick={fetchAllData}><IconRefresh /> Rafraîchir</button>
+                                <button className="drop-item" onClick={handleGenererStatistiques}>
+                                    <IconCalculator /> Mettre à jour les calculs
+                                </button>
+                                <button className="drop-item" onClick={() => { setIsSelectionClassementOpen(true); setIsActionMenuOpen(false); }}>
+                                    <IconCalculator /> Voir le classement
+                                </button>
+                                <button className="drop-item" onClick={() => { setIsExportModalOpen(true); setIsActionMenuOpen(false); }} disabled={!selectedMatiere}>
+                                    <IconExport /> Exporter les notes
+                                </button>
+                                <button className="drop-item" onClick={() => { setIsElevesSansNoteModalOpen(true); setIsActionMenuOpen(false); }} disabled={!selectedMatiere || !selectedTypeExamen}>
+                                    <IconUserX /> Voir les manquants
+                                </button>
+                                <button className="drop-item" onClick={() => { setIsConfigModalOpen(true); setIsActionMenuOpen(false); }}>
+                                    <IconSettings /> Configuration
+                                </button>
+                                <button className="drop-item" onClick={() => { fetchAllData(selectedPromotion); setIsActionMenuOpen(false); }}>
+                                    <IconRefresh /> Rafraîchir
+                                </button>
                             </div>
                         )}
                     </div>
@@ -322,19 +482,23 @@ function Resultats() {
                 <div className="search-section" ref={searchContainerRef}>
                     <div className="search-bar">
                         <IconSearch />
-                        <input 
-                            type="text" 
-                            className="search-input" 
-                            placeholder="Rechercher un élève ou N° Incorporation..." 
-                            value={searchTerm} 
-                            onChange={e => {setSearchTerm(e.target.value); setShowSuggestions(true);}}
+                        <input
+                            type="text"
+                            className="search-input"
+                            placeholder="Rechercher un élève ou N° Incorporation..."
+                            value={searchTerm}
+                            onChange={e => { setSearchTerm(e.target.value); setShowSuggestions(true); }}
                             onFocus={() => setShowSuggestions(true)}
                         />
                     </div>
                     {showSuggestions && suggestions.length > 0 && (
                         <div className="suggestions-list">
                             {suggestions.map((s, idx) => (
-                                <div key={idx} className="suggestion-item" onClick={() => {setSearchTerm(`${s.prenom} ${s.nom}`); setShowSuggestions(false);}}>
+                                <div
+                                    key={idx}
+                                    className="suggestion-item"
+                                    onClick={() => { setSearchTerm(`${s.prenom} ${s.nom}`); setShowSuggestions(false); }}
+                                >
                                     <strong>{s.prenom} {s.nom}</strong> <span>(N° {s.numero_incorporation})</span>
                                 </div>
                             ))}
@@ -344,7 +508,17 @@ function Resultats() {
 
                 <div className="table-wrapper">
                     <table className="modern-table">
-                        <thead><tr><th>Élève</th><th>Promo</th><th>N° Inc.</th><th>Matière</th><th>Type</th><th>Note</th><th>Actions</th></tr></thead>
+                        <thead>
+                            <tr>
+                                <th>Élève</th>
+                                <th>Promo</th>
+                                <th>N° Inc.</th>
+                                <th>Matière</th>
+                                <th>Type</th>
+                                <th>Note</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
                         <tbody>
                             {currentResults.length > 0 ? currentResults.map(r => (
                                 <tr key={r.copie_id}>
@@ -353,14 +527,20 @@ function Resultats() {
                                     <td>{r.numero_incorporation}</td>
                                     <td>{r.nom_matiere}</td>
                                     <td><span className="type-badge">{r.type_examen}</span></td>
-                                    <td><span className={`note-pill ${parseFloat(r.note) >= 10 ? 'success' : 'danger'}`}>{!isNaN(parseFloat(r.note)) ? parseFloat(r.note).toFixed(2) : r.note}</span></td>
+                                    <td>
+                                        <span className={`note-pill ${parseFloat(r.note) >= 10 ? 'success' : 'danger'}`}>
+                                            {!isNaN(parseFloat(r.note)) ? parseFloat(r.note).toFixed(2) : r.note}
+                                        </span>
+                                    </td>
                                     <td className="actions-cell">
                                         <button className="btn-action edit" title="Modifier" onClick={() => setEditingResult(r)}><IconEdit /></button>
                                         <button className="btn-action history" title="Historique" onClick={() => setViewingHistoryOf(r)}><IconHistory /></button>
                                         <button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>
                                     </td>
                                 </tr>
-                            )) : <tr><td colSpan="7" className="empty-state">Aucun résultat trouvé.</td></tr>}
+                            )) : (
+                                <tr><td colSpan="7" className="empty-state">Aucun résultat trouvé.</td></tr>
+                            )}
                         </tbody>
                     </table>
                 </div>

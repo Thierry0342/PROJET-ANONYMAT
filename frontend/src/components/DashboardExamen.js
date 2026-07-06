@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { jsPDF } from 'jspdf';
@@ -91,6 +91,8 @@ const DashboardExamen = () => {
     const location = useLocation();
     const [elevesIncomplets, setElevesIncomplets] = useState([]);
     const [searchIncomplets, setSearchIncomplets] = useState('');
+    // Garde la trace du modal actuellement ouvert pour le rafraîchir en live (ex: recherche)
+    const [activeModalType, setActiveModalType] = useState(null);
 
     const selectedPromotion = location.state?.promotion
         || localStorage.getItem('selectedPromotion')
@@ -113,14 +115,69 @@ const DashboardExamen = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [classementWithRawDetails, setClassementWithRawDetails] = useState([]);
     const [isDataReady, setIsDataReady] = useState(false);
+    const [examConfigForPromotion, setExamConfigForPromotion] = useState(null);
 
-    const getFilteredIncomplets = (term) => {
+    const getFilteredIncomplets = useCallback((term) => {
+        const search = (term || '').toLowerCase();
         return elevesIncomplets.filter(s => {
-            const search = term.toLowerCase();
             const nomComplet = `${s.prenom} ${s.nom}`.toLowerCase();
             const incorp = String(s.numero_incorporation || '').toLowerCase();
             return nomComplet.includes(search) || incorp.includes(search);
         });
+    }, [elevesIncomplets]);
+
+    // Construit les lignes du modal "Élèves Incomplets" à partir du terme de recherche
+    const buildIncompletsModalData = useCallback((term) => {
+        const filtered = getFilteredIncomplets(term);
+        return filtered.map((s, index) => ({
+            ...s,
+            numeroOrdre: index + 1,
+            nomComplet: `${s.prenom} ${s.nom}`,
+            matiereManquantesDisplay: Array.isArray(s.matiereManquantes) && s.matiereManquantes.length > 0
+                ? s.matiereManquantes.join(', ')
+                : '—',
+            progression: `${s.notesPresentes}/${s.totalMatieres} matières`,
+            actionBtn: (
+                <button className="btn-details-action"
+                    onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}>
+                    <i className="fa fa-eye"></i> Détail
+                </button>
+            )
+        }));
+    }, [getFilteredIncomplets]);
+
+    const openIncompletsModal = () => {
+        setActiveModalType('incomplets');
+        setModalTitle(`Élèves Incomplets (${elevesIncomplets.length})`);
+        setModalColumns([
+            { key: 'numeroOrdre',              header: 'N° Ordre'             },
+            { key: 'nomComplet',               header: 'Nom Complet'          },
+            { key: 'numero_incorporation',     header: 'N° Inc.'              },
+            { key: 'progression',              header: 'Progression'          },
+            { key: 'matiereManquantesDisplay', header: 'Matières Manquantes'  },
+            { key: 'actionBtn',               header: 'Action'               }
+        ]);
+        setModalData(buildIncompletsModalData(searchIncomplets));
+        setIsModalLoading(false);
+    };
+
+    // Recalcule les données + le titre du modal Incomplets à chaque frappe dans la recherche
+    useEffect(() => {
+        if (activeModalType !== 'incomplets') return;
+        const filteredCount = getFilteredIncomplets(searchIncomplets).length;
+        setModalData(buildIncompletsModalData(searchIncomplets));
+        setModalTitle(
+            searchIncomplets
+                ? `Élèves Incomplets (${filteredCount}/${elevesIncomplets.length})`
+                : `Élèves Incomplets (${elevesIncomplets.length})`
+        );
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchIncomplets, activeModalType, elevesIncomplets]);
+
+    const closeModal = () => {
+        setModalData(null);
+        setActiveModalType(null);
+        setSearchIncomplets('');
     };
 
     // ── Export classement complet PDF ─────────────────────────────────────────
@@ -227,45 +284,49 @@ const DashboardExamen = () => {
         setLoading(true);
 
         const fetchData = async () => {
-            try {
-                const token = localStorage.getItem('token');
-                const headers = { Authorization: `Bearer ${token}` };
+    try {
+        const token = localStorage.getItem('token');
+        const headers = { Authorization: `Bearer ${token}` };
 
-                const [summaryRes, detailsRes, subjectsRes, configRes, incompletRes] = await Promise.all([
-                    axios.get(`/api/dashboard/summary-by-exam-type?promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
-                    axios.get(`/api/resultats/classement-details?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
-                    axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}?promotion=${selectedPromotion}`, { headers }),
-                    axios.get('/api/configuration/examens', { headers }),
-                    axios.get(`/api/resultats/sans-note-complete?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers })
-                ]);
+        const [summaryRes, detailsRes, subjectsRes, configRes, incompletRes] = await Promise.all([
+            axios.get(`/api/dashboard/summary-by-exam-type?promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
+            axios.get(`/api/resultats/classement-details?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers }),
+            axios.get(`/api/dashboard/exam-subject-stats/${typeExamen}?promotion=${selectedPromotion}`, { headers }),
+            // ✅ CORRECTION : filtrer par promotion pour avoir les bonnes matières configurées
+            axios.get(`/api/configuration/examens?promotion=${selectedPromotion}`, { headers }),
+            axios.get(`/api/resultats/sans-note-complete?typeExamen=${typeExamen}&promotion=${selectedPromotion}&population=${apiPopulation}`, { headers })
+        ]);
 
-                setElevesIncomplets(incompletRes.data || []);
+        setElevesIncomplets(incompletRes.data || []);
 
-                const examConfig = configRes.data.find(c => c.nom_modele === typeExamen);
-                if (examConfig) {
-                    if (examConfig.date_debut) setStartDate(examConfig.date_debut.split('T')[0]);
-                    if (examConfig.date_fin) setEndDate(examConfig.date_fin.split('T')[0]);
-                }
+        const examConfig = configRes.data.find(c => c.nom_modele === typeExamen);
+        if (examConfig) {
+            if (examConfig.date_debut) setStartDate(examConfig.date_debut.split('T')[0]);
+            if (examConfig.date_fin) setEndDate(examConfig.date_fin.split('T')[0]);
+        }
 
-                const examSummary = summaryRes.data.find(e => e.typeExamen === typeExamen);
+        // ✅ Stocker la config pour recalcul des matières manquantes dans la card
+        setExamConfigForPromotion(examConfig || null);  // ← nouveau state à ajouter
 
-                if (detailsRes.data) {
-                    setSummary(examSummary || {
-                        typeExamen,
-                        stats: { totalEleves: 0, participants: 0, complets: 0, incomplets: 0, moyenne: '0.00', min: '0.00', max: '0.00' }
-                    });
-                    const normalizedClassement = (detailsRes.data.classement || []).map(normalizeStudentData);
-                    setDetails({ ...detailsRes.data, classement: normalizedClassement });
-                    setSubjectStats(subjectsRes.data || []);
-                } else {
-                    setError(`Aucune donnée pour l'examen : ${typeExamen.replace(/_/g, ' ')}`);
-                }
-            } catch (err) {
-                setError('Impossible de charger les données.');
-            } finally {
-                setLoading(false);
-            }
-        };
+        const examSummary = summaryRes.data.find(e => e.typeExamen === typeExamen);
+
+        if (detailsRes.data) {
+            setSummary(examSummary || {
+                typeExamen,
+                stats: { totalEleves: 0, participants: 0, complets: 0, incomplets: 0, moyenne: '0.00', min: '0.00', max: '0.00' }
+            });
+            const normalizedClassement = (detailsRes.data.classement || []).map(normalizeStudentData);
+            setDetails({ ...detailsRes.data, classement: normalizedClassement });
+            setSubjectStats(subjectsRes.data || []);
+        } else {
+            setError(`Aucune donnée pour l'examen : ${typeExamen.replace(/_/g, ' ')}`);
+        }
+    } catch (err) {
+        setError('Impossible de charger les données.');
+    } finally {
+        setLoading(false);
+    }
+};
 
         fetchData();
     }, [typeExamen, apiPopulation, selectedPromotion]);
@@ -364,6 +425,7 @@ const DashboardExamen = () => {
     }, [classementWithRawDetails, isDataReady, startDate, endDate, details]);
 
     const showModalWithData = (title, columns, data) => {
+        setActiveModalType(null);
         setModalTitle(title);
         setModalColumns(columns);
         setModalData(data);
@@ -372,6 +434,7 @@ const DashboardExamen = () => {
 
     const handleStudentSelectFromModal = (student) => {
         setModalData(null);
+        setActiveModalType(null);
         setSelectedStudent(student);
     };
 
@@ -490,9 +553,12 @@ const DashboardExamen = () => {
                     title={modalTitle}
                     data={modalData}
                     columns={modalColumns}
-                    onClose={() => setModalData(null)}
+                    onClose={closeModal}
                     isLoading={isModalLoading}
                     onRowClick={handleStudentSelectFromModal}
+                    searchValue={activeModalType === 'incomplets' ? searchIncomplets : undefined}
+                    onSearchChange={activeModalType === 'incomplets' ? setSearchIncomplets : undefined}
+                    searchPlaceholder="Rechercher par nom ou n° incorporation..."
                 />
             )}
 
@@ -584,32 +650,7 @@ const DashboardExamen = () => {
                         subValue="Notes manquantes"
                         highlight={summary?.stats?.incomplets > 0}
                         icon="fa-exclamation-circle"
-                        onClick={() => {
-                            const filtered = getFilteredIncomplets(searchIncomplets);
-                            const data = filtered.map((s, index) => ({
-                                ...s,
-                                numeroOrdre: index + 1,
-                                nomComplet: `${s.prenom} ${s.nom}`,
-                                matiereManquantesDisplay: s.matiereManquantes.join(', '),
-                                progression: `${s.notesPresentes}/${s.totalMatieres} matières`,
-                                actionBtn: (
-                                    <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}>
-                                        <i className="fa fa-eye"></i> Détail
-                                    </button>
-                                )
-                            }));
-                            setModalTitle(`Élèves Incomplets (${elevesIncomplets.length})`);
-                            setModalColumns([
-                                { key: 'numeroOrdre',             header: 'N° Ordre'             },
-                                { key: 'nomComplet',              header: 'Nom Complet'          },
-                                { key: 'numero_incorporation',    header: 'N° Inc.'              },
-                                { key: 'progression',             header: 'Progression'          },
-                                { key: 'matiereManquantesDisplay', header: 'Matières Manquantes' },
-                                { key: 'actionBtn',               header: 'Action'               }
-                            ]);
-                            setModalData(data);
-                            setIsModalLoading(false);
-                        }}
+                        onClick={openIncompletsModal}
                     />
                     <StatCardRedesign title="Participants"       value={summary.stats.participants} icon="fa-users" />
                     <StatCardRedesign

@@ -6,7 +6,7 @@ const WelcomePage = ({ onComplete }) => {
     useEffect(() => {
         const timer = setTimeout(() => {
             onComplete(); 
-        }, 4000); 
+        }, 2000); 
 
         return () => clearTimeout(timer);
     }, [onComplete]);

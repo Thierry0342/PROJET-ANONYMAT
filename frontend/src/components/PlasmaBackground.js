@@ -77,7 +77,7 @@ void main() {
 }`;
 
 const PlasmaBackground = ({
-    color = "#0367a6", // Couleur par défaut adaptée à ton thème
+    color = "#0367a6", 
     speed = 0.6,
     scale = 1.1,
     opacity = 0.8

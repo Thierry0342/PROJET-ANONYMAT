@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './ConfigurationModal.css';
 
-const ConfigurationModal = ({ matieres, onClose, promotions }) => {
-    const [selectedPromotion, setSelectedPromotion] = useState('');
+const ConfigurationModal = ({ matieres, onClose, promotions, defaultPromotion }) => {
+    // ✅ Pré-sélectionner la promotion passée en prop (dernière promotion active)
+    const [selectedPromotion, setSelectedPromotion] = useState(defaultPromotion || '');
     const [config, setConfig] = useState([]);
     const [loading, setLoading] = useState(false);
     const [activeTab, setActiveTab] = useState(null);
     const [newModelName, setNewModelName] = useState('');
-
+    const [newDateDebut, setNewDateDebut] = useState('');
+    const [newDateFin, setNewDateFin] = useState('');
     const [localMatieres, setLocalMatieres] = useState(matieres);
     const [newMatiereName, setNewMatiereName] = useState('');
 
@@ -50,7 +52,11 @@ const ConfigurationModal = ({ matieres, onClose, promotions }) => {
         );
     };
 
-
+    const handleDateChange = (modeleId, field, value) => {
+        setConfig((prev) =>
+            prev.map((m) => (m.id === modeleId ? { ...m, [field]: value } : m))
+        );
+    };
 
     const handleCheckboxChange = (modeleId, matiereId, isChecked) => {
         setConfig((prev) =>
@@ -111,7 +117,7 @@ const ConfigurationModal = ({ matieres, onClose, promotions }) => {
                 {
                     nom_modele: newModelName.trim(),
                     promotion: selectedPromotion,
-                   
+                 
                 },
                 { headers: { Authorization: `Bearer ${token}` } }
             )
@@ -119,7 +125,7 @@ const ConfigurationModal = ({ matieres, onClose, promotions }) => {
                 setConfig((prev) => [...prev, response.data]);
                 setActiveTab(response.data.id);
                 setNewModelName('');
-                
+               
             })
             .catch((err) =>
                 alert('Erreur création : ' + (err.response?.data?.message || err.message))
@@ -298,7 +304,7 @@ const ConfigurationModal = ({ matieres, onClose, promotions }) => {
                                                     e.key === 'Enter' && handleAddModel()
                                                 }
                                             />
-                                           
+                                       
                                             <button onClick={handleAddModel}>+ Créer</button>
                                         </div>
                                     </div>
@@ -331,7 +337,7 @@ const ConfigurationModal = ({ matieres, onClose, promotions }) => {
                                                             }
                                                         />
                                                     </div>
-                                                    
+                                                   
                                                 </div>
 
                                                 {/* Promotion affichée en lecture seule */}

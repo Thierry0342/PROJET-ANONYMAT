@@ -2,8 +2,20 @@
 import React from 'react';
 import './Dashboard.css'; // On réutilise le même CSS
 
-const DashboardModal = ({ title, data, columns, onClose, isLoading }) => {
+const DashboardModal = ({
+    title,
+    data,
+    columns,
+    onClose,
+    isLoading,
+    onRowClick,
+    searchValue,
+    onSearchChange,
+    searchPlaceholder
+}) => {
     if (!data) return null;
+
+    const showSearch = typeof onSearchChange === 'function';
 
     return (
         <div className="modal-overlay" onClick={onClose}>
@@ -12,6 +24,21 @@ const DashboardModal = ({ title, data, columns, onClose, isLoading }) => {
                     <h3>{title}</h3>
                     <button className="close-button" onClick={onClose}>&times;</button>
                 </div>
+
+                {showSearch && (
+                    <div className="modal-search-bar" style={{ padding: '0 1rem', marginBottom: '0.5rem' }}>
+                        <input
+                            type="text"
+                            className="search-input"
+                            style={{ width: '100%', boxSizing: 'border-box' }}
+                            placeholder={searchPlaceholder || 'Rechercher...'}
+                            value={searchValue || ''}
+                            onChange={(e) => onSearchChange(e.target.value)}
+                            autoFocus
+                        />
+                    </div>
+                )}
+
                 <div className="modal-body">
                     {isLoading ? (
                         <p>Chargement...</p>
@@ -26,7 +53,11 @@ const DashboardModal = ({ title, data, columns, onClose, isLoading }) => {
                                     </thead>
                                     <tbody>
                                         {data.map((item, index) => (
-                                            <tr key={index}>
+                                            <tr
+                                                key={index}
+                                                onClick={onRowClick ? () => onRowClick(item) : undefined}
+                                                className={onRowClick ? 'clickable-row' : undefined}
+                                            >
                                                 {columns.map(col => <td key={col.key}>{item[col.key]}</td>)}
                                             </tr>
                                         ))}
