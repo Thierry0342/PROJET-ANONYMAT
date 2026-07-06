@@ -72,6 +72,24 @@ const SanctionItem = ({ sanction }) => {
         </li>
     );
 };
+const ObservationItem = ({ obs }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+
+    return (
+        <li className="sanction-item" onClick={() => setIsExpanded(!isExpanded)}>
+            <div className="sanction-summary">
+                <span><strong>Observation</strong></span>
+                <span className="sanction-date">{formatDate(obs.date)}</span>
+            </div>
+            {isExpanded && (
+                <div className="sanction-details">
+                    <p className="sanction-motif-text" style={{ whiteSpace: 'pre-wrap' }}>{obs.contenu}</p>
+                    {obs.auteur && <p><small>Saisi par : {obs.auteur}</small></p>}
+                </div>
+            )}
+        </li>
+    );
+};
 
 const ConsultationItem = ({ consult }) => {
     const [isExpanded, setIsExpanded] = useState(false);
@@ -173,6 +191,7 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
     const [processedAbsences, setProcessedAbsences] = useState([]);
     const [consultations, setConsultations] = useState([]);
     const [sanctions, setSanctions] = useState([]);
+    const [observations, setObservations] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [photoUrl, setPhotoUrl] = useState(DEFAULT_AVATAR_URL);
@@ -186,77 +205,82 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
     const currentIncorp = String(student.numero_incorporation || student.numeroIncorporation || '').trim();
     const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
     const fetchExternalData = async () => {
-        setLoading(true);
-        setError('');
-        setStudentDetails(student);
-        try {
-            const [sancRes, consultRes, absenceRes, detailsRes] = await Promise.allSettled([
-                // Sanctions : même appel global que DashboardExamen, filtrage côté client
-               axios.post(`${EXTERNAL_API_BASE_URL}/api/sanctions/bulk`,
+    setLoading(true);
+    setError('');
+    setStudentDetails(student);
+    try {
+        const [sancRes, consultRes, absenceRes, detailsRes, obsRes] = await Promise.allSettled([
+            axios.post(`${EXTERNAL_API_BASE_URL}/api/sanctions/bulk`,
                 { incorporations: [currentIncorp], cour: courNormalise },
                 { timeout: 5000 }
             ),
+            axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
+                { incorporations: [currentIncorp], cour: courNormalise },
+                { timeout: 5000 }
+            ),
+            axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
+                { incorporations: [currentIncorp], cour: courNormalise },
+                { timeout: 5000 }
+            ),
+            axios.get(`${EXTERNAL_API_BASE_URL}/api/eleve/incorporation/${currentIncorp}?cour=${courNormalise}`),
 
-                // Consultation bulk avec cour/promotion — même principe que DashboardExamen
-                axios.post(`${EXTERNAL_API_BASE_URL}/api/consultation/bulk`,
-                    { incorporations: [currentIncorp], cour: courNormalise },
-                    { timeout: 5000 }
-                ),
+            // ← Observations, même pattern que sanctions/absences
+            axios.post(`${EXTERNAL_API_BASE_URL}/api/observations/bulk`,
+                { incorporations: [currentIncorp], cour: courNormalise },
+                { timeout: 5000 }
+            )
+        ]);
 
-
-                // Absence bulk avec cour/promotion — même principe que DashboardExamen
-                axios.post(`${EXTERNAL_API_BASE_URL}/api/absence/bulk`,
-                    { incorporations: [currentIncorp], cour: courNormalise },
-                    { timeout: 5000 }
-                ),
-
-                // Détails élève — inchangé
-                axios.get(`${EXTERNAL_API_BASE_URL}/api/eleve/incorporation/${currentIncorp}?cour=${courNormalise}`)
-            ]);
-
-            // Sanctions — filtrage par incorporation (identique à DashboardExamen)
-            if (sancRes.status === 'fulfilled' && sancRes.value.data) {
-                const allSanctions = Array.isArray(sancRes.value.data) ? sancRes.value.data : [];
-                const studentSanctions = allSanctions.filter(s =>
-                    s.Eleve && String(s.Eleve.numeroIncorporation).trim() === currentIncorp
-                );
-                setSanctions(studentSanctions);
-            }
-
-            // Consultations — extraire depuis la réponse bulk (tableau filtré pour cet élève)
-            if (consultRes.status === 'fulfilled' && consultRes.value.data) {
-                const allConsult = Array.isArray(consultRes.value.data) ? consultRes.value.data : [];
-                // Le bulk renvoie toutes les consultations des incorporations demandées,
-                // on filtre pour s'assurer d'avoir uniquement cet élève
-                const studentConsult = allConsult.filter(c =>
-                    String(c.Eleve?.numeroIncorporation || '').trim() === currentIncorp
-                );
-                setConsultations(studentConsult);
-            }
-
-            // Absences — même logique
-            if (absenceRes.status === 'fulfilled' && absenceRes.value.data) {
-                const allAbsences = Array.isArray(absenceRes.value.data) ? absenceRes.value.data : [];
-                const studentAbsences = allAbsences.filter(a =>
-                    String(a.Eleve?.numeroIncorporation || '').trim() === currentIncorp
-                );
-                setAbsences(studentAbsences);
-            }
-
-            // Détails élève — inchangé
-            if (detailsRes.status === 'fulfilled' && detailsRes.value.data?.eleve) {
-                const eleveInfo = detailsRes.value.data.eleve;
-                setStudentDetails(eleveInfo);
-                if (eleveInfo.image) {
-                   setPhotoUrl(`${EXTERNAL_API_BASE_URL}${eleveInfo.image}`);
-                }
-            }
-        } catch (err) {
-            setError('Impossible de charger les détails complets.');
-        } finally {
-            setLoading(false);
+        // Sanctions — inchangé
+        if (sancRes.status === 'fulfilled' && sancRes.value.data) {
+            const allSanctions = Array.isArray(sancRes.value.data) ? sancRes.value.data : [];
+            const studentSanctions = allSanctions.filter(s =>
+                s.Eleve && String(s.Eleve.numeroIncorporation).trim() === currentIncorp
+            );
+            setSanctions(studentSanctions);
         }
-    };
+
+        // Consultations — inchangé
+        if (consultRes.status === 'fulfilled' && consultRes.value.data) {
+            const allConsult = Array.isArray(consultRes.value.data) ? consultRes.value.data : [];
+            const studentConsult = allConsult.filter(c =>
+                String(c.Eleve?.numeroIncorporation || '').trim() === currentIncorp
+            );
+            setConsultations(studentConsult);
+        }
+
+        // Absences — inchangé
+        if (absenceRes.status === 'fulfilled' && absenceRes.value.data) {
+            const allAbsences = Array.isArray(absenceRes.value.data) ? absenceRes.value.data : [];
+            const studentAbsences = allAbsences.filter(a =>
+                String(a.Eleve?.numeroIncorporation || '').trim() === currentIncorp
+            );
+            setAbsences(studentAbsences);
+        }
+
+        // Détails élève — inchangé
+        if (detailsRes.status === 'fulfilled' && detailsRes.value.data?.eleve) {
+            const eleveInfo = detailsRes.value.data.eleve;
+            setStudentDetails(eleveInfo);
+            if (eleveInfo.image) {
+               setPhotoUrl(`${EXTERNAL_API_BASE_URL}${eleveInfo.image}`);
+            }
+        }
+
+        // Observations — filtrage par incorporation, comme les autres
+        if (obsRes.status === 'fulfilled' && obsRes.value.data) {
+            const allObs = Array.isArray(obsRes.value.data) ? obsRes.value.data : [];
+            const studentObs = allObs.filter(o =>
+                String(o.Eleve?.numeroIncorporation || '').trim() === currentIncorp
+            );
+            setObservations(studentObs);
+        }
+    } catch (err) {
+        setError('Impossible de charger les détails complets.');
+    } finally {
+        setLoading(false);
+    }
+};
 
     fetchExternalData();
 }, [student, selectedPromotion]);
@@ -450,61 +474,61 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
                                 ) : (
                                     generalResults.length > 0 ? (
                                       generalResults.map(res => (
-    <div className="note-item" key={res.id} style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        width: '100%',
-        padding: '12px 15px',
-        background: '#f8f9fa',
-        marginBottom: '8px',
-        borderRadius: '6px',
-        // ✅ Orange si partiel, vert si complet et admis, rouge si échoué
-        borderLeft: !res.estComplet 
-            ? '5px solid #f59e0b'    // Orange = partiel
-            : res.isPassed 
-                ? '5px solid #28a745'  // Vert = admis
-                : '5px solid #dc3545', // Rouge = échoué
-        boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-    }}>
-        <span style={{flex: 1.5, fontWeight: '700', color: '#333'}}>
-            {res.name}
-            {/* ✅ Badge partiel */}
-            {!res.estComplet && res.average && (
-                <span style={{
-                    marginLeft: '8px',
-                    fontSize: '0.7em',
-                    background: '#fef3c7',
-                    color: '#d97706',
-                    padding: '2px 6px',
-                    borderRadius: '4px'
-                }}>
-                    Partiel ({res.notesPresentes} note(s))
-                </span>
-            )}
-        </span>
-        <span style={{
-            flex: 1, 
-            textAlign: 'center', 
-            fontWeight: 'bold', 
-            color: !res.average 
-                ? '#94a3b8'           // Gris si pas de note
-                : res.isPassed 
-                    ? '#28a745'        // Vert si admis
-                    : '#dc3545'        // Rouge si échoué
-        }}>
-            {res.average ? `${res.average} / 20` : 'N/A'}
-        </span>
-        <span style={{flex: 1, textAlign: 'right', fontSize: '0.95em', color: '#666'}}>
-            {res.rank 
-                ? <>Rang: <strong style={{color: '#007bff'}}>{res.rank}</strong></>
-                : <span style={{color: '#94a3b8', fontSize: '0.85em'}}>
-                    {res.average ? 'Non classé (incomplet)' : 'Aucune note'}
-                  </span>
-            }
-        </span>
-    </div>
-))
+                                                    <div className="note-item" key={res.id} style={{
+                                                        display: 'flex',
+                                                        justifyContent: 'space-between',
+                                                        alignItems: 'center',
+                                                        width: '100%',
+                                                        padding: '12px 15px',
+                                                        background: '#f8f9fa',
+                                                        marginBottom: '8px',
+                                                        borderRadius: '6px',
+                                                        // ✅ Orange si partiel, vert si complet et admis, rouge si échoué
+                                                        borderLeft: !res.estComplet 
+                                                            ? '5px solid #f59e0b'    // Orange = partiel
+                                                            : res.isPassed 
+                                                                ? '5px solid #28a745'  // Vert = admis
+                                                                : '5px solid #dc3545', // Rouge = échoué
+                                                        boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                                                    }}>
+                                                        <span style={{flex: 1.5, fontWeight: '700', color: '#333'}}>
+                                                            {res.name}
+                                                            {/* ✅ Badge partiel */}
+                                                            {!res.estComplet && res.average && (
+                                                                <span style={{
+                                                                    marginLeft: '8px',
+                                                                    fontSize: '0.7em',
+                                                                    background: '#fef3c7',
+                                                                    color: '#d97706',
+                                                                    padding: '2px 6px',
+                                                                    borderRadius: '4px'
+                                                                }}>
+                                                                    Partiel ({res.notesPresentes} note(s))
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                        <span style={{
+                                                            flex: 1, 
+                                                            textAlign: 'center', 
+                                                            fontWeight: 'bold', 
+                                                            color: !res.average 
+                                                                ? '#94a3b8'           // Gris si pas de note
+                                                                : res.isPassed 
+                                                                    ? '#28a745'        // Vert si admis
+                                                                    : '#dc3545'        // Rouge si échoué
+                                                        }}>
+                                                            {res.average ? `${res.average} / 20` : 'N/A'}
+                                                        </span>
+                                                        <span style={{flex: 1, textAlign: 'right', fontSize: '0.95em', color: '#666'}}>
+                                                            {res.rank 
+                                                                ? <>Rang: <strong style={{color: '#007bff'}}>{res.rank}</strong></>
+                                                                : <span style={{color: '#94a3b8', fontSize: '0.85em'}}>
+                                                                    {res.average ? 'Non classé (incomplet)' : 'Aucune note'}
+                                                                </span>
+                                                            }
+                                                        </span>
+                                                    </div>
+                                                ))
                                     ) : (
                                         examSubjects && examSubjects.length > 0 ? (
                                             examSubjects.map(subject => {
@@ -572,6 +596,19 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
                                             </ul>
                                         ) : <p className="text-muted" style={{padding: '5px'}}>Aucune absence enregistrée.</p>}
                                     </div>
+                                    <div className="external-info-item" style={{marginTop: '20px'}}>
+    <h5 style={{borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>
+        Observations ({observations.length})
+    </h5>
+    {observations.length > 0 ? (
+        <ul className="details-list">
+            {observations.map((o) => <ObservationItem key={o.id} obs={o} />)}
+        </ul>
+    ) : (
+        <p className="text-muted" style={{padding: '5px'}}>Aucune observation enregistrée.</p>
+    )}
+</div>
+                                    
                                 </>
                             )}
                         </section>
