@@ -95,7 +95,7 @@ const DashboardGeneral = () => {
     const location = useLocation();
     const selectedPromotion = location.state?.promotion || 'all';
     const rawPopulation = location.state?.population || 'all';
-    const selectedPopulation = rawPopulation === 'total' ? 'actif' : rawPopulation;
+    const selectedPopulation = rawPopulation === 'total' ? 'all' : rawPopulation;
     const [generalData, setGeneralData] = useState(null);
     const [detailedRanking, setDetailedRanking] = useState([]);
     const [loading, setLoading] = useState(true);

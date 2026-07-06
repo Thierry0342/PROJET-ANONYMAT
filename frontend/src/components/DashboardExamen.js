@@ -98,7 +98,7 @@ const DashboardExamen = () => {
         || localStorage.getItem('selectedPromotion')
         || 'all';
     const selectedPopulation = location.state?.population || 'actif';
-    const apiPopulation = selectedPopulation === 'total' ? 'actif' : selectedPopulation;
+    const apiPopulation = selectedPopulation === 'total' ? 'all' : selectedPopulation;
 
     const [summary, setSummary] = useState(null);
     const [details, setDetails] = useState(null);
