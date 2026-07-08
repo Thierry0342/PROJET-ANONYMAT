@@ -4415,6 +4415,44 @@ app.get('/api/resultats/exporter-manquants', authenticateToken, checkRole(['admi
         res.status(500).json({ error: "Erreur lors de la génération du fichier Excel des manquants." });
     }
 });
+app.get('/api/stats/mes-notes-directes-par-matiere', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    try {
+        const { typeExamen, promotion } = req.query;
+        const utilisateurId = req.user.id;
+
+        if (!typeExamen) {
+            return res.status(400).json({ message: "Le type d'examen est requis." });
+        }
+
+        let query = `
+            SELECT m.id AS matiere_id, m.nom_matiere,
+                   COUNT(c.id) AS notesSaisies
+            FROM matieres m
+            JOIN examens_configurations ec ON ec.matiere_id = m.id
+            JOIN modeles_examens me ON ec.modele_examen_id = me.id
+            LEFT JOIN copies c ON c.matiere_id = m.id
+                AND c.type_examen = me.nom_modele
+                AND c.note_saisie_par_utilisateur_id = ?
+                AND c.code_anonyme IS NULL
+                AND c.note IS NOT NULL
+            WHERE me.nom_modele = ?
+        `;
+        const params = [utilisateurId, typeExamen];
+
+        if (promotion && promotion !== 'all') {
+            query += ' AND me.promotion = ?';
+            params.push(promotion);
+        }
+
+        query += ' GROUP BY m.id, m.nom_matiere ORDER BY m.nom_matiere';
+
+        const [rows] = await db.query(query, params);
+        res.json(rows);
+    } catch (err) {
+        console.error("Erreur sur /api/stats/mes-notes-directes-par-matiere", err);
+        res.status(500).json({ error: "Erreur lors du calcul des notes saisies par matière." });
+    }
+});
 
 const HOST = '0.0.0.0';
 app.listen(port, HOST, () => {
