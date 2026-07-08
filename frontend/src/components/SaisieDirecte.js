@@ -465,7 +465,8 @@ const SaisieDirecte = () => {
     const [promotionsList, setPromotionsList] = useState([]);
     const [selectedPromotion, setSelectedPromotion] = useState('');
     const [parcoursResetSignal, setParcoursResetSignal] = useState(0);
-
+const [mesNotesParMatiere, setMesNotesParMatiere] = useState([]);
+const [isLoadingMesNotes, setIsLoadingMesNotes] = useState(false);
     const noteInputRef = useRef(null);
     const rechercheEleveInputRef = useRef(null);
 
@@ -628,6 +629,30 @@ const SaisieDirecte = () => {
             setIsLoadingHistory(false);
         }
     }, [getAuthHeaders]);
+    const fetchMesNotesParMatiere = useCallback(async () => {
+    const typeExamen = assignment?.examen || selectedTypeExamen;
+    const promo = assignment?.promotion || selectedPromotion;
+    if (!typeExamen) {
+        setMesNotesParMatiere([]);
+        return;
+    }
+    setIsLoadingMesNotes(true);
+    try {
+        const params = { typeExamen };
+        if (promo) params.promotion = promo;
+        const res = await axios.get('/api/stats/mes-notes-directes-par-matiere', {
+            params,
+            ...getAuthHeaders()
+        });
+        setMesNotesParMatiere(res.data);
+    } catch (err) {
+        setMesNotesParMatiere([]);
+    } finally {
+        setIsLoadingMesNotes(false);
+    }
+}, [assignment, selectedTypeExamen, selectedPromotion, getAuthHeaders]);
+
+useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
 
     const handleOpenHistoryModal = () => {
         setIsHistoryModalOpen(true);
@@ -810,6 +835,7 @@ const SaisieDirecte = () => {
             setSaisiesTemporaires([]);
             setIsValidationModalOpen(false);
             setMessage("Saisies enregistrées avec succès.");
+            fetchMesNotesParMatiere(); 
         } catch (err) {
             alert(err.response?.data?.message || "Erreur lors de l'enregistrement.");
         } finally {
@@ -1066,6 +1092,26 @@ const SaisieDirecte = () => {
                             </div>
                         </>
                     )}
+                    {(selectedTypeExamen || assignment) && mesNotesParMatiere.length > 0 && (
+                            <div className="mes-notes-matiere-box">
+                                <h4><FaClipboardList /> Vos notes déjà saisies pour cet examen</h4>
+                                {isLoadingMesNotes ? (
+                                    <small style={{ color: '#718096' }}>Chargement...</small>
+                                ) : (
+                                    <div className="mes-notes-matiere-list">
+                                        {mesNotesParMatiere.map(m => (
+                                            <div
+                                                key={m.matiere_id}
+                                                className={`matiere-note-item ${m.notesSaisies > 0 ? 'has-notes' : ''}`}
+                                            >
+                                                <span className="matiere-nom">{m.nom_matiere}</span>
+                                                <span className="matiere-count">{m.notesSaisies}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                     {/* Messages */}
                     {message && <div className="alert alert-success">{message}</div>}

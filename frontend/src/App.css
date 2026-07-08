@@ -191,3 +191,44 @@ select:focus {
     font-size: 0.85rem;
     margin-bottom: 10px;
 }
+.mes-notes-matiere-box {
+    background: #f7fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+}
+.mes-notes-matiere-box h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    color: #4a5568;
+    margin-bottom: 10px;
+}
+.mes-notes-matiere-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.matiere-note-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #edf2f7;
+    color: #718096;
+    padding: 5px 10px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+}
+.matiere-note-item.has-notes {
+    background: #c6f6d5;
+    color: #276749;
+    font-weight: 600;
+}
+.matiere-count {
+    background: rgba(0,0,0,0.08);
+    border-radius: 10px;
+    padding: 0 6px;
+    font-size: 0.75rem;
+}
