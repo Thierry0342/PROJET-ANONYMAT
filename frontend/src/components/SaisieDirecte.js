@@ -8,6 +8,216 @@ import {
 } from 'react-icons/fa';
 import apiPaths from '../config/apiPaths';
 
+// ─── Configuration "Parcours chronométré" (type EG 101 / FETTA) ───────────────
+// Reproduit la logique du fichier Excel :
+//   - Temps total = somme des (Arrivée - Départ) de 6 épreuves
+//   - Note = RECHERCHEV(temps_total, Barème!A:B, 2, VRAI) -> recherche approximative
+
+// Barème: seuil de temps total (en secondes depuis minuit) -> note /20
+// Source : feuille "Barème" du fichier Excel FETTA_79_COURS_EG_101.xlsx
+const BAREME_PARCOURS = [
+    { seuil: 1 * 3600 + 30 * 60 + 0, note: 20 },  // 1h30m00
+    { seuil: 2 * 3600 + 14 * 60 + 0, note: 19 },  // 2h14m00
+    { seuil: 2 * 3600 + 29 * 60 + 59, note: 18 }, // 2h29m59
+    { seuil: 2 * 3600 + 44 * 60 + 59, note: 17 }, // 2h44m59
+    { seuil: 2 * 3600 + 59 * 60 + 59, note: 16 }, // 2h59m59
+    { seuil: 3 * 3600 + 14 * 60 + 59, note: 15 }, // 3h14m59
+    { seuil: 3 * 3600 + 29 * 60 + 59, note: 14 }, // 3h29m59
+    { seuil: 3 * 3600 + 44 * 60 + 59, note: 13 }, // 3h44m59
+    { seuil: 3 * 3600 + 59 * 60 + 59, note: 12 }, // 3h59m59
+];
+
+// Postes du parcours, dans l'ordre exact de passage (colonnes C→N du fichier Excel).
+// C'est un relais : on ne repart pas de zéro à chaque poste.
+//   - RSA       : uniquement un Départ (point de départ du parcours)
+//   - TOPO..TIR : Arrivée au poste, puis Départ vers le poste suivant
+//   - OS        : uniquement une Arrivée (ligne d'arrivée finale)
+const CHECKPOINTS_PARCOURS = [
+    { key: 'rsa', label: 'RSA', arrivee: false, depart: true },
+    { key: 'topo', label: 'TOPO', arrivee: true, depart: true },
+    { key: 'tel', label: 'TEL', arrivee: true, depart: true },
+    { key: 'eit', label: 'EIT', arrivee: true, depart: true },
+    { key: 'secourisme', label: 'SECOURISME', arrivee: true, depart: true },
+    { key: 'tir', label: 'TIR', arrivee: true, depart: true },
+    { key: 'os', label: 'OS', arrivee: true, depart: false },
+];
+
+// Liste à plat des 12 champs, dans l'ordre exact des colonnes C→N de l'Excel
+// (rsa_depart, topo_arrivee, topo_depart, tel_arrivee, tel_depart, ...)
+const CHAMPS_ORDONNES_PARCOURS = CHECKPOINTS_PARCOURS.reduce((champs, cp) => {
+    if (cp.arrivee) champs.push(`${cp.key}_arrivee`);
+    if (cp.depart) champs.push(`${cp.key}_depart`);
+    return champs;
+}, []);
+
+// ⚠️ Nom de la matière qui déclenche le mode "Parcours chronométré".
+// La comparaison est tolérante : elle matche toute matière dont le nom
+// commence par "PG" (ex: "PG", "PG (Bonus)", "PG Bonus"...).
+const MATIERE_PARCOURS_NOM = 'PG';
+
+// "HH:MM" -> secondes depuis minuit
+const timeToSeconds = (hhmm) => {
+    if (!hhmm) return null;
+    const [h, m] = hhmm.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 3600 + m * 60;
+};
+
+// Calcule la durée totale = somme des 6 segments (D-C)+(F-E)+(H-G)+(J-I)+(L-K)+(N-M),
+// exactement comme la formule Excel. Retourne null tant que tous les temps ne sont
+// pas renseignés.
+// Vérifie que la séquence complète des 12 temps est strictement croissante
+// (pas de retour à minuit possible : le parcours ne dépasse jamais 24h).
+// Retourne un Set contenant les clés des champs impliqués dans une incohérence.
+const champsInvalides = (temps) => {
+    const invalides = new Set();
+    for (let i = 1; i < CHAMPS_ORDONNES_PARCOURS.length; i++) {
+        const champPrecedent = CHAMPS_ORDONNES_PARCOURS[i - 1];
+        const champActuel = CHAMPS_ORDONNES_PARCOURS[i];
+        const tPrec = timeToSeconds(temps[champPrecedent]);
+        const tActuel = timeToSeconds(temps[champActuel]);
+        if (tPrec !== null && tActuel !== null && tActuel <= tPrec) {
+            invalides.add(champPrecedent);
+            invalides.add(champActuel);
+        }
+    }
+    return invalides;
+};
+
+// Calcule la durée totale = somme des 6 segments (D-C)+(F-E)+(H-G)+(J-I)+(L-K)+(N-M).
+// Plus de correction "passage de minuit" : le parcours ne dépasse pas 24h,
+// donc un segment négatif ou nul signifie une saisie invalide.
+const calculerDureeTotale = (temps) => {
+    const valeurs = CHAMPS_ORDONNES_PARCOURS.map(id => timeToSeconds(temps[id]));
+    if (valeurs.some(v => v === null)) return null;
+    let total = 0;
+    for (let i = 0; i < valeurs.length; i += 2) {
+        const duree = valeurs[i + 1] - valeurs[i];
+        if (duree <= 0) return null; // incohérent
+        total += duree;
+    }
+    return total;
+};
+
+// Reproduit =RECHERCHEV(total, Barème!A:B, 2, VRAI) : recherche approximative
+// sur une table triée par ordre croissant -> renvoie la note du plus grand
+// seuil inférieur ou égal au temps total.
+const noteDepuisBareme = (totalSecondes) => {
+    if (totalSecondes === null) return null;
+    let note = null;
+    for (const { seuil, note: n } of BAREME_PARCOURS) {
+        if (seuil <= totalSecondes) note = n;
+        else break;
+    }
+    // Temps meilleur que le seuil le plus bas du barème -> note maximale
+    return note === null ? 20 : note;
+};
+
+const formatDuree = (secondes) => {
+    if (secondes === null) return '--h--m--s';
+    const h = Math.floor(secondes / 3600);
+    const m = Math.floor((secondes % 3600) / 60);
+    const s = Math.floor(secondes % 60);
+    return `${h}h${String(m).padStart(2, '0')}m${String(s).padStart(2, '0')}s`;
+};
+
+// ─── Formulaire "Parcours chronométré" ─────────────────────────────────────────
+// Remplace le champ Note classique quand la matière sélectionnée est le parcours.
+// Appelle onNoteCalculee(note, dureeTotale) à chaque changement, `note` étant
+// une chaîne vide tant que tous les temps ne sont pas renseignés.
+const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
+    const [temps, setTemps] = useState({});
+    const inputRefs = useRef({});
+
+    const invalides = useMemo(() => champsInvalides(temps), [temps]);
+    const hasErrors = invalides.size > 0;
+    const duree = useMemo(() => (hasErrors ? null : calculerDureeTotale(temps)), [temps, hasErrors]);
+    const note = useMemo(() => noteDepuisBareme(duree), [duree]);
+
+    // ✅ Notifie le parent de façon synchrone à chaque changement, pas via useEffect
+    const notifierParent = (nouveauxTemps) => {
+        const inv = champsInvalides(nouveauxTemps);
+        const d = inv.size > 0 ? null : calculerDureeTotale(nouveauxTemps);
+        const n = noteDepuisBareme(d);
+        onNoteCalculee(n !== null ? String(n) : '', d);
+    };
+
+    useEffect(() => {
+        setTemps({});
+        onNoteCalculee('', null); // ✅ reset aussi côté parent
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resetSignal]);
+
+    const handleChange = (champId, value) => {
+        setTemps(prev => {
+            const next = { ...prev, [champId]: value };
+            notifierParent(next);
+            return next;
+        });
+    };
+
+    const handleKeyDown = (champId, e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const index = CHAMPS_ORDONNES_PARCOURS.indexOf(champId);
+            const suivantId = CHAMPS_ORDONNES_PARCOURS[index + 1];
+            if (suivantId && inputRefs.current[suivantId]) {
+                inputRefs.current[suivantId].focus();
+            }
+        }
+    };
+
+    return (
+        <div className="parcours-chrono-box">
+            <table className="parcours-table">
+                <thead>
+                    <tr><th>Poste</th><th>Arrivée</th><th>Départ</th></tr>
+                </thead>
+                <tbody>
+                    {CHECKPOINTS_PARCOURS.map(cp => (
+                        <tr key={cp.key}>
+                            <td>{cp.label}</td>
+                            <td>
+                                {cp.arrivee ? (
+                                    <input
+                                        type="time"
+                                        className={invalides.has(`${cp.key}_arrivee`) ? 'invalid' : ''}
+                                        ref={el => { inputRefs.current[`${cp.key}_arrivee`] = el; }}
+                                        value={temps[`${cp.key}_arrivee`] || ''}
+                                        onChange={e => handleChange(`${cp.key}_arrivee`, e.target.value)}
+                                        onKeyDown={e => handleKeyDown(`${cp.key}_arrivee`, e)}
+                                    />
+                                ) : <span className="champ-absent">—</span>}
+                            </td>
+                            <td>
+                                {cp.depart ? (
+                                    <input
+                                        type="time"
+                                        className={invalides.has(`${cp.key}_depart`) ? 'invalid' : ''}
+                                        ref={el => { inputRefs.current[`${cp.key}_depart`] = el; }}
+                                        value={temps[`${cp.key}_depart`] || ''}
+                                        onChange={e => handleChange(`${cp.key}_depart`, e.target.value)}
+                                        onKeyDown={e => handleKeyDown(`${cp.key}_depart`, e)}
+                                    />
+                                ) : <span className="champ-absent">—</span>}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+            {hasErrors && (
+                <div className="parcours-erreur">
+                    ⚠ Chaque heure doit être strictement postérieure à la précédente (le parcours ne dépasse pas 24h).
+                </div>
+            )}
+            <div className="parcours-result">
+                <span>Temps total : <strong>{formatDuree(duree)}</strong></span>
+                <span>Note calculée : <strong>{note !== null ? `${note} / 20` : '-'}</strong></span>
+            </div>
+        </div>
+    );
+};
+
 // ─── Modals ───────────────────────────────────────────────────────────────────
 
 const ModificationModal = ({ entry, onClose, onSave }) => {
@@ -254,6 +464,7 @@ const SaisieDirecte = () => {
     const [assignment, setAssignment] = useState(null);
     const [promotionsList, setPromotionsList] = useState([]);
     const [selectedPromotion, setSelectedPromotion] = useState('');
+    const [parcoursResetSignal, setParcoursResetSignal] = useState(0);
 
     const noteInputRef = useRef(null);
     const rechercheEleveInputRef = useRef(null);
@@ -396,6 +607,14 @@ const SaisieDirecte = () => {
         if (promo) filtered = filtered.filter(e => e.promotion === promo);
         return [...new Set(filtered.map(e => e.peloton).filter(Boolean))].sort((a, b) => a - b);
     }, [allEleves, selectedEscadron, assignment, selectedPromotion]);
+
+    // ✅ Détecte si la matière sélectionnée est "PG" (Parcours chronométré)
+    // (uniquement pertinent en mode "Recherche" / saisie manuelle)
+    const isMatiereParcours = useMemo(() => {
+        const matiere = availableMatieres.find(m => m.id === parseInt(selectedMatiereId));
+        const nom = (matiere?.nom_matiere || assignment?.matiereNom || '').trim().toUpperCase();
+        return nom.startsWith(MATIERE_PARCOURS_NOM);
+    }, [selectedMatiereId, availableMatieres, assignment]);
 
     // ── Historique ────────────────────────────────────────────────────────────
     const fetchRecentSaisies = useCallback(async () => {
@@ -547,29 +766,32 @@ const SaisieDirecte = () => {
         return () => clearTimeout(debounce);
     }, [rechercheEleve, selectedEleve, assignment, selectedPromotion, getAuthHeaders]);
 
-    const handleSubmitNoteManuel = (e) => {
-        e.preventDefault();
-        const noteNum = parseFloat(note);
-        if (!selectedEleve || isNaN(noteNum)) return;
-        const nouvelleSaisie = {
-            type: 'note',
-            eleve_id: selectedEleve.id,
-            eleve_nom: `${selectedEleve.nom} ${selectedEleve.prenom}`,
-            numero_incorporation: selectedEleve.numero_incorporation,
-            escadron: selectedEleve.escadron,
-            peloton: selectedEleve.peloton,
-            sexe: selectedEleve.sexe,
-            matiere_id: selectedMatiereId,
-            note: note,
-            type_examen: selectedTypeExamen,
-            temp_id: `${Date.now()}-${selectedEleve.id}`
-        };
-        setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
-        setNote('');
-        setSelectedEleve(null);
-        setRechercheEleve('');
-        rechercheEleveInputRef.current?.focus();
+ const handleSubmitNoteManuel = (e) => {
+    e.preventDefault();
+    const noteNum = parseFloat(note);
+    if (!selectedEleve || isNaN(noteNum)) return;
+    const nouvelleSaisie = {
+        type: 'note',
+        eleve_id: selectedEleve.id,
+        eleve_nom: `${selectedEleve.nom} ${selectedEleve.prenom}`,
+        numero_incorporation: selectedEleve.numero_incorporation,
+        escadron: selectedEleve.escadron,
+        peloton: selectedEleve.peloton,
+        sexe: selectedEleve.sexe,
+        matiere_id: selectedMatiereId,
+        note: note,
+        type_examen: selectedTypeExamen,
+        temp_id: `${Date.now()}-${selectedEleve.id}`
     };
+    setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
+    setNote('');
+    setSelectedEleve(null);
+    setRechercheEleve('');
+    if (isMatiereParcours) {
+        setParcoursResetSignal(s => s + 1); // ✅ vide les heures du formulaire parcours
+    }
+    rechercheEleveInputRef.current?.focus();
+};
 
     // ── Validation finale ─────────────────────────────────────────────────────
     const handleValiderSaisies = async () => {
@@ -876,20 +1098,39 @@ const SaisieDirecte = () => {
                                         ))}
                                     </div>
                                 )}
-                            </div>
-                            <div className="form-group">
-                                <label>Note / 20</label>
-                                <input
-                                    ref={noteInputRef}
-                                    type="number"
-                                    value={note}
-                                    onChange={e => setNote(e.target.value)}
-                                    min="0" max="20" step="0.01"
-                                    disabled={!selectedEleve}
-                                    required
-                                />
-                            </div>
-                            <button type="submit" className="btn btn-primary" disabled={!selectedEleve || !selectedMatiereId}>
+                                  {selectedEleve ? (
+                                    <small style={{ color: '#38a169', display: 'block', marginTop: '4px' }}>
+                                        ✓ Élève sélectionné : {selectedEleve.nom} {selectedEleve.prenom}
+                                    </small>
+                                ) : rechercheEleve.trim().length >= 2 && (
+                                    <small style={{ color: '#e53e3e', display: 'block', marginTop: '4px' }}>
+                                        ⚠ Veuillez cliquer sur un élève dans la liste pour le sélectionner.
+                                    </small>
+                                )}
+                                                        </div>
+                            
+                           {isMatiereParcours ? (
+                                    <ParcoursChronoForm onNoteCalculee={(n) => setNote(n)} resetSignal={parcoursResetSignal} />
+                                ) : (
+                                <div className="form-group">
+                                    <label>Note / 20</label>
+                                    <input
+                                        ref={noteInputRef}
+                                        type="number"
+                                        value={note}
+                                        onChange={e => setNote(e.target.value)}
+                                        min="0" max="20" step="0.01"
+                                        disabled={!selectedEleve}
+                                        required
+                                    />
+                                </div>
+                            )}
+                         
+                            <button
+                                type="submit"
+                                className="btn btn-primary"
+                                disabled={!selectedEleve || !selectedMatiereId || (isMatiereParcours && !note)}
+                            >
                                 <FaSave /> Ajouter
                             </button>
                         </form>
@@ -927,6 +1168,13 @@ const SaisieDirecte = () => {
                 .card-header-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
                 .history-btn { background: transparent; border: 1px solid #cbd5e0; border-radius: 8px; padding: 8px; cursor: pointer; color: #4a5568; }
                 .history-btn:hover { background: #edf2f7; }
+                .parcours-chrono-box { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
+                .parcours-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+                .parcours-table th { text-align: left; font-size: 0.85rem; color: #718096; padding-bottom: 6px; }
+                .parcours-table td { padding: 4px 6px 4px 0; }
+                .parcours-table input[type="time"] { width: 100%; padding: 6px; border: 1px solid #cbd5e0; border-radius: 6px; }
+                .champ-absent { color: #cbd5e0; display: inline-block; text-align: center; width: 100%; }
+                .parcours-result { display: flex; justify-content: space-between; background: #edf2f7; padding: 10px 14px; border-radius: 8px; font-size: 0.95rem; }
             `}</style>
         </div>
     );

@@ -505,6 +505,19 @@ useEffect(() => {
                         </div>
                     )}
                 </div>
+                <div style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        margin: '10px 0', fontSize: '0.9rem', color: '#4a5568'
+                    }}>
+                        <span>
+                            <strong> resultat : {filteredResults.length}</strong> note{filteredResults.length !== 1 ? 's' : ''} enregistrée{filteredResults.length !== 1 ? 's' : ''}
+                            {selectedMatiere && matieres.find(m => m.id === parseInt(selectedMatiere, 10)) && (
+                                <> pour <strong>{matieres.find(m => m.id === parseInt(selectedMatiere, 10)).nom_matiere}</strong></>
+                            )}
+                            {selectedTypeExamen && <> — <strong>{selectedTypeExamen}</strong></>}
+                        </span>
+                    </div>
+                
 
                 <div className="table-wrapper">
                     <table className="modern-table">

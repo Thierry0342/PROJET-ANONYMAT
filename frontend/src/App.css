@@ -177,3 +177,17 @@ select:focus {
     padding: 24px;
   }
 }
+.parcours-table input.invalid {
+    border-color: #e53e3e;
+    background: #fff5f5;
+    color: #9b2c2c;
+}
+.parcours-erreur {
+    background: #fff5f5;
+    color: #c53030;
+    border: 1px solid #feb2b2;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-bottom: 10px;
+}
