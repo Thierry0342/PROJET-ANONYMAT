@@ -264,30 +264,83 @@ useEffect(() => {
         }
     };
 
-    const handleExport = (format) => {
-        setIsExportModalOpen(false);
-        setIsExporting(true);
-        const token = localStorage.getItem('token');
-        const url = format === 'excel'
-            ? `/api/resultats/exporter?matiereId=${selectedMatiere}`
-            : `/api/resultats/generer-document-pdf`;
-        axios({
-            url,
-            method: format === 'excel' ? 'GET' : 'POST',
-            data: { matiereId: selectedMatiere },
-            headers: { Authorization: `Bearer ${token}` },
-            responseType: 'blob',
-        }).then(response => {
-            const href = URL.createObjectURL(response.data);
-            const link = document.createElement('a');
-            link.href = href;
-            link.setAttribute('download', `Notes.${format === 'excel' ? 'xlsx' : 'pdf'}`);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }).finally(() => setTimeout(() => setIsExporting(false), 2000));
-    };
+   const handleExport = (format) => {
+    setIsExportModalOpen(false);
+    setIsExporting(true);
+    const token = localStorage.getItem('token');
 
+    // ✅ Transmet tous les filtres actuellement sélectionnés
+    const params = new URLSearchParams();
+    if (selectedMatiere)    params.append('matiereId', selectedMatiere);
+    if (selectedTypeExamen) params.append('typeExamen', selectedTypeExamen);
+    if (selectedPromotion)  params.append('promotion', selectedPromotion);
+
+    const url = format === 'excel'
+        ? `/api/resultats/exporter?${params.toString()}`
+        : `/api/resultats/generer-document-pdf`;
+
+   axios({
+    url,
+    method: format === 'excel' ? 'GET' : 'POST',
+    data: {
+        matiereId: selectedMatiere,
+        typeExamen: selectedTypeExamen,
+        promotion: selectedPromotion
+    },
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+    }).then(response => {
+        const href = URL.createObjectURL(response.data);
+        const link = document.createElement('a');
+        link.href = href;
+        link.setAttribute('download', `Notes.${format === 'excel' ? 'xlsx' : 'pdf'}`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }).finally(() => setTimeout(() => setIsExporting(false), 2000));
+};
+const handleExportManquants = () => {
+    if (!selectedMatiere || !selectedTypeExamen) {
+        alert("Veuillez sélectionner une matière et un type d'examen.");
+        return;
+    }
+    setIsExporting(true);
+    const token = localStorage.getItem('token');
+
+    const params = new URLSearchParams();
+    params.append('matiereId', selectedMatiere);
+    params.append('typeExamen', selectedTypeExamen);
+    if (selectedPromotion) params.append('promotion', selectedPromotion);
+
+    axios({
+        url: `/api/resultats/exporter-manquants?${params.toString()}`,
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+    }).then(response => {
+        const href = URL.createObjectURL(response.data);
+        const link = document.createElement('a');
+        link.href = href;
+        link.setAttribute('download', `Manquants.xlsx`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }).catch(err => {
+        // Le blob d'erreur doit être relu comme du JSON pour afficher le message
+        if (err.response?.data instanceof Blob) {
+            err.response.data.text().then(text => {
+                try {
+                    const json = JSON.parse(text);
+                    alert(json.message || "Erreur lors de l'export des manquants.");
+                } catch {
+                    alert("Erreur lors de l'export des manquants.");
+                }
+            });
+        } else {
+            alert("Erreur lors de l'export des manquants.");
+        }
+    }).finally(() => setTimeout(() => setIsExporting(false), 1000));
+};
     // ── Filtres ───────────────────────────────────────────────────────────────
     const filteredResults = useMemo(() => {
         let results = resultats;
@@ -462,12 +515,19 @@ useEffect(() => {
                                 <button className="drop-item" onClick={() => { setIsSelectionClassementOpen(true); setIsActionMenuOpen(false); }}>
                                     <IconCalculator /> Voir le classement
                                 </button>
-                                <button className="drop-item" onClick={() => { setIsExportModalOpen(true); setIsActionMenuOpen(false); }} disabled={!selectedMatiere}>
-                                    <IconExport /> Exporter les notes
-                                </button>
+                               <button
+                                className="drop-item"
+                                onClick={() => { setIsExportModalOpen(true); setIsActionMenuOpen(false); }}
+                                disabled={!selectedMatiere || !selectedTypeExamen}
+                            >
+                                <IconExport /> Exporter les notes
+                            </button>
                                 <button className="drop-item" onClick={() => { setIsElevesSansNoteModalOpen(true); setIsActionMenuOpen(false); }} disabled={!selectedMatiere || !selectedTypeExamen}>
-                                    <IconUserX /> Voir les manquants
-                                </button>
+                                <IconUserX /> Voir les manquants
+                            </button>
+                            <button className="drop-item" onClick={() => { handleExportManquants(); setIsActionMenuOpen(false); }} disabled={!selectedMatiere || !selectedTypeExamen}>
+                                <IconExport /> Exporter les manquants (Excel)
+                            </button>
                                 <button className="drop-item" onClick={() => { setIsConfigModalOpen(true); setIsActionMenuOpen(false); }}>
                                     <IconSettings /> Configuration
                                 </button>
