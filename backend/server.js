@@ -1054,36 +1054,58 @@ app.get('/api/resultats/:copieId/historique', authenticateToken, checkRole(['adm
 
 app.get(apiPaths.resultats.exporter, authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const { matiereId } = req.query;
+        const { matiereId, typeExamen, promotion } = req.query;
         if (!matiereId) {
             return res.status(400).json({ message: "Veuillez spécifier une matière pour l'exportation." });
         }
-        const query = `
+
+        let query = `
             SELECT e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton, e.sexe, m.nom_matiere, c.note
             FROM copies c
             JOIN eleves e ON c.eleve_id = e.id
             JOIN matieres m ON c.matiere_id = m.id
             WHERE c.note IS NOT NULL AND m.id = ?
-            ORDER BY e.escadron, e.peloton, CAST(e.numero_incorporation AS UNSIGNED) ASC;
         `;
-        const [results] = await db.query(query, [matiereId]);
-        if (results.length === 0) {
-            return res.status(404).json({ message: "Aucun résultat à exporter pour cette matière." });
+        const params = [matiereId];
+
+        if (typeExamen) {
+            query += " AND c.type_examen = ?";
+            params.push(typeExamen);
         }
+        if (promotion) {
+            query += " AND e.promotion = ?";
+            params.push(promotion);
+        }
+
+        query += " ORDER BY e.escadron, e.peloton, CAST(e.numero_incorporation AS UNSIGNED) ASC;";
+
+        const [results] = await db.query(query, params);
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "Aucun résultat à exporter pour ces critères." });
+        }
+
         const groupedData = results.reduce((acc, result) => {
             const key = `${result.escadron || 'Sans Escadron'} - ${result.peloton || 'Sans Peloton'}`;
             if (!acc[key]) acc[key] = [];
             acc[key].push(result);
             return acc;
         }, {});
+
         const workbook = xlsx.utils.book_new();
         const nomMatiere = results[0].nom_matiere.toUpperCase();
+
         for (const groupName in groupedData) {
             const sheetData = groupedData[groupName];
             const headers = ["N° ORDRE", "NOM ET PRENOM", "N° INCORPORATION", "ESCADRON", "PELOTON", "SEXE", "NOTE / 20"];
             const body = sheetData.map((row, index) => [
-                index + 1, `${row.nom || ''} ${row.prenom || ''}`.trim(), row.numero_incorporation,
-                row.escadron, row.peloton, (row.sexe === 'feminin' ? 'F' : 'M'), row.note
+                index + 1,
+                `${row.nom || ''} ${row.prenom || ''}`.trim(),
+                row.numero_incorporation,
+                row.escadron,
+                row.peloton,
+                (row.sexe === 'feminin' ? 'F' : 'M'),
+                row.note
             ]);
             const finalSheetData = [[`FICHE DE RECUEIL DE NOTE - ${nomMatiere}`], [], headers, ...body];
             const worksheet = xlsx.utils.aoa_to_sheet(finalSheetData);
@@ -1092,8 +1114,9 @@ app.get(apiPaths.resultats.exporter, authenticateToken, checkRole(['admin']), as
             const sheetName = groupName.replace(/[\\/*?:]/g, '').substring(0, 31);
             xlsx.utils.book_append_sheet(workbook, worksheet, sheetName);
         }
+
         const buffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
-        const fileName = `Fiche_Notes_${nomMatiere.replace(/ /g, '_')}.xlsx`;
+        const fileName = `Fiche_Notes_${nomMatiere.replace(/ /g, '_')}${typeExamen ? '_' + typeExamen : ''}${promotion ? '_' + promotion : ''}.xlsx`;
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.send(buffer);
@@ -1104,20 +1127,35 @@ app.get(apiPaths.resultats.exporter, authenticateToken, checkRole(['admin']), as
 
 app.post('/api/resultats/generer-document-pdf', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
-        const { matiereId } = req.body;
+        const { matiereId, typeExamen, promotion } = req.body;
         if (!matiereId) {
             return res.status(400).json({ message: "Veuillez spécifier une matière pour la génération du document." });
         }
-        const query = `
+
+        let query = `
             SELECT e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton, e.sexe, m.nom_matiere, c.note
             FROM copies c JOIN eleves e ON c.eleve_id = e.id JOIN matieres m ON c.matiere_id = m.id
             WHERE c.note IS NOT NULL AND m.id = ?
-            ORDER BY e.escadron, e.peloton, CAST(e.numero_incorporation AS UNSIGNED) ASC;
         `;
-        const [results] = await db.query(query, [matiereId]);
-        if (results.length === 0) {
-            return res.status(404).json({ message: "Aucun résultat à générer pour cette matière." });
+        const params = [matiereId];
+
+        if (typeExamen) {
+            query += " AND c.type_examen = ?";
+            params.push(typeExamen);
         }
+        if (promotion) {
+            query += " AND e.promotion = ?";
+            params.push(promotion);
+        }
+
+        query += " ORDER BY e.escadron, e.peloton, CAST(e.numero_incorporation AS UNSIGNED) ASC;";
+
+        const [results] = await db.query(query, params);
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "Aucun résultat à générer pour ces critères." });
+        }
+
         const groupedData = results.reduce((acc, result) => {
             const key = `${result.escadron || 'Sans Escadron'} - ${result.peloton || 'Sans Peloton'}`;
             if (!acc[key]) acc[key] = [];
@@ -1183,8 +1221,9 @@ app.post('/api/resultats/generer-document-pdf', authenticateToken, checkRole(['a
                 }
             });
         }
+
         const pdfBuffer = doc.output('arraybuffer');
-        const fileName = `Fiche_Notes_${nomMatiere.replace(/ /g, '_')}.pdf`;
+        const fileName = `Fiche_Notes_${nomMatiere.replace(/ /g, '_')}${typeExamen ? '_' + typeExamen : ''}${promotion ? '_' + promotion : ''}.pdf`;
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Type', 'application/pdf');
         res.send(Buffer.from(pdfBuffer));
@@ -4274,6 +4313,106 @@ app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admi
     } catch (err) {
         console.error('Erreur sans-note-complete:', err);
         res.status(500).json({ error: err.message });
+    }
+});
+app.get('/api/resultats/exporter-manquants', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { matiereId, typeExamen, promotion, population } = req.query;
+
+        if (!matiereId || !typeExamen) {
+            return res.status(400).json({ message: "Matière et type d'examen sont requis pour l'exportation." });
+        }
+
+        // 1. Récupérer le nom de la matière
+        const [[matiereInfo]] = await db.query("SELECT nom_matiere FROM matieres WHERE id = ?", [matiereId]);
+        if (!matiereInfo) {
+            return res.status(404).json({ message: "Matière non trouvée." });
+        }
+
+        // 2. Récupérer tous les élèves de la promotion/population ciblée
+        let eleveQuery = `SELECT id, nom, prenom, numero_incorporation, escadron, peloton, sexe, statut FROM eleves WHERE 1=1`;
+        const eleveParams = [];
+
+        if (promotion && promotion !== 'all') {
+            eleveQuery += " AND promotion = ?";
+            eleveParams.push(promotion);
+        }
+        if (population && population !== 'all') {
+            if (population === 'actif') {
+                eleveQuery += " AND (statut = 'actif' OR statut IS NULL OR statut = 'approuve')";
+            } else if (population === 'conseil') {
+                eleveQuery += " AND statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')";
+            }
+        }
+        eleveQuery += " ORDER BY escadron, peloton, CAST(numero_incorporation AS UNSIGNED) ASC";
+
+        const [eleves] = await db.query(eleveQuery, eleveParams);
+        if (eleves.length === 0) {
+            return res.status(404).json({ message: "Aucun élève trouvé pour ces critères." });
+        }
+
+        // 3. Récupérer les élèves qui ONT déjà une note pour cette matière + cet examen
+        const [elevesAvecNote] = await db.query(`
+            SELECT eleve_id
+            FROM copies
+            WHERE matiere_id = ? AND type_examen = ? AND note IS NOT NULL AND eleve_id IS NOT NULL
+        `, [matiereId, typeExamen]);
+        const idsAvecNote = new Set(elevesAvecNote.map(r => r.eleve_id));
+
+        // 4. Filtrer les manquants
+        const manquants = eleves.filter(e => !idsAvecNote.has(e.id));
+
+        if (manquants.length === 0) {
+            return res.status(404).json({ message: "Aucun élève manquant pour ces critères — tout le monde a une note !" });
+        }
+
+        // 5. Grouper par escadron/peloton, comme l'export des notes
+        const groupedData = manquants.reduce((acc, eleve) => {
+            const key = `${eleve.escadron || 'Sans Escadron'} - ${eleve.peloton || 'Sans Peloton'}`;
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(eleve);
+            return acc;
+        }, {});
+
+        const workbook = xlsx.utils.book_new();
+        const nomMatiere = matiereInfo.nom_matiere.toUpperCase();
+
+        for (const groupName in groupedData) {
+            const sheetData = groupedData[groupName];
+            const headers = ["N° ORDRE", "NOM ET PRENOM", "N° INCORPORATION", "ESCADRON", "PELOTON", "SEXE", "STATUT"];
+            const body = sheetData.map((row, index) => [
+                index + 1,
+                `${row.nom || ''} ${row.prenom || ''}`.trim(),
+                row.numero_incorporation,
+                row.escadron,
+                row.peloton,
+                (row.sexe === 'feminin' ? 'F' : 'M'),
+                row.statut || 'actif'
+            ]);
+            const finalSheetData = [
+                [`ÉLÈVES SANS NOTE - ${nomMatiere} (${typeExamen})`],
+                [],
+                headers,
+                ...body
+            ];
+            const worksheet = xlsx.utils.aoa_to_sheet(finalSheetData);
+            worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
+            worksheet['!cols'] = [
+                { wch: 10 }, { wch: 35 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 10 }, { wch: 15 }
+            ];
+            const sheetName = groupName.replace(/[\\/*?:]/g, '').substring(0, 31);
+            xlsx.utils.book_append_sheet(workbook, worksheet, sheetName);
+        }
+
+        const buffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+        const fileName = `Manquants_${nomMatiere.replace(/ /g, '_')}_${typeExamen}${promotion ? '_' + promotion : ''}.xlsx`;
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
+
+    } catch (err) {
+        console.error("Erreur export manquants:", err);
+        res.status(500).json({ error: "Erreur lors de la génération du fichier Excel des manquants." });
     }
 });
 
