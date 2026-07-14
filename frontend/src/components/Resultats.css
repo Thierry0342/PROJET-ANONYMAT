@@ -75,3 +75,10 @@
 
 .empty-state { text-align: center; padding: 3rem; color: var(--text-light); font-style: italic; }
 .loader { padding: 2rem; text-align: center; color: var(--primary); font-weight: 600; }
+.parcours-chrono-box { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
+.parcours-version-desc { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #718096; margin: 0 0 12px 0; }
+.parcours-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.parcours-table th { text-align: left; font-size: 0.85rem; color: #718096; padding-bottom: 6px; }
+.parcours-table td { padding: 4px 6px 4px 0; }
+.champ-absent { color: #cbd5e0; display: inline-block; text-align: center; width: 100%; }
+.parcours-result { display: flex; justify-content: space-between; background: #edf2f7; padding: 10px 14px; border-radius: 8px; font-size: 0.95rem; }

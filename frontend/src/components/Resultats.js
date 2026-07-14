@@ -3,6 +3,8 @@ import axios from 'axios';
 import ConfigurationModal from './ConfigurationModal';
 import ClassementModal from './ClassementModal';
 import ElevesSansNoteModal from './ElevesSansNoteModal';
+import { ParcoursDetailsView } from '../utils/parcoursConfig';
+import { FaClock } from 'react-icons/fa';
 import './Resultats.css';
 import './Typewriter.css';
 
@@ -89,6 +91,28 @@ const ModificationModal = ({ resultat, onClose, onSave }) => {
     );
 };
 
+// ✅ NOUVEAU : Modale de consultation des heures enregistrées pour le parcours chronométré (PG)
+const HeuresParcoursModal = ({ resultat, onClose }) => (
+    <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+                <h3>Heures — {resultat.prenom} {resultat.nom}</h3>
+                <button className="close-button" onClick={onClose}>&times;</button>
+            </div>
+            <div className="modal-body">
+                <ParcoursDetailsView
+                    detailsParcours={resultat.details_parcours}
+                    versionId={resultat.parcours_version}
+                    note={resultat.note}
+                />
+            </div>
+            <div className="modal-actions">
+                <button className="btn-cancel" onClick={onClose}>Fermer</button>
+            </div>
+        </div>
+    </div>
+);
+
 const ExportAnimation = () => (
     <div className="export-overlay">
         <div>
@@ -165,6 +189,7 @@ function Resultats() {
     const [resultsPerPage]                                  = useState(10);
     const [editingResult, setEditingResult]                 = useState(null);
     const [viewingHistoryOf, setViewingHistoryOf]           = useState(null);
+    const [viewingHeuresOf, setViewingHeuresOf]              = useState(null); // ✅ NOUVEAU
     const [isExporting, setIsExporting]                     = useState(false);
     const [isExportModalOpen, setIsExportModalOpen]         = useState(false);
     const [isConfigModalOpen, setIsConfigModalOpen]         = useState(false);
@@ -399,6 +424,13 @@ const handleExportManquants = () => {
                     onClose={() => setViewingHistoryOf(null)}
                 />
             )}
+            {/* ✅ NOUVEAU : modale de consultation des heures du parcours chronométré */}
+            {viewingHeuresOf && (
+                <HeuresParcoursModal
+                    resultat={viewingHeuresOf}
+                    onClose={() => setViewingHeuresOf(null)}
+                />
+            )}
 
             {isConfigModalOpen && (
                 <ConfigurationModal
@@ -606,6 +638,12 @@ const handleExportManquants = () => {
                                         </span>
                                     </td>
                                     <td className="actions-cell">
+                                        {/* ✅ NOUVEAU : bouton "Voir les heures", visible uniquement si la copie a des heures enregistrées (parcours chronométré) */}
+                                        {r.details_parcours && (
+                                            <button className="btn-action" title="Voir les heures enregistrées" onClick={() => setViewingHeuresOf(r)}>
+                                                <FaClock />
+                                            </button>
+                                        )}
                                         <button className="btn-action edit" title="Modifier" onClick={() => setEditingResult(r)}><IconEdit /></button>
                                         <button className="btn-action history" title="Historique" onClick={() => setViewingHistoryOf(r)}><IconHistory /></button>
                                         <button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>

@@ -4,16 +4,25 @@ import { jwtDecode } from 'jwt-decode';
 import {
     FaPlay, FaSave, FaUserPlus, FaUsers, FaArrowLeft, FaHistory,
     FaEdit, FaTrash, FaCheckCircle, FaUserSlash, FaClipboardList,
-    FaInfoCircle, FaLock
+    FaInfoCircle, FaLock, FaClock
 } from 'react-icons/fa';
 import apiPaths from '../config/apiPaths';
 
 // ─── Configuration "Parcours chronométré" (type EG 101 / FETTA) ───────────────
 // Reproduit la logique du fichier Excel :
-//   - Temps total = somme des (Arrivée - Départ) de 6 épreuves
+//   - Temps total = somme des (Arrivée - Départ) des épreuves du circuit
 //   - Note = RECHERCHEV(temps_total, Barème!A:B, 2, VRAI) -> recherche approximative
+//
+// ⚠️ La fiche de circuit a changé (des ateliers ont été ajoutés) mais la longueur
+// totale du circuit n'a PAS changé : le barème (seuils temps -> note) reste donc
+// identique pour les deux versions. Seule la LISTE DES POSTES change.
+// Plus de 300 élèves ont déjà rempli l'ANCIENNE fiche papier mais n'ont pas
+// encore été saisis dans le logiciel : on doit donc pouvoir saisir avec les DEUX
+// configurations de postes en parallèle. L'utilisateur choisit la version
+// applicable ("Ancien circuit" / "Nouveau circuit") directement dans le
+// formulaire de saisie (voir ParcoursChronoForm plus bas).
 
-// Barème: seuil de temps total (en secondes depuis minuit) -> note /20
+// ── Barème unique (seuils inchangés, le circuit garde la même longueur totale) ──
 // Source : feuille "Barème" du fichier Excel FETTA_79_COURS_EG_101.xlsx
 const BAREME_PARCOURS = [
     { seuil: 1 * 3600 + 30 * 60 + 0, note: 20 },  // 1h30m00
@@ -27,12 +36,11 @@ const BAREME_PARCOURS = [
     { seuil: 3 * 3600 + 59 * 60 + 59, note: 12 }, // 3h59m59
 ];
 
-// Postes du parcours, dans l'ordre exact de passage (colonnes C→N du fichier Excel).
-// C'est un relais : on ne repart pas de zéro à chaque poste.
+// ── Postes ANCIEN circuit (7 postes) ───────────────────────────────────────
 //   - RSA       : uniquement un Départ (point de départ du parcours)
 //   - TOPO..TIR : Arrivée au poste, puis Départ vers le poste suivant
 //   - OS        : uniquement une Arrivée (ligne d'arrivée finale)
-const CHECKPOINTS_PARCOURS = [
+const CHECKPOINTS_PARCOURS_ANCIEN = [
     { key: 'rsa', label: 'RSA', arrivee: false, depart: true },
     { key: 'topo', label: 'TOPO', arrivee: true, depart: true },
     { key: 'tel', label: 'TEL', arrivee: true, depart: true },
@@ -42,13 +50,69 @@ const CHECKPOINTS_PARCOURS = [
     { key: 'os', label: 'OS', arrivee: true, depart: false },
 ];
 
-// Liste à plat des 12 champs, dans l'ordre exact des colonnes C→N de l'Excel
-// (rsa_depart, topo_arrivee, topo_depart, tel_arrivee, tel_depart, ...)
-const CHAMPS_ORDONNES_PARCOURS = CHECKPOINTS_PARCOURS.reduce((champs, cp) => {
+// ── Postes NOUVEAU circuit (9 postes) ──────────────────────────────────────
+// Ordre : 8 KMS → RSA → TELECOM → TOPO → COMBAT → SECOURISME → ARM → TIR → OS
+// (TOPO et TELECOM ont permuté par rapport à l'ancien circuit, ARM a été
+// ajouté avant TIR, et 8 KMS a été ajouté en tête).
+// Tous les postes ont une Arrivée ET un Départ, sauf OS qui n'a qu'une Arrivée
+// (ligne d'arrivée finale, pas de départ).
+// Remarque technique : l'Arrivée du tout premier poste (8 KMS) est saisie et
+// contrôlée (doit être avant son propre Départ) mais n'entre pas dans le calcul
+// du temps total, exactement comme l'ancien "RSA" qui n'avait qu'un Départ —
+// c'est ce départ-là qui sert de point de départ du chronométrage du circuit.
+const CHECKPOINTS_PARCOURS_NOUVEAU = [
+    { key: '8km', label: '8 KMS', arrivee: true, depart: true, arriveeChainee: false },
+    { key: 'rsa', label: 'RSA', arrivee: true, depart: true },
+    { key: 'telecom', label: 'TELECOM', arrivee: true, depart: true },
+    { key: 'topo', label: 'TOPO', arrivee: true, depart: true },
+    { key: 'combat', label: 'COMBAT', arrivee: true, depart: true },
+    { key: 'secourisme', label: 'SECOURISME', arrivee: true, depart: true },
+    { key: 'arm', label: 'ARM', arrivee: true, depart: true },
+    { key: 'tir', label: 'TIR', arrivee: true, depart: true },
+    { key: 'os', label: 'OS', arrivee: true, depart: false },
+];
+
+// Construit la liste à plat de TOUS les champs saisissables d'un poste (pour
+// l'affichage du tableau et la vérification chronologique complète).
+const construireChampsTous = (checkpoints) => checkpoints.reduce((champs, cp) => {
     if (cp.arrivee) champs.push(`${cp.key}_arrivee`);
     if (cp.depart) champs.push(`${cp.key}_depart`);
     return champs;
 }, []);
+
+// Construit la liste à plat des champs utilisés dans le CALCUL de la durée
+// (identique à construireChampsTous, sauf que l'Arrivée d'un poste marqué
+// `arriveeChainee: false` est exclue : ce poste sert uniquement de point de
+// départ du chronométrage, comme l'ancien "RSA").
+const construireChampsOrdonnes = (checkpoints) => checkpoints.reduce((champs, cp) => {
+    if (cp.arrivee && cp.arriveeChainee !== false) champs.push(`${cp.key}_arrivee`);
+    if (cp.depart) champs.push(`${cp.key}_depart`);
+    return champs;
+}, []);
+
+// ── Configuration des 2 versions du circuit, sélectionnable dans le formulaire ──
+// Les deux versions partagent le MÊME barème (BAREME_PARCOURS) car la longueur
+// totale du circuit n'a pas changé, seuls des ateliers ont été ajoutés.
+const VERSIONS_PARCOURS = {
+    nouveau: {
+        id: 'nouveau',
+        label: 'Nouveau circuit',
+        description: 'Fiche en vigueur à partir d\'aujourd\'hui (8 KMS, RSA, TELECOM, TOPO, COMBAT, SECOURISME, ARM, TIR, OS)',
+        checkpoints: CHECKPOINTS_PARCOURS_NOUVEAU,
+        bareme: BAREME_PARCOURS,
+        champsTous: construireChampsTous(CHECKPOINTS_PARCOURS_NOUVEAU),
+        champsOrdonnes: construireChampsOrdonnes(CHECKPOINTS_PARCOURS_NOUVEAU),
+    },
+    ancien: {
+        id: 'ancien',
+        label: 'Ancien circuit',
+        description: 'Pour les fiches papier déjà remplies avant le changement (RSA, TOPO, TEL, EIT, SECOURISME, TIR, OS)',
+        checkpoints: CHECKPOINTS_PARCOURS_ANCIEN,
+        bareme: BAREME_PARCOURS,
+        champsTous: construireChampsTous(CHECKPOINTS_PARCOURS_ANCIEN),
+        champsOrdonnes: construireChampsOrdonnes(CHECKPOINTS_PARCOURS_ANCIEN),
+    },
+};
 
 // ⚠️ Nom de la matière qui déclenche le mode "Parcours chronométré".
 // La comparaison est tolérante : elle matche toute matière dont le nom
@@ -63,17 +127,15 @@ const timeToSeconds = (hhmm) => {
     return h * 3600 + m * 60;
 };
 
-// Calcule la durée totale = somme des 6 segments (D-C)+(F-E)+(H-G)+(J-I)+(L-K)+(N-M),
-// exactement comme la formule Excel. Retourne null tant que tous les temps ne sont
-// pas renseignés.
-// Vérifie que la séquence complète des 12 temps est strictement croissante
-// (pas de retour à minuit possible : le parcours ne dépasse jamais 24h).
+// Vérifie que la séquence complète des temps saisis (TOUS les champs affichés,
+// pas seulement ceux du calcul) est strictement croissante — pas de retour à
+// minuit possible : le parcours ne dépasse jamais 24h.
 // Retourne un Set contenant les clés des champs impliqués dans une incohérence.
-const champsInvalides = (temps) => {
+const champsInvalides = (temps, champsTous) => {
     const invalides = new Set();
-    for (let i = 1; i < CHAMPS_ORDONNES_PARCOURS.length; i++) {
-        const champPrecedent = CHAMPS_ORDONNES_PARCOURS[i - 1];
-        const champActuel = CHAMPS_ORDONNES_PARCOURS[i];
+    for (let i = 1; i < champsTous.length; i++) {
+        const champPrecedent = champsTous[i - 1];
+        const champActuel = champsTous[i];
         const tPrec = timeToSeconds(temps[champPrecedent]);
         const tActuel = timeToSeconds(temps[champActuel]);
         if (tPrec !== null && tActuel !== null && tActuel <= tPrec) {
@@ -84,11 +146,12 @@ const champsInvalides = (temps) => {
     return invalides;
 };
 
-// Calcule la durée totale = somme des 6 segments (D-C)+(F-E)+(H-G)+(J-I)+(L-K)+(N-M).
+// Calcule la durée totale = somme des segments (D-C)+(F-E)+... exactement comme
+// la formule Excel, sur la liste `champsOrdonnes` de la version sélectionnée.
 // Plus de correction "passage de minuit" : le parcours ne dépasse pas 24h,
 // donc un segment négatif ou nul signifie une saisie invalide.
-const calculerDureeTotale = (temps) => {
-    const valeurs = CHAMPS_ORDONNES_PARCOURS.map(id => timeToSeconds(temps[id]));
+const calculerDureeTotale = (temps, champsOrdonnes) => {
+    const valeurs = champsOrdonnes.map(id => timeToSeconds(temps[id]));
     if (valeurs.some(v => v === null)) return null;
     let total = 0;
     for (let i = 0; i < valeurs.length; i += 2) {
@@ -102,10 +165,10 @@ const calculerDureeTotale = (temps) => {
 // Reproduit =RECHERCHEV(total, Barème!A:B, 2, VRAI) : recherche approximative
 // sur une table triée par ordre croissant -> renvoie la note du plus grand
 // seuil inférieur ou égal au temps total.
-const noteDepuisBareme = (totalSecondes) => {
+const noteDepuisBareme = (totalSecondes, bareme) => {
     if (totalSecondes === null) return null;
     let note = null;
-    for (const { seuil, note: n } of BAREME_PARCOURS) {
+    for (const { seuil, note: n } of bareme) {
         if (seuil <= totalSecondes) note = n;
         else break;
     }
@@ -121,37 +184,55 @@ const formatDuree = (secondes) => {
     return `${h}h${String(m).padStart(2, '0')}m${String(s).padStart(2, '0')}s`;
 };
 
-// ─── Formulaire "Parcours chronométré" ─────────────────────────────────────────
+// ─── Formulaire "Parcours chronométré" (SAISIE) ────────────────────────────────
 // Remplace le champ Note classique quand la matière sélectionnée est le parcours.
-// Appelle onNoteCalculee(note, dureeTotale) à chaque changement, `note` étant
-// une chaîne vide tant que tous les temps ne sont pas renseignés.
+// Permet de choisir entre l'ANCIEN circuit (fiches papier déjà remplies avant le
+// changement) et le NOUVEAU circuit (en vigueur à partir d'aujourd'hui), pour
+// pouvoir continuer à saisir les ~300 élèves en attente avec l'ancienne fiche
+// tout en utilisant la nouvelle pour les élèves suivants.
+// Appelle onNoteCalculee(note, dureeTotale, versionId, temps) à chaque
+// changement, `note` étant une chaîne vide tant que tous les temps ne sont pas
+// renseignés. `temps` est l'objet brut des heures saisies : c'est CE QUI EST
+// ENREGISTRÉ EN BASE pour pouvoir vérifier/modifier plus tard.
 const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
+    const [versionId, setVersionId] = useState('nouveau');
     const [temps, setTemps] = useState({});
     const inputRefs = useRef({});
 
-    const invalides = useMemo(() => champsInvalides(temps), [temps]);
+    const version = VERSIONS_PARCOURS[versionId];
+
+    const invalides = useMemo(() => champsInvalides(temps, version.champsTous), [temps, version]);
     const hasErrors = invalides.size > 0;
-    const duree = useMemo(() => (hasErrors ? null : calculerDureeTotale(temps)), [temps, hasErrors]);
-    const note = useMemo(() => noteDepuisBareme(duree), [duree]);
+    const duree = useMemo(
+        () => (hasErrors ? null : calculerDureeTotale(temps, version.champsOrdonnes)),
+        [temps, hasErrors, version]
+    );
+    const note = useMemo(() => noteDepuisBareme(duree, version.bareme), [duree, version]);
 
     // ✅ Notifie le parent de façon synchrone à chaque changement, pas via useEffect
-    const notifierParent = (nouveauxTemps) => {
-        const inv = champsInvalides(nouveauxTemps);
-        const d = inv.size > 0 ? null : calculerDureeTotale(nouveauxTemps);
-        const n = noteDepuisBareme(d);
-        onNoteCalculee(n !== null ? String(n) : '', d);
+    const notifierParent = (nouveauxTemps, versionActuelle) => {
+        const inv = champsInvalides(nouveauxTemps, versionActuelle.champsTous);
+        const d = inv.size > 0 ? null : calculerDureeTotale(nouveauxTemps, versionActuelle.champsOrdonnes);
+        const n = noteDepuisBareme(d, versionActuelle.bareme);
+        onNoteCalculee(n !== null ? String(n) : '', d, versionActuelle.id, nouveauxTemps);
     };
 
     useEffect(() => {
         setTemps({});
-        onNoteCalculee('', null); // ✅ reset aussi côté parent
+        onNoteCalculee('', null, versionId, {}); // ✅ reset aussi côté parent
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resetSignal]);
+
+    const handleChangeVersion = (nouvelleVersionId) => {
+        setVersionId(nouvelleVersionId);
+        setTemps({});
+        onNoteCalculee('', null, nouvelleVersionId, {}); // reset : les 2 fiches n'ont pas les mêmes champs
+    };
 
     const handleChange = (champId, value) => {
         setTemps(prev => {
             const next = { ...prev, [champId]: value };
-            notifierParent(next);
+            notifierParent(next, version);
             return next;
         });
     };
@@ -159,8 +240,8 @@ const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
     const handleKeyDown = (champId, e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
-            const index = CHAMPS_ORDONNES_PARCOURS.indexOf(champId);
-            const suivantId = CHAMPS_ORDONNES_PARCOURS[index + 1];
+            const index = version.champsTous.indexOf(champId);
+            const suivantId = version.champsTous[index + 1];
             if (suivantId && inputRefs.current[suivantId]) {
                 inputRefs.current[suivantId].focus();
             }
@@ -169,12 +250,26 @@ const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
 
     return (
         <div className="parcours-chrono-box">
+            <div className="parcours-version-selector">
+                {Object.values(VERSIONS_PARCOURS).map(v => (
+                    <button
+                        type="button"
+                        key={v.id}
+                        className={`version-btn ${versionId === v.id ? 'active' : ''}`}
+                        onClick={() => handleChangeVersion(v.id)}
+                        title={v.description}
+                    >
+                        {v.label}
+                    </button>
+                ))}
+            </div>
+            <p className="parcours-version-desc"><FaInfoCircle /> {version.description}</p>
             <table className="parcours-table">
                 <thead>
                     <tr><th>Poste</th><th>Arrivée</th><th>Départ</th></tr>
                 </thead>
                 <tbody>
-                    {CHECKPOINTS_PARCOURS.map(cp => (
+                    {version.checkpoints.map(cp => (
                         <tr key={cp.key}>
                             <td>{cp.label}</td>
                             <td>
@@ -213,6 +308,58 @@ const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
             <div className="parcours-result">
                 <span>Temps total : <strong>{formatDuree(duree)}</strong></span>
                 <span>Note calculée : <strong>{note !== null ? `${note} / 20` : '-'}</strong></span>
+            </div>
+        </div>
+    );
+};
+
+const ParcoursDetailsView = ({ detailsParcours, versionId, note }) => {
+    const version = VERSIONS_PARCOURS[versionId] || VERSIONS_PARCOURS.nouveau;
+
+    // ✅ Tolère le cas où detailsParcours arrive en chaîne JSON au lieu d'un objet
+    const detailsObj = useMemo(() => {
+        if (!detailsParcours) return null;
+        if (typeof detailsParcours === 'string') {
+            try {
+                return JSON.parse(detailsParcours);
+            } catch {
+                return null;
+            }
+        }
+        return detailsParcours;
+    }, [detailsParcours]);
+
+    const aDesHeures = detailsObj && Object.keys(detailsObj).length > 0;
+
+    const duree = useMemo(() => {
+        if (!aDesHeures) return null;
+        return calculerDureeTotale(detailsObj, version.champsOrdonnes);
+    }, [detailsObj, version, aDesHeures]);
+
+    if (!aDesHeures) {
+        return <p style={{ color: '#718096' }}>Aucune heure enregistrée pour cette note.</p>;
+    }
+
+    return (
+        <div className="parcours-chrono-box">
+            <p className="parcours-version-desc"><FaInfoCircle /> {version.label} — {version.description}</p>
+            <table className="parcours-table">
+                <thead>
+                    <tr><th>Poste</th><th>Arrivée</th><th>Départ</th></tr>
+                </thead>
+                <tbody>
+                    {version.checkpoints.map(cp => (
+                        <tr key={cp.key}>
+                            <td>{cp.label}</td>
+                            <td>{cp.arrivee ? (detailsObj[`${cp.key}_arrivee`] || '—') : <span className="champ-absent">—</span>}</td>
+                            <td>{cp.depart ? (detailsObj[`${cp.key}_depart`] || '—') : <span className="champ-absent">—</span>}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+            <div className="parcours-result">
+                <span>Temps total : <strong>{formatDuree(duree)}</strong></span>
+                <span>Note enregistrée : <strong>{note} / 20</strong></span>
             </div>
         </div>
     );
@@ -269,48 +416,90 @@ const ModificationModal = ({ entry, onClose, onSave }) => {
     );
 };
 
-const HistoriqueSaisiesModal = ({ isOpen, onClose, saisies, onEdit, isLoading }) => {
-    if (!isOpen) return null;
+// Sous-modale : consultation en lecture seule des heures d'une saisie "Parcours".
+const ParcoursDetailsModal = ({ saisie, onClose }) => {
+    if (!saisie) return null;
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content large" onClick={e => e.stopPropagation()}>
+            <div className="modal-content" onClick={e => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>Mes 150 dernières saisies directes</h3>
+                    <h3>Heures — {saisie.prenom} {saisie.nom}</h3>
                     <button className="close-button" onClick={onClose}>&times;</button>
                 </div>
                 <div className="modal-body">
-                    {isLoading ? <p>Chargement de l'historique...</p> : (
-                        <div className="table-responsive">
-                            <table className="results-table">
-                                <thead>
-                                    <tr><th>Date</th><th>Élève</th><th>Matière</th><th>Note</th><th>Action</th></tr>
-                                </thead>
-                                <tbody>
-                                    {saisies.length > 0 ? saisies.map(saisie => (
-                                        <tr key={saisie.copie_id}>
-                                            <td>{new Date(saisie.date_saisie).toLocaleString('fr-FR')}</td>
-                                            <td>{saisie.prenom} {saisie.nom} ({saisie.numero_incorporation})</td>
-                                            <td>{saisie.nom_matiere}</td>
-                                            <td>{saisie.note}</td>
-                                            <td>
-                                                <button className="btn-icon btn-edit" onClick={() => onEdit(saisie)} title="Modifier cette note">
-                                                    <FaEdit />
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    )) : (
-                                        <tr><td colSpan="5">Aucune saisie récente trouvée.</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
+                    <ParcoursDetailsView
+                        detailsParcours={saisie.details_parcours}
+                        versionId={saisie.parcours_version}
+                        note={saisie.note}
+                    />
                 </div>
                 <div className="modal-actions">
                     <button className="btn btn-secondary" onClick={onClose}>Fermer</button>
                 </div>
             </div>
         </div>
+    );
+};
+
+const HistoriqueSaisiesModal = ({ isOpen, onClose, saisies, onEdit, isLoading }) => {
+    const [saisieDetails, setSaisieDetails] = useState(null);
+
+    if (!isOpen) return null;
+    return (
+        <>
+            <div className="modal-overlay" onClick={onClose}>
+                <div className="modal-content large" onClick={e => e.stopPropagation()}>
+                    <div className="modal-header">
+                        <h3>Mes 150 dernières saisies directes</h3>
+                        <button className="close-button" onClick={onClose}>&times;</button>
+                    </div>
+                    <div className="modal-body">
+                        {isLoading ? <p>Chargement de l'historique...</p> : (
+                            <div className="table-responsive">
+                                <table className="results-table">
+                                    <thead>
+                                        <tr><th>Date</th><th>Élève</th><th>Matière</th><th>Note</th><th>Action</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {saisies.length > 0 ? saisies.map(saisie => (
+                                            <tr key={saisie.copie_id}>
+                                                <td>{new Date(saisie.date_saisie).toLocaleString('fr-FR')}</td>
+                                                <td>{saisie.prenom} {saisie.nom} ({saisie.numero_incorporation})</td>
+                                                <td>{saisie.nom_matiere}</td>
+                                                <td>{saisie.note}</td>
+                                                <td style={{ display: 'flex', gap: '8px' }}>
+                                                    {saisie.details_parcours && (
+                                                        <button
+                                                            className="btn-icon"
+                                                            onClick={() => setSaisieDetails(saisie)}
+                                                            title="Voir les heures enregistrées"
+                                                        >
+                                                            <FaClock />
+                                                        </button>
+                                                    )}
+                                                    <button className="btn-icon btn-edit" onClick={() => onEdit(saisie)} title="Modifier cette note">
+                                                        <FaEdit />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        )) : (
+                                            <tr><td colSpan="5">Aucune saisie récente trouvée.</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                    <div className="modal-actions">
+                        <button className="btn btn-secondary" onClick={onClose}>Fermer</button>
+                    </div>
+                </div>
+            </div>
+
+            {saisieDetails && (
+                <ParcoursDetailsModal saisie={saisieDetails} onClose={() => setSaisieDetails(null)} />
+            )}
+        </>
     );
 };
 
@@ -356,7 +545,10 @@ const ValidationModal = ({ isOpen, onClose, saisies, onValider, onVider, onSuppr
     if (!isOpen) return null;
 
     const handleStartEditing = (saisie) => {
-        if (saisie.type === 'note') {
+        // Pour une saisie "Parcours", la note vient des heures : on ne permet pas
+        // l'édition rapide inline (il faudrait re-saisir les heures), seulement
+        // la suppression + re-saisie via le formulaire.
+        if (saisie.type === 'note' && !saisie.details_parcours) {
             setEditingId(saisie.temp_id);
             setEditingValue(saisie.note);
         }
@@ -403,7 +595,14 @@ const ValidationModal = ({ isOpen, onClose, saisies, onValider, onVider, onSuppr
                                                     style={{ width: '80px', textAlign: 'center' }} />
                                             ) : (
                                                 saisie.type === 'note'
-                                                    ? <strong>{saisie.note} / 20 <FaEdit style={{ marginLeft: '10px', color: '#007bff', cursor: 'pointer' }} /></strong>
+                                                    ? (
+                                                        <strong>
+                                                            {saisie.note} / 20
+                                                            {saisie.details_parcours
+                                                                ? <FaClock style={{ marginLeft: '10px', color: '#718096' }} title="Note issue du parcours chronométré" />
+                                                                : <FaEdit style={{ marginLeft: '10px', color: '#007bff', cursor: 'pointer' }} />}
+                                                        </strong>
+                                                    )
                                                     : <span className="motif-display"><FaUserSlash /> <em>{saisie.motif}</em></span>
                                             )}
                                         </td>
@@ -465,8 +664,11 @@ const SaisieDirecte = () => {
     const [promotionsList, setPromotionsList] = useState([]);
     const [selectedPromotion, setSelectedPromotion] = useState('');
     const [parcoursResetSignal, setParcoursResetSignal] = useState(0);
-const [mesNotesParMatiere, setMesNotesParMatiere] = useState([]);
-const [isLoadingMesNotes, setIsLoadingMesNotes] = useState(false);
+    // ✅ parcoursInfo garde aussi les heures brutes (temps) pour pouvoir les
+    // enregistrer en base et les consulter/modifier plus tard.
+    const [parcoursInfo, setParcoursInfo] = useState({ duree: null, version: 'nouveau', temps: {} });
+    const [mesNotesParMatiere, setMesNotesParMatiere] = useState([]);
+    const [isLoadingMesNotes, setIsLoadingMesNotes] = useState(false);
     const noteInputRef = useRef(null);
     const rechercheEleveInputRef = useRef(null);
 
@@ -629,30 +831,31 @@ const [isLoadingMesNotes, setIsLoadingMesNotes] = useState(false);
             setIsLoadingHistory(false);
         }
     }, [getAuthHeaders]);
-    const fetchMesNotesParMatiere = useCallback(async () => {
-    const typeExamen = assignment?.examen || selectedTypeExamen;
-    const promo = assignment?.promotion || selectedPromotion;
-    if (!typeExamen) {
-        setMesNotesParMatiere([]);
-        return;
-    }
-    setIsLoadingMesNotes(true);
-    try {
-        const params = { typeExamen };
-        if (promo) params.promotion = promo;
-        const res = await axios.get('/api/stats/mes-notes-directes-par-matiere', {
-            params,
-            ...getAuthHeaders()
-        });
-        setMesNotesParMatiere(res.data);
-    } catch (err) {
-        setMesNotesParMatiere([]);
-    } finally {
-        setIsLoadingMesNotes(false);
-    }
-}, [assignment, selectedTypeExamen, selectedPromotion, getAuthHeaders]);
 
-useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
+    const fetchMesNotesParMatiere = useCallback(async () => {
+        const typeExamen = assignment?.examen || selectedTypeExamen;
+        const promo = assignment?.promotion || selectedPromotion;
+        if (!typeExamen) {
+            setMesNotesParMatiere([]);
+            return;
+        }
+        setIsLoadingMesNotes(true);
+        try {
+            const params = { typeExamen };
+            if (promo) params.promotion = promo;
+            const res = await axios.get('/api/stats/mes-notes-directes-par-matiere', {
+                params,
+                ...getAuthHeaders()
+            });
+            setMesNotesParMatiere(res.data);
+        } catch (err) {
+            setMesNotesParMatiere([]);
+        } finally {
+            setIsLoadingMesNotes(false);
+        }
+    }, [assignment, selectedTypeExamen, selectedPromotion, getAuthHeaders]);
+
+    useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
 
     const handleOpenHistoryModal = () => {
         setIsHistoryModalOpen(true);
@@ -709,37 +912,43 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
         setIsLoading(false);
     };
 
-    const handleSubmitNoteSerie = (e) => {
-        e.preventDefault();
-        const noteNum = parseFloat(note);
-        if (note === '' || isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
-            setError("Note invalide (0 à 20).");
-            return;
-        }
-        const currentEleve = listeElevesSerie[currentIndex];
-        const nouvelleSaisie = {
-            type: 'note',
-            eleve_id: currentEleve.id,
-            eleve_nom: `${currentEleve.nom} ${currentEleve.prenom}`,
-            numero_incorporation: currentEleve.numero_incorporation,
-            escadron: currentEleve.escadron,
-            peloton: currentEleve.peloton,
-            sexe: currentEleve.sexe,
-            matiere_id: selectedMatiereId,
-            note: note,
-            type_examen: selectedTypeExamen,
-            temp_id: `${Date.now()}-${currentEleve.id}`
-        };
-        setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
-        setNote('');
-        setError('');
-        if (currentIndex < listeElevesSerie.length - 1) {
-            setCurrentIndex(prev => prev + 1);
-        } else {
-            setIsSaisieSerieActive(false);
-            setIsValidationModalOpen(true);
-        }
+  const handleSubmitNoteSerie = (e) => {
+    e.preventDefault();
+    const noteNum = parseFloat(note);
+    if (note === '' || isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
+        setError("Note invalide (0 à 20).");
+        return;
+    }
+    const currentEleve = listeElevesSerie[currentIndex];
+    const nouvelleSaisie = {
+        type: 'note',
+        eleve_id: currentEleve.id,
+        eleve_nom: `${currentEleve.nom} ${currentEleve.prenom}`,
+        numero_incorporation: currentEleve.numero_incorporation,
+        escadron: currentEleve.escadron,
+        peloton: currentEleve.peloton,
+        sexe: currentEleve.sexe,
+        matiere_id: selectedMatiereId,
+        note: note,
+        type_examen: selectedTypeExamen,
+        temp_id: `${Date.now()}-${currentEleve.id}`,
+        // AJOUT : capture des heures aussi en mode série
+        ...(isMatiereParcours ? {
+            parcours_version: parcoursInfo.version,
+            details_parcours: parcoursInfo.temps,
+        } : {})
     };
+    setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
+    setNote('');
+    setError('');
+    if (isMatiereParcours) setParcoursResetSignal(s => s + 1); // reset la fiche pour l'élève suivant
+    if (currentIndex < listeElevesSerie.length - 1) {
+        setCurrentIndex(prev => prev + 1);
+    } else {
+        setIsSaisieSerieActive(false);
+        setIsValidationModalOpen(true);
+    }
+};
 
     const handleConfirmAbsence = (motif) => {
         const eleve = listeElevesSerie[currentIndex];
@@ -758,6 +967,7 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
         };
         setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
         setIsAbsenceModalOpen(false);
+         if (isMatiereParcours) setParcoursResetSignal(s => s + 1)
         if (currentIndex < listeElevesSerie.length - 1) {
             setCurrentIndex(prev => prev + 1);
         } else {
@@ -791,32 +1001,41 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
         return () => clearTimeout(debounce);
     }, [rechercheEleve, selectedEleve, assignment, selectedPromotion, getAuthHeaders]);
 
- const handleSubmitNoteManuel = (e) => {
-    e.preventDefault();
-    const noteNum = parseFloat(note);
-    if (!selectedEleve || isNaN(noteNum)) return;
-    const nouvelleSaisie = {
-        type: 'note',
-        eleve_id: selectedEleve.id,
-        eleve_nom: `${selectedEleve.nom} ${selectedEleve.prenom}`,
-        numero_incorporation: selectedEleve.numero_incorporation,
-        escadron: selectedEleve.escadron,
-        peloton: selectedEleve.peloton,
-        sexe: selectedEleve.sexe,
-        matiere_id: selectedMatiereId,
-        note: note,
-        type_examen: selectedTypeExamen,
-        temp_id: `${Date.now()}-${selectedEleve.id}`
+    const handleSubmitNoteManuel = (e) => {
+        e.preventDefault();
+        const noteNum = parseFloat(note);
+        if (!selectedEleve || isNaN(noteNum)) return;
+        const nouvelleSaisie = {
+            type: 'note',
+            eleve_id: selectedEleve.id,
+            eleve_nom: `${selectedEleve.nom} ${selectedEleve.prenom}`,
+            numero_incorporation: selectedEleve.numero_incorporation,
+            escadron: selectedEleve.escadron,
+            peloton: selectedEleve.peloton,
+            sexe: selectedEleve.sexe,
+            matiere_id: selectedMatiereId,
+            note: note,
+            type_examen: selectedTypeExamen,
+            temp_id: `${Date.now()}-${selectedEleve.id}`,
+            // ✅ Traçabilité : pour la matière "Parcours" (PG), on garde une trace
+            // complète de la fiche utilisée (ancien/nouveau) ET des heures brutes
+            // saisies (details_parcours), pour pouvoir vérifier ou corriger plus
+            // tard sans avoir à redemander l'élève.
+            ...(isMatiereParcours && Object.keys(parcoursInfo.temps || {}).length > 0 ? {
+                parcours_version: parcoursInfo.version,
+                parcours_duree_secondes: parcoursInfo.duree,
+                details_parcours: parcoursInfo.temps,
+            } : {})
+        };
+        setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
+        setNote('');
+        setSelectedEleve(null);
+        setRechercheEleve('');
+        if (isMatiereParcours) {
+            setParcoursResetSignal(s => s + 1); // ✅ vide les heures du formulaire parcours
+        }
+        rechercheEleveInputRef.current?.focus();
     };
-    setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
-    setNote('');
-    setSelectedEleve(null);
-    setRechercheEleve('');
-    if (isMatiereParcours) {
-        setParcoursResetSignal(s => s + 1); // ✅ vide les heures du formulaire parcours
-    }
-    rechercheEleveInputRef.current?.focus();
-};
 
     // ── Validation finale ─────────────────────────────────────────────────────
     const handleValiderSaisies = async () => {
@@ -826,6 +1045,9 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
         try {
             const promises = [];
             if (notesToSave.length > 0) {
+                // ✅ details_parcours / parcours_version / parcours_duree_secondes
+                // partent naturellement avec chaque note (déjà présents dans l'objet
+                // saisi), le backend n'a qu'à les stocker dans la table `copies`.
                 promises.push(axios.post('/api/copies/notes-directes-bulk', { notes: notesToSave }, getAuthHeaders()));
             }
             if (absencesToSave.length > 0) {
@@ -835,7 +1057,7 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
             setSaisiesTemporaires([]);
             setIsValidationModalOpen(false);
             setMessage("Saisies enregistrées avec succès.");
-            fetchMesNotesParMatiere(); 
+            fetchMesNotesParMatiere();
         } catch (err) {
             alert(err.response?.data?.message || "Erreur lors de l'enregistrement.");
         } finally {
@@ -971,16 +1193,23 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
                             </span>
                         </p>
                     </div>
-                    <form onSubmit={handleSubmitNoteSerie}>
-                        <div className="form-group">
-                            <label>Note / 20</label>
-                            <input ref={noteInputRef} type="number" value={note}
-                                onChange={e => setNote(e.target.value)}
-                                min="0" max="20" step="0.01" autoFocus required />
-                        </div>
+                   <form onSubmit={handleSubmitNoteSerie}>
+                        {isMatiereParcours ? (
+                            <ParcoursChronoForm
+                                onNoteCalculee={(n, d, v, t) => { setNote(n); setParcoursInfo({ duree: d, version: v, temps: t }); }}
+                                resetSignal={parcoursResetSignal}
+                            />
+                        ) : (
+                            <div className="form-group">
+                                <label>Note / 20</label>
+                                <input ref={noteInputRef} type="number" value={note}
+                                    onChange={e => setNote(e.target.value)}
+                                    min="0" max="20" step="0.01" autoFocus required />
+                            </div>
+                        )}
                         {error && <div className="alert alert-danger">{error}</div>}
                         <div className="saisie-serie-actions">
-                            <button type="submit" className="btn btn-primary">
+                            <button type="submit" className="btn btn-primary" disabled={isMatiereParcours && !note}>
                                 <FaSave /> Valider & Suivant
                             </button>
                             <button type="button" className="btn btn-warning" onClick={() => setIsAbsenceModalOpen(true)}>
@@ -1093,25 +1322,25 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
                         </>
                     )}
                     {(selectedTypeExamen || assignment) && mesNotesParMatiere.length > 0 && (
-                            <div className="mes-notes-matiere-box">
-                                <h4><FaClipboardList /> Vos notes déjà saisies pour cet examen</h4>
-                                {isLoadingMesNotes ? (
-                                    <small style={{ color: '#718096' }}>Chargement...</small>
-                                ) : (
-                                    <div className="mes-notes-matiere-list">
-                                        {mesNotesParMatiere.map(m => (
-                                            <div
-                                                key={m.matiere_id}
-                                                className={`matiere-note-item ${m.notesSaisies > 0 ? 'has-notes' : ''}`}
-                                            >
-                                                <span className="matiere-nom">{m.nom_matiere}</span>
-                                                <span className="matiere-count">{m.notesSaisies}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                        <div className="mes-notes-matiere-box">
+                            <h4><FaClipboardList /> Vos notes déjà saisies pour cet examen</h4>
+                            {isLoadingMesNotes ? (
+                                <small style={{ color: '#718096' }}>Chargement...</small>
+                            ) : (
+                                <div className="mes-notes-matiere-list">
+                                    {mesNotesParMatiere.map(m => (
+                                        <div
+                                            key={m.matiere_id}
+                                            className={`matiere-note-item ${m.notesSaisies > 0 ? 'has-notes' : ''}`}
+                                        >
+                                            <span className="matiere-nom">{m.nom_matiere}</span>
+                                            <span className="matiere-count">{m.notesSaisies}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* Messages */}
                     {message && <div className="alert alert-success">{message}</div>}
@@ -1144,7 +1373,7 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
                                         ))}
                                     </div>
                                 )}
-                                  {selectedEleve ? (
+                                {selectedEleve ? (
                                     <small style={{ color: '#38a169', display: 'block', marginTop: '4px' }}>
                                         ✓ Élève sélectionné : {selectedEleve.nom} {selectedEleve.prenom}
                                     </small>
@@ -1153,11 +1382,14 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
                                         ⚠ Veuillez cliquer sur un élève dans la liste pour le sélectionner.
                                     </small>
                                 )}
-                                                        </div>
-                            
-                           {isMatiereParcours ? (
-                                    <ParcoursChronoForm onNoteCalculee={(n) => setNote(n)} resetSignal={parcoursResetSignal} />
-                                ) : (
+                            </div>
+
+                            {isMatiereParcours ? (
+                                <ParcoursChronoForm
+                                    onNoteCalculee={(n, d, v, t) => { setNote(n); setParcoursInfo({ duree: d, version: v, temps: t }); }}
+                                    resetSignal={parcoursResetSignal}
+                                />
+                            ) : (
                                 <div className="form-group">
                                     <label>Note / 20</label>
                                     <input
@@ -1171,7 +1403,7 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
                                     />
                                 </div>
                             )}
-                         
+
                             <button
                                 type="submit"
                                 className="btn btn-primary"
@@ -1215,6 +1447,10 @@ useEffect(() => { fetchMesNotesParMatiere(); }, [fetchMesNotesParMatiere]);
                 .history-btn { background: transparent; border: 1px solid #cbd5e0; border-radius: 8px; padding: 8px; cursor: pointer; color: #4a5568; }
                 .history-btn:hover { background: #edf2f7; }
                 .parcours-chrono-box { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
+                .parcours-version-selector { display: flex; gap: 8px; margin-bottom: 8px; }
+                .version-btn { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid #cbd5e0; background: #fff; color: #4a5568; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+                .version-btn.active { background: #3182ce; border-color: #3182ce; color: #fff; }
+                .parcours-version-desc { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #718096; margin: 0 0 12px 0; }
                 .parcours-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
                 .parcours-table th { text-align: left; font-size: 0.85rem; color: #718096; padding-bottom: 6px; }
                 .parcours-table td { padding: 4px 6px 4px 0; }
