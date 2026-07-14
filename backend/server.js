@@ -126,6 +126,22 @@ const runMigrations = async () => {
     } catch (err) {
         console.error('❌ Erreur migration log:', err.message);
     }
+    // 4. Migration : détails_parcours (heures brutes PG)
+try {
+    const hasDetails = await columnExists('copies', 'details_parcours');
+    if (!hasDetails) {
+        await db.query(`
+            ALTER TABLE copies 
+            ADD COLUMN details_parcours JSON NULL DEFAULT NULL,
+            ADD COLUMN parcours_version VARCHAR(20) NULL DEFAULT NULL
+        `);
+        console.log('✅ Migration OK : copies.details_parcours créé');
+    } else {
+        console.log('⏭️  Migration skipped : copies.details_parcours existe déjà');
+    }
+} catch (err) {
+    console.error('❌ Erreur migration copies.details_parcours:', err.message);
+}
 };
 runMigrations();
 
@@ -942,14 +958,14 @@ app.get(apiPaths.matieres.elevesRestants, authenticateToken, checkRole(['admin',
 });
 
 // backend/server.js
-
 app.get(apiPaths.resultats.base, authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const query = `
             SELECT
                 c.id AS copie_id, e.prenom, e.nom, e.numero_incorporation, e.escadron, e.peloton,
-                e.promotion, -- AJOUT ICI
+                e.promotion,
                 m.nom_matiere, m.id as matiere_id, c.note, c.type_examen, c.code_anonyme,
+                c.details_parcours, c.parcours_version,
                 u_note.nom_utilisateur AS operateur_note, u_code.nom_utilisateur AS operateur_code,
                 (SELECT COUNT(*) FROM historique_modifications_notes h WHERE h.copie_id = c.id) AS modifications_count
             FROM copies c
@@ -2948,6 +2964,8 @@ app.get('/api/copies/mes-saisies-directes-recentes', authenticateToken, checkRol
                 c.id AS copie_id,
                 c.note,
                 c.note_saisie_a AS date_saisie,
+                c.details_parcours,
+                c.parcours_version,
                 e.nom,
                 e.prenom,
                 e.numero_incorporation,
@@ -2961,9 +2979,9 @@ app.get('/api/copies/mes-saisies-directes-recentes', authenticateToken, checkRol
             LIMIT 150;
         `;
         const [rows] = await db.query(query, [utilisateurId]);
+        // details_parcours arrive déjà en objet JS si la colonne est de type JSON (mysql2 le parse automatiquement)
         res.json(rows);
     } catch (err) {
-        console.error("Erreur sur /api/copies/mes-saisies-directes-recentes", err);
         res.status(500).json({ error: "Erreur interne du serveur." });
     }
 });
@@ -3014,16 +3032,24 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
                 throw new Error(`L'élève ${note.eleve_nom} a déjà une note pour ce type d'examen (${note.type_examen}). Opération annulée.`);
             }
 
-            valuesToInsert.push([note.eleve_id, note.matiere_id, noteNum, note.type_examen, utilisateurId]);
+            valuesToInsert.push([
+            note.eleve_id,
+            note.matiere_id,
+            noteNum,
+            note.type_examen,
+            utilisateurId,
+            note.details_parcours ? JSON.stringify(note.details_parcours) : null,
+            note.parcours_version || null
+        ]);
         }
 
-        if (valuesToInsert.length > 0) {
-            const query = `
-                INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id)
-                VALUES ?
-            `;
-            await connection.query(query, [valuesToInsert]);
-        }
+       if (valuesToInsert.length > 0) {
+        const query = `
+            INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, details_parcours, parcours_version)
+            VALUES ?
+        `;
+        await connection.query(query, [valuesToInsert]);
+    }
 
         await connection.commit();
         res.status(201).json({ message: `${valuesToInsert.length} note(s) enregistrée(s) avec succès.` });
@@ -3036,7 +3062,16 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
     }
 });
 
-
+app.get('/api/copies/:copieId/parcours-details', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+    const { copieId } = req.params;
+    const [[copie]] = await db.query(
+        "SELECT details_parcours, parcours_version, note FROM copies WHERE id = ?", [copieId]
+    );
+    if (!copie || !copie.details_parcours) {
+        return res.status(404).json({ message: "Aucune donnée de parcours pour cette copie." });
+    }
+    res.json(copie);
+});
 
 // APRÈS
 app.get('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
