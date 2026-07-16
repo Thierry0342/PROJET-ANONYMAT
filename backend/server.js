@@ -289,25 +289,124 @@ app.get('/api/promotions', authenticateToken, async (req, res) => {
         res.status(500).json({ error: "Erreur lors de la récupération des promotions." });
     }
 });
-
 app.get(apiPaths.eleves.base, authenticateToken, async (req, res) => {
     try {
-        const { promotion } = req.query;
-        let query = "SELECT * FROM eleves";
+        const { promotion, escadron, peloton } = req.query;
+        let query = "SELECT * FROM eleves WHERE 1=1";
         const params = [];
 
         if (promotion && promotion !== 'all') {
-            query += " WHERE promotion = ?";
+            query += " AND promotion = ?";
             params.push(promotion);
         }
+        if (escadron && escadron !== 'all') {
+            query += " AND escadron = ?";
+            params.push(escadron);
+        }
+        if (peloton && peloton !== 'all') {
+            query += " AND peloton = ?";
+            params.push(peloton);
+        }
 
-        query += " ORDER BY nom, prenom";
+        query += " ORDER BY escadron, peloton, nom, prenom";
         const [rows] = await db.query(query, params);
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+// ── CRUD élève individuel (lecture pour tous, écriture réservée admin) ─────
+
+app.post(apiPaths.eleves.base, authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion, statut } = req.body;
+        if (!nom || !numero_incorporation) {
+            return res.status(400).json({ message: "Le nom et le numéro d'incorporation sont requis." });
+        }
+        const query = `
+            INSERT INTO eleves (nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion, statut)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        const [result] = await db.query(query, [
+            nom.trim(),
+            (prenom || '').trim(),
+            numero_incorporation.trim(),
+            sexe || null,
+            escadron || null,
+            peloton || null,
+            promotion || null,
+            statut || 'actif'
+        ]);
+        const [[nouvelEleve]] = await db.query("SELECT * FROM eleves WHERE id = ?", [result.insertId]);
+        await logActivity(req.user.id, req.user.nom_utilisateur, 'CREATION_ELEVE', `A créé l'élève ${nom} ${prenom || ''} (N° ${numero_incorporation}).`);
+        res.status(201).json(nouvelEleve);
+    } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: "Un élève avec ce numéro d'incorporation existe déjà pour cette promotion." });
+        }
+        console.error("Erreur création élève:", err);
+        res.status(500).json({ message: "Erreur lors de la création de l'élève." });
+    }
+});
+
+app.put('/api/eleves/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion, statut } = req.body;
+        if (!nom || !numero_incorporation) {
+            return res.status(400).json({ message: "Le nom et le numéro d'incorporation sont requis." });
+        }
+        const query = `
+            UPDATE eleves SET
+                nom = ?, prenom = ?, numero_incorporation = ?, sexe = ?,
+                escadron = ?, peloton = ?, promotion = ?, statut = ?
+            WHERE id = ?
+        `;
+        const [result] = await db.query(query, [
+            nom.trim(),
+            (prenom || '').trim(),
+            numero_incorporation.trim(),
+            sexe || null,
+            escadron || null,
+            peloton || null,
+            promotion || null,
+            statut || 'actif',
+            id
+        ]);
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "Élève non trouvé." });
+        }
+        await logActivity(req.user.id, req.user.nom_utilisateur, 'MODIFICATION_ELEVE', `A modifié la fiche de l'élève ID ${id} (${nom} ${prenom || ''}).`);
+        res.json({ message: "Élève mis à jour avec succès." });
+    } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: "Un élève avec ce numéro d'incorporation existe déjà pour cette promotion." });
+        }
+        console.error("Erreur modification élève:", err);
+        res.status(500).json({ message: "Erreur lors de la mise à jour de l'élève." });
+    }
+});
+
+app.delete('/api/eleves/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [eleves] = await db.query("SELECT nom, prenom, numero_incorporation FROM eleves WHERE id = ?", [id]);
+        if (eleves.length === 0) {
+            return res.status(404).json({ message: "Élève non trouvé." });
+        }
+        const e = eleves[0];
+        await db.query("DELETE FROM eleves WHERE id = ?", [id]);
+        await logActivity(req.user.id, req.user.nom_utilisateur, 'SUPPRESSION_ELEVE', `A supprimé l'élève ${e.nom} ${e.prenom} (N° ${e.numero_incorporation}).`);
+        res.json({ message: "Élève supprimé avec succès." });
+    } catch (err) {
+        if (err.code === 'ER_ROW_IS_REFERENCED_2' || err.code === 'ER_ROW_IS_REFERENCED') {
+            return res.status(409).json({ message: "Impossible de supprimer : cet élève possède déjà des notes, absences ou décisions enregistrées." });
+        }
+        console.error("Erreur suppression élève:", err);
+        res.status(500).json({ message: "Erreur lors de la suppression de l'élève." });
+    }
+});
+
 
 app.get(apiPaths.eleves.recherche, authenticateToken, async (req, res) => {
     try {

@@ -24,7 +24,7 @@ import DashboardExamen from './components/DashboardExamen';
 import CreerCodesMatiere from './components/CreerCodesMatiere';
 import ConfigurationAssignation from './components/ConfigurationAssignation';
 import ConseilFormation from './components/ConseilFormation';
-
+import ListeEleves from './components/ListeEleves';
 import Sidebar from './components/Sidebar';
 import AnimatedNodeBackground from './components/AnimatedNodeBackground';
 import GlobalActivityTracker from './components/GlobalActivityTracker';
@@ -52,7 +52,8 @@ const getNavItemsForUser = (user) => {
     if (!user) return [];
 
     const navItems = [
-        { label: "Dashboard", to: "/dashboard", icon: <FiGrid /> }
+        { label: "Dashboard", to: "/dashboard", icon: <FiGrid /> },
+         { label: "Liste des Élèves", to: "/liste-eleves", icon: <FiUsers /> }
     ];
 
     const operActions = [];
@@ -170,6 +171,7 @@ const AppContent = () => {
                             <Route path="/generer-codes-matiere" element={user.role === 'admin' ? <CreerCodesMatiere /> : <Navigate to="/" />} />
                             <Route path="/copies-notees" element={user.role === 'admin' ? <CopiesNotees /> : <Navigate to="/" />} />
                             <Route path="/incognito-swap" element={user.role === 'admin' ? <IncognitoSwap /> : <Navigate to="/" />} />
+                            <Route path="/liste-eleves" element={<ListeEleves />} />
                             <Route path="/incognito-moyenne" element={user.role === 'admin' ? <IncognitoMoyenne /> : <Navigate to="/" />} />
                             <Route path="*" element={<Navigate to="/dashboard" />} />
                         </Routes>
