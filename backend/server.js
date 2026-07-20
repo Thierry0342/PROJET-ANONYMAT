@@ -249,6 +249,73 @@ app.put('/api/logs/mark-as-read', authenticateToken, checkRole(['admin']), async
         res.status(500).json({ message: "Erreur lors de la mise à jour des journaux." });
     }
 });
+// Vue complète : toutes les notes (saisies par n'importe qui) + élèves sans note,
+// filtrée par promotion / examen / matière, groupée par escadron puis peloton.
+app.get('/api/copies/vue-saisies-groupees', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    try {
+        const { promotion, typeExamen, matiereId } = req.query;
+        const utilisateurId = req.user.id;
+
+        if (!typeExamen || !matiereId) {
+            return res.status(400).json({ message: "Le type d'examen et la matière sont requis." });
+        }
+
+        // 1. Élèves concernés (filtrés par promotion si fournie)
+        let eleveQuery = `SELECT id, nom, prenom, numero_incorporation, escadron, peloton, statut FROM eleves WHERE 1=1`;
+        const eleveParams = [];
+        if (promotion && promotion !== 'all') {
+            eleveQuery += " AND promotion = ?";
+            eleveParams.push(promotion);
+        }
+        eleveQuery += " ORDER BY escadron, peloton, CAST(numero_incorporation AS UNSIGNED) ASC";
+        const [eleves] = await db.query(eleveQuery, eleveParams);
+
+        if (eleves.length === 0) return res.json({});
+
+        // 2. Notes existantes pour cette matière + cet examen (tous opérateurs confondus)
+        const [notes] = await db.query(`
+            SELECT c.id AS copie_id, c.eleve_id, c.note, c.note_saisie_a, c.note_saisie_par_utilisateur_id,
+                   c.details_parcours, c.parcours_version,
+                   u.nom_utilisateur AS saisie_par
+            FROM copies c
+            LEFT JOIN utilisateurs u ON c.note_saisie_par_utilisateur_id = u.id
+            WHERE c.matiere_id = ? AND c.type_examen = ? AND c.note IS NOT NULL AND c.eleve_id IS NOT NULL
+        `, [matiereId, typeExamen]);
+
+        const notesParEleve = new Map(notes.map(n => [n.eleve_id, n]));
+
+        // 3. Regroupement Escadron -> Peloton -> liste d'élèves (avec ou sans note)
+        const grouped = {};
+        eleves.forEach(eleve => {
+            const escKey = eleve.escadron ? String(eleve.escadron) : 'Sans Escadron';
+            const ponKey = eleve.peloton ? String(eleve.peloton) : 'Sans Peloton';
+            if (!grouped[escKey]) grouped[escKey] = {};
+            if (!grouped[escKey][ponKey]) grouped[escKey][ponKey] = [];
+
+            const n = notesParEleve.get(eleve.id);
+            grouped[escKey][ponKey].push({
+                eleve_id: eleve.id,
+                nom: eleve.nom,
+                prenom: eleve.prenom,
+                numero_incorporation: eleve.numero_incorporation,
+                statut: eleve.statut,
+                a_une_note: !!n,
+                copie_id: n?.copie_id || null,
+                note: n?.note ?? null,
+                date_saisie: n?.note_saisie_a || null,
+                saisie_par_moi: n ? n.note_saisie_par_utilisateur_id === utilisateurId : false,
+                saisie_par: n?.saisie_par || null,
+                details_parcours: n?.details_parcours || null,
+                parcours_version: n?.parcours_version || null
+            });
+        });
+
+        res.json(grouped);
+    } catch (err) {
+        console.error("Erreur vue-saisies-groupees:", err);
+        res.status(500).json({ error: "Erreur interne du serveur." });
+    }
+});
 
 app.post('/api/register', async (req, res) => {
     try {
@@ -1593,6 +1660,60 @@ app.post('/api/absences/bulk', authenticateToken, checkRole(['admin']), async (r
     } catch (err) {
         await connection.rollback();
         res.status(500).json({ message: "Erreur interne lors l'enregistrement des absences." });
+    } finally {
+        connection.release();
+    }
+});
+// Route utilisée par la Saisie Directe (mode série) pour enregistrer en masse
+// les absences temporaires accumulées, en parallèle des notes.
+app.post('/api/absences/direct-bulk', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    const { absences } = req.body;
+    const utilisateurId = req.user.id;
+
+    if (!Array.isArray(absences) || absences.length === 0) {
+        return res.status(400).json({ message: "Aucune absence à enregistrer n'a été fournie." });
+    }
+
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const valuesToInsert = [];
+        const dejaVus = new Set();
+
+        for (const absence of absences) {
+            if (!absence.eleve_id || !absence.matiere_id) {
+                throw new Error("Une des absences est incomplète. Opération annulée.");
+            }
+
+            const key = `${absence.eleve_id}-${absence.matiere_id}-${absence.type_examen || ''}`;
+            if (dejaVus.has(key)) {
+                throw new Error(`Absence en double pour ${absence.eleve_nom || 'un élève'}. Opération annulée.`);
+            }
+            dejaVus.add(key);
+
+            valuesToInsert.push([
+                absence.eleve_id,
+                absence.matiere_id,
+                utilisateurId,
+                absence.motif || null,
+                absence.type_examen || null
+            ]);
+        }
+
+        const sql = `
+            INSERT IGNORE INTO absences (eleve_id, matiere_id, enregistre_par_utilisateur_id, motif, type_examen)
+            VALUES ?
+        `;
+        const [result] = await connection.query(sql, [valuesToInsert]);
+
+        await connection.commit();
+        res.status(201).json({
+            message: `${result.affectedRows} absence(s) enregistrée(s) avec succès.`
+        });
+    } catch (err) {
+        await connection.rollback();
+        res.status(409).json({ message: err.message || "Erreur lors de l'enregistrement des absences." });
     } finally {
         connection.release();
     }
