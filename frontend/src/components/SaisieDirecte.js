@@ -4,7 +4,7 @@ import { jwtDecode } from 'jwt-decode';
 import {
     FaPlay, FaSave, FaUserPlus, FaUsers, FaArrowLeft, FaHistory,
     FaEdit, FaTrash, FaCheckCircle, FaUserSlash, FaClipboardList,
-    FaInfoCircle, FaLock, FaClock
+    FaInfoCircle, FaLock, FaClock, FaChevronDown, FaChevronRight, FaFilter
 } from 'react-icons/fa';
 import apiPaths from '../config/apiPaths';
 
@@ -185,15 +185,6 @@ const formatDuree = (secondes) => {
 };
 
 // ─── Formulaire "Parcours chronométré" (SAISIE) ────────────────────────────────
-// Remplace le champ Note classique quand la matière sélectionnée est le parcours.
-// Permet de choisir entre l'ANCIEN circuit (fiches papier déjà remplies avant le
-// changement) et le NOUVEAU circuit (en vigueur à partir d'aujourd'hui), pour
-// pouvoir continuer à saisir les ~300 élèves en attente avec l'ancienne fiche
-// tout en utilisant la nouvelle pour les élèves suivants.
-// Appelle onNoteCalculee(note, dureeTotale, versionId, temps) à chaque
-// changement, `note` étant une chaîne vide tant que tous les temps ne sont pas
-// renseignés. `temps` est l'objet brut des heures saisies : c'est CE QUI EST
-// ENREGISTRÉ EN BASE pour pouvoir vérifier/modifier plus tard.
 const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
     const [versionId, setVersionId] = useState('nouveau');
     const [temps, setTemps] = useState({});
@@ -209,7 +200,6 @@ const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
     );
     const note = useMemo(() => noteDepuisBareme(duree, version.bareme), [duree, version]);
 
-    // ✅ Notifie le parent de façon synchrone à chaque changement, pas via useEffect
     const notifierParent = (nouveauxTemps, versionActuelle) => {
         const inv = champsInvalides(nouveauxTemps, versionActuelle.champsTous);
         const d = inv.size > 0 ? null : calculerDureeTotale(nouveauxTemps, versionActuelle.champsOrdonnes);
@@ -219,14 +209,14 @@ const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
 
     useEffect(() => {
         setTemps({});
-        onNoteCalculee('', null, versionId, {}); // ✅ reset aussi côté parent
+        onNoteCalculee('', null, versionId, {});
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resetSignal]);
 
     const handleChangeVersion = (nouvelleVersionId) => {
         setVersionId(nouvelleVersionId);
         setTemps({});
-        onNoteCalculee('', null, nouvelleVersionId, {}); // reset : les 2 fiches n'ont pas les mêmes champs
+        onNoteCalculee('', null, nouvelleVersionId, {});
     };
 
     const handleChange = (champId, value) => {
@@ -316,7 +306,6 @@ const ParcoursChronoForm = ({ onNoteCalculee, resetSignal }) => {
 const ParcoursDetailsView = ({ detailsParcours, versionId, note }) => {
     const version = VERSIONS_PARCOURS[versionId] || VERSIONS_PARCOURS.nouveau;
 
-    // ✅ Tolère le cas où detailsParcours arrive en chaîne JSON au lieu d'un objet
     const detailsObj = useMemo(() => {
         if (!detailsParcours) return null;
         if (typeof detailsParcours === 'string') {
@@ -441,52 +430,234 @@ const ParcoursDetailsModal = ({ saisie, onClose }) => {
     );
 };
 
-const HistoriqueSaisiesModal = ({ isOpen, onClose, saisies, onEdit, isLoading }) => {
+// ─── Nouvelle modale : vue complète groupée par Escadron / Peloton ────────────
+// Filtres : Promotion -> Examen -> Matière. Affiche pour chaque peloton toutes
+// les notes déjà saisies (par n'importe quel opérateur) ET les élèves qui n'ont
+// pas encore de note pour cette combinaison examen/matière.
+const HistoriqueCompletModal = ({ isOpen, onClose, promotionsList, getAuthHeaders, onEdit }) => {
+    const [promotion, setPromotion] = useState('');
+    const [examTypesLocal, setExamTypesLocal] = useState([]);
+    const [typeExamen, setTypeExamen] = useState('');
+    const [matieresLocal, setMatieresLocal] = useState([]);
+    const [matiereId, setMatiereId] = useState('');
+    const [isLoadingListes, setIsLoadingListes] = useState(false);
+    const [groupedData, setGroupedData] = useState(null);
+    const [isLoadingData, setIsLoadingData] = useState(false);
+    const [erreur, setErreur] = useState('');
+    const [pelotonsOuverts, setPelotonsOuverts] = useState({});
     const [saisieDetails, setSaisieDetails] = useState(null);
 
+    // Charger les examens quand la promotion change
+    useEffect(() => {
+        if (!isOpen) return;
+        const fetchExamens = async () => {
+            setTypeExamen('');
+            setMatiereId('');
+            setMatieresLocal([]);
+            if (!promotion) { setExamTypesLocal([]); return; }
+            setIsLoadingListes(true);
+            try {
+                const res = await axios.get(`/api/examens?promotion=${promotion}`, getAuthHeaders());
+                setExamTypesLocal(res.data);
+            } catch (err) {
+                setExamTypesLocal([]);
+            } finally {
+                setIsLoadingListes(false);
+            }
+        };
+        fetchExamens();
+    }, [promotion, isOpen, getAuthHeaders]);
+
+    // Charger les matières quand l'examen change
+    useEffect(() => {
+        if (!isOpen) return;
+        const fetchMatieres = async () => {
+            setMatiereId('');
+            if (!typeExamen || !promotion) { setMatieresLocal([]); return; }
+            setIsLoadingListes(true);
+            try {
+                const res = await axios.get(
+                    `/api/matieres-par-examen?typeExamen=${typeExamen}&promotion=${promotion}`,
+                    getAuthHeaders()
+                );
+                setMatieresLocal(res.data);
+            } catch (err) {
+                setMatieresLocal([]);
+            } finally {
+                setIsLoadingListes(false);
+            }
+        };
+        fetchMatieres();
+    }, [typeExamen, promotion, isOpen, getAuthHeaders]);
+
+    // Reset complet quand la modale se ferme
+    useEffect(() => {
+        if (!isOpen) {
+            setPromotion('');
+            setTypeExamen('');
+            setMatiereId('');
+            setGroupedData(null);
+            setErreur('');
+            setPelotonsOuverts({});
+        }
+    }, [isOpen]);
+
+    const handleCharger = async () => {
+        if (!typeExamen || !matiereId) {
+            setErreur("Sélectionnez au moins l'examen et la matière.");
+            return;
+        }
+        setErreur('');
+        setIsLoadingData(true);
+        setGroupedData(null);
+        try {
+            const res = await axios.get('/api/copies/vue-saisies-groupees', {
+                params: { promotion, typeExamen, matiereId },
+                ...getAuthHeaders()
+            });
+            setGroupedData(res.data);
+            const ouverts = {};
+            Object.entries(res.data).forEach(([esc, pelotons]) => {
+                Object.keys(pelotons).forEach(pon => { ouverts[`${esc}-${pon}`] = true; });
+            });
+            setPelotonsOuverts(ouverts);
+        } catch (err) {
+            setErreur(err.response?.data?.message || "Erreur de chargement.");
+        } finally {
+            setIsLoadingData(false);
+        }
+    };
+
+    const togglePeloton = (key) => {
+        setPelotonsOuverts(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const nomMatiereSelectionnee = matieresLocal.find(m => m.id === parseInt(matiereId))?.nom_matiere || '';
+
     if (!isOpen) return null;
+
     return (
         <>
             <div className="modal-overlay" onClick={onClose}>
                 <div className="modal-content large" onClick={e => e.stopPropagation()}>
                     <div className="modal-header">
-                        <h3>Mes 150 dernières saisies directes</h3>
+                        <h3><FaFilter /> Toutes les saisies — par Escadron / Peloton</h3>
                         <button className="close-button" onClick={onClose}>&times;</button>
                     </div>
                     <div className="modal-body">
-                        {isLoading ? <p>Chargement de l'historique...</p> : (
-                            <div className="table-responsive">
-                                <table className="results-table">
-                                    <thead>
-                                        <tr><th>Date</th><th>Élève</th><th>Matière</th><th>Note</th><th>Action</th></tr>
-                                    </thead>
-                                    <tbody>
-                                        {saisies.length > 0 ? saisies.map(saisie => (
-                                            <tr key={saisie.copie_id}>
-                                                <td>{new Date(saisie.date_saisie).toLocaleString('fr-FR')}</td>
-                                                <td>{saisie.prenom} {saisie.nom} ({saisie.numero_incorporation})</td>
-                                                <td>{saisie.nom_matiere}</td>
-                                                <td>{saisie.note}</td>
-                                                <td style={{ display: 'flex', gap: '8px' }}>
-                                                    {saisie.details_parcours && (
-                                                        <button
-                                                            className="btn-icon"
-                                                            onClick={() => setSaisieDetails(saisie)}
-                                                            title="Voir les heures enregistrées"
-                                                        >
-                                                            <FaClock />
-                                                        </button>
-                                                    )}
-                                                    <button className="btn-icon btn-edit" onClick={() => onEdit(saisie)} title="Modifier cette note">
-                                                        <FaEdit />
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        )) : (
-                                            <tr><td colSpan="5">Aucune saisie récente trouvée.</td></tr>
-                                        )}
-                                    </tbody>
-                                </table>
+                        {/* ── Filtres ── */}
+                        <div className="filtres-historique">
+                            <div className="form-group">
+                                <label>Promotion</label>
+                                <select value={promotion} onChange={e => setPromotion(e.target.value)}>
+                                    <option value="">-- Toutes --</option>
+                                    {promotionsList.map(p => <option key={p} value={p}>{p}</option>)}
+                                </select>
+                            </div>
+                            <div className="form-group">
+                                <label>Examen</label>
+                                <select value={typeExamen} onChange={e => setTypeExamen(e.target.value)} disabled={!promotion || isLoadingListes}>
+                                    <option value="">-- Choisir --</option>
+                                    {examTypesLocal.map(ex => <option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>)}
+                                </select>
+                            </div>
+                            <div className="form-group">
+                                <label>Matière</label>
+                                <select value={matiereId} onChange={e => setMatiereId(e.target.value)} disabled={!typeExamen || isLoadingListes}>
+                                    <option value="">-- Choisir --</option>
+                                    {matieresLocal.map(m => <option key={m.id} value={m.id}>{m.nom_matiere}</option>)}
+                                </select>
+                            </div>
+                            <button className="btn btn-primary" onClick={handleCharger} disabled={!typeExamen || !matiereId || isLoadingData}>
+                                {isLoadingData ? 'Chargement...' : 'Afficher'}
+                            </button>
+                        </div>
+
+                        {erreur && <div className="alert alert-danger">{erreur}</div>}
+
+                        {/* ── Résultats groupés ── */}
+                        {groupedData && (
+                            <div className="groupes-container">
+                                {Object.keys(groupedData).length === 0 && (
+                                    <p>Aucun élève trouvé pour ces critères.</p>
+                                )}
+                                {Object.entries(groupedData)
+                                    .sort(([a], [b]) => a.localeCompare(b, 'fr', { numeric: true }))
+                                    .map(([escadron, pelotons]) => (
+                                    <div key={escadron} className="escadron-block">
+                                        <h4 className="escadron-title">Escadron {escadron}</h4>
+                                        {Object.entries(pelotons)
+                                            .sort(([a], [b]) => a.localeCompare(b, 'fr', { numeric: true }))
+                                            .map(([peloton, eleves]) => {
+                                                const key = `${escadron}-${peloton}`;
+                                                const avecNote = eleves.filter(e => e.a_une_note).length;
+                                                const sansNote = eleves.length - avecNote;
+                                                const estOuvert = pelotonsOuverts[key];
+                                                return (
+                                                    <div key={key} className="peloton-block">
+                                                        <div className="peloton-header" onClick={() => togglePeloton(key)}>
+                                                            {estOuvert ? <FaChevronDown /> : <FaChevronRight />}
+                                                            <span>Peloton {peloton}</span>
+                                                            <span className="peloton-counts">
+                                                                <span className="count-ok">{avecNote} noté(s)</span>
+                                                                {sansNote > 0 && <span className="count-manque">{sansNote} manquant(s)</span>}
+                                                            </span>
+                                                        </div>
+                                                        {estOuvert && (
+                                                            <table className="results-table peloton-table">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th>N° Incorp</th>
+                                                                        <th>Élève</th>
+                                                                        <th>Note</th>
+                                                                        <th>Saisie par</th>
+                                                                        <th>Action</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {eleves.map(e => (
+                                                                        <tr key={e.eleve_id} className={!e.a_une_note ? 'ligne-manquante' : ''}>
+                                                                            <td>{e.numero_incorporation}</td>
+                                                                            <td>{e.nom} {e.prenom}</td>
+                                                                            <td>
+                                                                                {e.a_une_note
+                                                                                    ? <strong>{e.note} / 20</strong>
+                                                                                    : <span className="badge-manquant"><FaUserSlash /> Sans note</span>}
+                                                                            </td>
+                                                                            <td>{e.saisie_par || '-'}</td>
+                                                                            <td style={{ display: 'flex', gap: '8px' }}>
+                                                                                {e.details_parcours && (
+                                                                                    <button className="btn-icon" onClick={() => setSaisieDetails(e)} title="Voir les heures">
+                                                                                        <FaClock />
+                                                                                    </button>
+                                                                                )}
+                                                                                {e.a_une_note && e.saisie_par_moi && (
+                                                                                    <button
+                                                                                        className="btn-icon btn-edit"
+                                                                                        onClick={() => onEdit({
+                                                                                            copie_id: e.copie_id,
+                                                                                            note: e.note,
+                                                                                            nom_matiere: nomMatiereSelectionnee,
+                                                                                            prenom: e.prenom,
+                                                                                            nom: e.nom,
+                                                                                            numero_incorporation: e.numero_incorporation
+                                                                                        })}
+                                                                                        title="Modifier cette note"
+                                                                                    >
+                                                                                        <FaEdit />
+                                                                                    </button>
+                                                                                )}
+                                                                            </td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </div>
@@ -545,9 +716,6 @@ const ValidationModal = ({ isOpen, onClose, saisies, onValider, onVider, onSuppr
     if (!isOpen) return null;
 
     const handleStartEditing = (saisie) => {
-        // Pour une saisie "Parcours", la note vient des heures : on ne permet pas
-        // l'édition rapide inline (il faudrait re-saisir les heures), seulement
-        // la suppression + re-saisie via le formulaire.
         if (saisie.type === 'note' && !saisie.details_parcours) {
             setEditingId(saisie.temp_id);
             setEditingValue(saisie.note);
@@ -655,8 +823,6 @@ const SaisieDirecte = () => {
     const [selectedEleve, setSelectedEleve] = useState(null);
     const [isSearchFocused, setIsSearchFocused] = useState(false);
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-    const [recentSaisies, setRecentSaisies] = useState([]);
-    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     const [editingEntry, setEditingEntry] = useState(null);
     const [isAbsenceModalOpen, setIsAbsenceModalOpen] = useState(false);
     const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
@@ -664,8 +830,6 @@ const SaisieDirecte = () => {
     const [promotionsList, setPromotionsList] = useState([]);
     const [selectedPromotion, setSelectedPromotion] = useState('');
     const [parcoursResetSignal, setParcoursResetSignal] = useState(0);
-    // ✅ parcoursInfo garde aussi les heures brutes (temps) pour pouvoir les
-    // enregistrer en base et les consulter/modifier plus tard.
     const [parcoursInfo, setParcoursInfo] = useState({ duree: null, version: 'nouveau', temps: {} });
     const [mesNotesParMatiere, setMesNotesParMatiere] = useState([]);
     const [isLoadingMesNotes, setIsLoadingMesNotes] = useState(false);
@@ -684,8 +848,6 @@ const SaisieDirecte = () => {
                 const token = localStorage.getItem('token');
                 const decoded = jwtDecode(token);
 
-                // ✅ Ne plus charger les examTypes globalement ici
-                // Ils seront chargés dynamiquement selon la promotion sélectionnée
                 const [elevesRes, matieresRes, promotionsRes] = await Promise.all([
                     axios.get(apiPaths.eleves.base, getAuthHeaders()),
                     axios.get('/api/matieres', getAuthHeaders()),
@@ -697,12 +859,10 @@ const SaisieDirecte = () => {
                 const list = promotionsRes.data || [];
                 setPromotionsList(list);
 
-                // ✅ Sélectionner automatiquement la dernière promotion (index 0 = plus récente)
                 if (list.length > 0 && !decoded.assigned_matiere_id) {
                     setSelectedPromotion(list[0]);
                 }
 
-                // ✅ Mode assigné (opérateur)
                 if (decoded.assigned_matiere_id) {
                     const matiereObj = matieresRes.data.find(m => m.id === decoded.assigned_matiere_id);
                     setAssignment({
@@ -725,7 +885,7 @@ const SaisieDirecte = () => {
 
     // ── Charger les examens filtrés par promotion ─────────────────────────────
     useEffect(() => {
-        if (assignment) return; // Mode opérateur assigné → pas de rechargement
+        if (assignment) return;
         const fetchExamens = async () => {
             const promo = selectedPromotion;
             if (!promo) {
@@ -736,14 +896,12 @@ const SaisieDirecte = () => {
                 return;
             }
             try {
-                // ✅ Filtrer les examens par promotion
                 const examRes = await axios.get(
                     `/api/examens?promotion=${promo}`,
                     getAuthHeaders()
                 );
                 setExamTypes(examRes.data);
 
-                // ✅ Reset l'examen sélectionné s'il n'appartient plus à cette promo
                 setSelectedTypeExamen(prev => {
                     const exists = examRes.data.find(e => e.nom_modele === prev);
                     if (!exists) {
@@ -763,7 +921,7 @@ const SaisieDirecte = () => {
 
     // ── Charger les matières filtrées par examen ET promotion ─────────────────
     useEffect(() => {
-        if (assignment) return; // Mode opérateur assigné → pas de rechargement
+        if (assignment) return;
         const fetchMatieres = async () => {
             if (!selectedTypeExamen || !selectedPromotion) {
                 setAvailableMatieres([]);
@@ -772,14 +930,12 @@ const SaisieDirecte = () => {
             }
             setIsMatiereLoading(true);
             try {
-                // ✅ Passer promotion ET typeExamen pour filtrer les matières
                 const response = await axios.get(
                     `/api/matieres-par-examen?typeExamen=${selectedTypeExamen}&promotion=${selectedPromotion}`,
                     getAuthHeaders()
                 );
                 setAvailableMatieres(response.data);
 
-                // ✅ Reset la matière si elle n'est plus dans la config de cette promo
                 setSelectedMatiereId(prev => {
                     if (!prev) return prev;
                     const exists = response.data.find(m => m.id === parseInt(prev));
@@ -811,26 +967,11 @@ const SaisieDirecte = () => {
         return [...new Set(filtered.map(e => e.peloton).filter(Boolean))].sort((a, b) => a - b);
     }, [allEleves, selectedEscadron, assignment, selectedPromotion]);
 
-    // ✅ Détecte si la matière sélectionnée est "PG" (Parcours chronométré)
-    // (uniquement pertinent en mode "Recherche" / saisie manuelle)
     const isMatiereParcours = useMemo(() => {
         const matiere = availableMatieres.find(m => m.id === parseInt(selectedMatiereId));
         const nom = (matiere?.nom_matiere || assignment?.matiereNom || '').trim().toUpperCase();
         return nom.startsWith(MATIERE_PARCOURS_NOM);
     }, [selectedMatiereId, availableMatieres, assignment]);
-
-    // ── Historique ────────────────────────────────────────────────────────────
-    const fetchRecentSaisies = useCallback(async () => {
-        setIsLoadingHistory(true);
-        try {
-            const response = await axios.get('/api/copies/mes-saisies-directes-recentes', getAuthHeaders());
-            setRecentSaisies(response.data);
-        } catch (err) {
-            console.error(err);
-        } finally {
-            setIsLoadingHistory(false);
-        }
-    }, [getAuthHeaders]);
 
     const fetchMesNotesParMatiere = useCallback(async () => {
         const typeExamen = assignment?.examen || selectedTypeExamen;
@@ -859,12 +1000,11 @@ const SaisieDirecte = () => {
 
     const handleOpenHistoryModal = () => {
         setIsHistoryModalOpen(true);
-        fetchRecentSaisies();
     };
 
     const handleSaveModification = (copieId, nouvelleNote, motif) => {
         axios.put(`/api/resultats/${copieId}`, { nouvelle_note: nouvelleNote, motif }, getAuthHeaders())
-            .then(() => { setEditingEntry(null); fetchRecentSaisies(); })
+            .then(() => { setEditingEntry(null); })
             .catch(error => alert(error.response?.data?.message || "Erreur."));
     };
 
@@ -932,7 +1072,6 @@ const SaisieDirecte = () => {
         note: note,
         type_examen: selectedTypeExamen,
         temp_id: `${Date.now()}-${currentEleve.id}`,
-        // AJOUT : capture des heures aussi en mode série
         ...(isMatiereParcours ? {
             parcours_version: parcoursInfo.version,
             details_parcours: parcoursInfo.temps,
@@ -941,7 +1080,7 @@ const SaisieDirecte = () => {
     setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
     setNote('');
     setError('');
-    if (isMatiereParcours) setParcoursResetSignal(s => s + 1); // reset la fiche pour l'élève suivant
+    if (isMatiereParcours) setParcoursResetSignal(s => s + 1);
     if (currentIndex < listeElevesSerie.length - 1) {
         setCurrentIndex(prev => prev + 1);
     } else {
@@ -1017,10 +1156,6 @@ const SaisieDirecte = () => {
             note: note,
             type_examen: selectedTypeExamen,
             temp_id: `${Date.now()}-${selectedEleve.id}`,
-            // ✅ Traçabilité : pour la matière "Parcours" (PG), on garde une trace
-            // complète de la fiche utilisée (ancien/nouveau) ET des heures brutes
-            // saisies (details_parcours), pour pouvoir vérifier ou corriger plus
-            // tard sans avoir à redemander l'élève.
             ...(isMatiereParcours && Object.keys(parcoursInfo.temps || {}).length > 0 ? {
                 parcours_version: parcoursInfo.version,
                 parcours_duree_secondes: parcoursInfo.duree,
@@ -1032,7 +1167,7 @@ const SaisieDirecte = () => {
         setSelectedEleve(null);
         setRechercheEleve('');
         if (isMatiereParcours) {
-            setParcoursResetSignal(s => s + 1); // ✅ vide les heures du formulaire parcours
+            setParcoursResetSignal(s => s + 1);
         }
         rechercheEleveInputRef.current?.focus();
     };
@@ -1045,9 +1180,6 @@ const SaisieDirecte = () => {
         try {
             const promises = [];
             if (notesToSave.length > 0) {
-                // ✅ details_parcours / parcours_version / parcours_duree_secondes
-                // partent naturellement avec chaque note (déjà présents dans l'objet
-                // saisi), le backend n'a qu'à les stocker dans la table `copies`.
                 promises.push(axios.post('/api/copies/notes-directes-bulk', { notes: notesToSave }, getAuthHeaders()));
             }
             if (absencesToSave.length > 0) {
@@ -1134,11 +1266,11 @@ const SaisieDirecte = () => {
                     onCancel={() => setIsAbsenceModalOpen(false)}
                 />
             )}
-            <HistoriqueSaisiesModal
+            <HistoriqueCompletModal
                 isOpen={isHistoryModalOpen}
                 onClose={() => setIsHistoryModalOpen(false)}
-                saisies={recentSaisies}
-                isLoading={isLoadingHistory}
+                promotionsList={promotionsList}
+                getAuthHeaders={getAuthHeaders}
                 onEdit={setEditingEntry}
             />
             {editingEntry && (
@@ -1430,7 +1562,7 @@ const SaisieDirecte = () => {
                 .search-result-item:hover { background: #edf2f7; }
                 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
                 .modal-content { background: #fff; padding: 20px; border-radius: 8px; width: 90%; max-width: 500px; }
-                .modal-content.large { max-width: 800px; }
+                .modal-content.large { max-width: 900px; max-height: 85vh; overflow-y: auto; }
                 .validation-badge { position: fixed; bottom: 20px; right: 20px; background: #3182ce; color: #fff; width: 50px; height: 50px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; z-index: 999; box-shadow: 0 4px 12px rgba(49,130,206,0.4); }
                 .select-conseil { border: 2px solid #ed8936; background: #fffaf0; height: 45px; width: 100%; border-radius: 8px; }
                 .conseil-selection-box { padding: 15px; background: #fff5f5; border-radius: 10px; border: 1px dashed #feb2b2; }
@@ -1457,6 +1589,19 @@ const SaisieDirecte = () => {
                 .parcours-table input[type="time"] { width: 100%; padding: 6px; border: 1px solid #cbd5e0; border-radius: 6px; }
                 .champ-absent { color: #cbd5e0; display: inline-block; text-align: center; width: 100%; }
                 .parcours-result { display: flex; justify-content: space-between; background: #edf2f7; padding: 10px 14px; border-radius: 8px; font-size: 0.95rem; }
+                .filtres-historique { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 20px; padding: 15px; background: #f7fafc; border-radius: 10px; }
+                .filtres-historique .form-group { margin-bottom: 0; min-width: 160px; }
+                .groupes-container { max-height: 55vh; overflow-y: auto; }
+                .escadron-block { margin-bottom: 20px; }
+                .escadron-title { background: #2d3748; color: #fff; padding: 8px 14px; border-radius: 8px 8px 0 0; margin: 0; }
+                .peloton-block { border: 1px solid #e2e8f0; border-top: none; }
+                .peloton-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #edf2f7; cursor: pointer; font-weight: 600; }
+                .peloton-counts { margin-left: auto; display: flex; gap: 10px; font-size: 0.85rem; }
+                .count-ok { color: #276749; background: #c6f6d5; padding: 2px 8px; border-radius: 6px; }
+                .count-manque { color: #9b2c2c; background: #fed7d7; padding: 2px 8px; border-radius: 6px; }
+                .peloton-table { margin: 0; width: 100%; }
+                .ligne-manquante { background: #fff5f5; }
+                .badge-manquant { display: inline-flex; align-items: center; gap: 6px; color: #c05621; font-weight: 600; font-size: 0.85rem; }
             `}</style>
         </div>
     );
