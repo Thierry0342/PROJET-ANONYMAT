@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import axios from 'axios';
 import { jwtDecode } from 'jwt-decode';
 import {
-    FaUserPlus, FaEdit, FaTrash, FaSearch, FaLock, FaTimes, FaSave
+    FaUserPlus, FaEdit, FaTrash, FaSearch, FaLock, FaTimes, FaSave,FaPrint
 } from 'react-icons/fa';
 import apiPaths from '../config/apiPaths';
 
@@ -36,8 +36,8 @@ const EleveFormModal = ({ eleve, onClose, onSave, isSaving, promotionsList }) =>
     };
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay fiche-overlay" onClick={onClose}>
+    <div className="modal-content fiche-notes-modal" onClick={e => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3>{isEdit ? `Modifier ${eleve.nom} ${eleve.prenom}` : 'Ajouter un élève'}</h3>
                     <button className="close-button" onClick={onClose}><FaTimes /></button>
@@ -143,7 +143,242 @@ const ConfirmDeleteModal = ({ eleve, onConfirm, onCancel, isDeleting }) => (
         </div>
     </div>
 );
+// ─── Modal Fiche de notes détaillée (clic sur une ligne, admin uniquement) ─
+const FicheNotesEleveModal = ({ eleveId, onClose, getAuthHeaders }) => {
+    const [data, setData] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [filtreExamen, setFiltreExamen] = useState('all');
+    const [filtreMatiere, setFiltreMatiere] = useState('all');
 
+    useEffect(() => {
+        const fetchDetails = async () => {
+            setIsLoading(true);
+            setError('');
+            try {
+                const res = await axios.get(`/api/eleves/${eleveId}/notes-detaillees`, getAuthHeaders());
+                setData(res.data);
+            } catch (err) {
+                setError(err.response?.data?.message || "Erreur lors du chargement des notes.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        if (eleveId) fetchDetails();
+    }, [eleveId, getAuthHeaders]);
+
+    const typesExamen = useMemo(() => {
+        if (!data) return [];
+        return [...new Set(data.notes.map(n => n.type_examen).filter(Boolean))].sort();
+    }, [data]);
+
+    const matieres = useMemo(() => {
+        if (!data) return [];
+        const map = new Map();
+        data.notes.forEach(n => map.set(n.matiere_id, n.nom_matiere));
+        return [...map.entries()].map(([id, nom]) => ({ id, nom })).sort((a, b) => a.nom.localeCompare(b.nom, 'fr'));
+    }, [data]);
+
+    const notesFiltrees = useMemo(() => {
+        if (!data) return [];
+        return data.notes.filter(n => {
+            if (filtreExamen !== 'all' && n.type_examen !== filtreExamen) return false;
+            if (filtreMatiere !== 'all' && String(n.matiere_id) !== String(filtreMatiere)) return false;
+            return true;
+        }).sort((a, b) => (a.nom_matiere || '').localeCompare(b.nom_matiere || '', 'fr'));
+    }, [data, filtreExamen, filtreMatiere]);
+
+    const absencesFiltrees = useMemo(() => {
+        if (!data) return [];
+        return data.absences.filter(a => {
+            if (filtreExamen !== 'all' && a.type_examen !== filtreExamen) return false;
+            if (filtreMatiere !== 'all' && String(a.matiere_id) !== String(filtreMatiere)) return false;
+            return true;
+        });
+    }, [data, filtreExamen, filtreMatiere]);
+
+    const moyenneAffichee = useMemo(() => {
+        if (notesFiltrees.length === 0) return null;
+        const somme = notesFiltrees.reduce((s, n) => s + parseFloat(n.note), 0);
+        return (somme / notesFiltrees.length).toFixed(2);
+    }, [notesFiltrees]);
+
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal-content fiche-notes-modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header no-print">
+                    <h3>Fiche de notes {data ? `- ${data.eleve.nom} ${data.eleve.prenom}` : ''}</h3>
+                    <button className="close-button" onClick={onClose}><FaTimes /></button>
+                </div>
+
+                {isLoading && <p className="no-print">Chargement...</p>}
+                {error && <div className="alert alert-danger no-print">{error}</div>}
+
+                {data && (
+                    <div className="print-area">
+                        <div className="fiche-entete">
+                            <h2>{data.eleve.nom} {data.eleve.prenom}</h2>
+                            <p>
+                                N° {data.eleve.numero_incorporation} — Escadron {data.eleve.escadron || '-'} / Peloton {data.eleve.peloton || '-'}
+                                {data.eleve.promotion ? ` — Promotion ${data.eleve.promotion}` : ''}
+                            </p>
+                        </div>
+
+                        <div className="filtres-box no-print">
+                            <div className="form-group">
+                                <label>Type d'examen</label>
+                                <select value={filtreExamen} onChange={e => setFiltreExamen(e.target.value)}>
+                                    <option value="all">Tous</option>
+                                    {typesExamen.map(t => <option key={t} value={t}>{t}</option>)}
+                                </select>
+                            </div>
+                            <div className="form-group">
+                                <label>Matière</label>
+                                <select value={filtreMatiere} onChange={e => setFiltreMatiere(e.target.value)}>
+                                    <option value="all">Toutes</option>
+                                    {matieres.map(m => <option key={m.id} value={m.id}>{m.nom}</option>)}
+                                </select>
+                            </div>
+                        </div>
+
+                        <table className="results-table">
+                            <thead>
+                                <tr>
+                                    <th>Matière</th>
+                                    <th>Type d'examen</th>
+                                    <th>Note / 20</th>
+                                    <th>Date de saisie</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {notesFiltrees.length > 0 ? notesFiltrees.map(n => (
+                                    <tr key={n.id}>
+                                        <td>{n.nom_matiere}</td>
+                                        <td>{n.type_examen}</td>
+                                        <td>{parseFloat(n.note).toFixed(2)}</td>
+                                        <td>{n.note_saisie_a ? new Date(n.note_saisie_a).toLocaleDateString('fr-FR') : '-'}</td>
+                                    </tr>
+                                )) : (
+                                    <tr><td colSpan={4}>Aucune note pour ces critères.</td></tr>
+                                )}
+                            </tbody>
+                            {moyenneAffichee && (
+                                <tfoot>
+                                    <tr>
+                                        <td colSpan={2} style={{ fontWeight: 'bold' }}>Moyenne (simple, sur la sélection)</td>
+                                        <td style={{ fontWeight: 'bold' }}>{moyenneAffichee}</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            )}
+                        </table>
+
+                        {absencesFiltrees.length > 0 && (
+                            <>
+                                <h4 className="absences-titre">Absences déclarées</h4>
+                                <table className="results-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Matière</th>
+                                            <th>Type d'examen</th>
+                                            <th>Motif</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {absencesFiltrees.map((a, i) => (
+                                            <tr key={i}>
+                                                <td>{a.nom_matiere}</td>
+                                                <td>{a.type_examen || '-'}</td>
+                                                <td>{a.motif || '-'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </>
+                        )}
+                    </div>
+                )}
+
+                <div className="modal-actions no-print">
+                    <button className="btn btn-primary" onClick={() => window.print()} disabled={!data}>
+                        <FaPrint /> Imprimer
+                    </button>
+                    <button className="btn btn-secondary" onClick={onClose}>Fermer</button>
+                </div>
+            </div>
+
+            <style jsx>{`
+    .fiche-overlay {
+        background: transparent;
+        padding: 0;
+    }
+    .fiche-notes-modal {
+        max-width: 100%;
+        width: 100%;
+        height: 100vh;
+        max-height: 100vh;
+        margin: 0;
+        border-radius: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+        overflow: hidden;
+        box-shadow: 0 0 0 1px #e2e8f0, 0 10px 30px rgba(0,0,0,0.15);
+    }
+    .fiche-notes-modal .modal-header {
+        position: sticky;
+        top: 0;
+        background: #fff;
+        z-index: 2;
+        padding: 16px 24px;
+        border-bottom: 1px solid #e2e8f0;
+        margin-bottom: 0;
+        flex-shrink: 0;
+    }
+    .fiche-notes-modal .modal-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+    }
+    .fiche-notes-modal .print-area {
+        overflow-y: auto;
+        padding: 20px 24px;
+        flex: 1;
+        max-width: 900px;
+        margin: 0 auto;
+        width: 100%;
+    }
+    .fiche-notes-modal .modal-actions {
+        flex-shrink: 0;
+        padding: 12px 24px;
+        border-top: 1px solid #e2e8f0;
+        margin-top: 0;
+    }
+    .fiche-entete { text-align: center; margin-bottom: 16px; }
+    .fiche-entete h2 { margin: 0 0 4px 0; font-size: 1.25rem; }
+    .fiche-entete p { margin: 0; color: #718096; font-size: 0.9rem; }
+    .absences-titre { margin-top: 20px; margin-bottom: 8px; }
+
+    .fiche-notes-modal .filtres-box {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: #f7fafc;
+    }
+    .fiche-notes-modal .results-table { font-size: 0.9rem; }
+    .fiche-notes-modal .results-table th,
+    .fiche-notes-modal .results-table td { padding: 8px 10px; }
+`}</style>
+            <style jsx global>{`
+                @media print {
+                    body * { visibility: hidden; }
+                    .print-area, .print-area * { visibility: visible; }
+                    .print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 20px; }
+                    .no-print { display: none !important; }
+                }
+            `}</style>
+        </div>
+    );
+};
 // ─── Composant principal ───────────────────────────────────────────────────
 const ListeEleves = () => {
     const [isAdmin, setIsAdmin] = useState(false);
@@ -162,7 +397,7 @@ const ListeEleves = () => {
     const [deletingEleve, setDeletingEleve] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
-
+const [eleveNotesSelectionne, setEleveNotesSelectionne] = useState(null);
     const getAuthHeaders = useCallback(() => ({
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     }), []);
@@ -335,6 +570,13 @@ const ListeEleves = () => {
                     onCancel={() => setDeletingEleve(null)}
                 />
             )}
+            {eleveNotesSelectionne && (
+                <FicheNotesEleveModal
+                    eleveId={eleveNotesSelectionne.id}
+                    onClose={() => setEleveNotesSelectionne(null)}
+                    getAuthHeaders={getAuthHeaders}
+                />
+            )}
 
             <div className="card-header-actions">
                 <h2>Liste des Élèves</h2>
@@ -413,7 +655,12 @@ const ListeEleves = () => {
                         </thead>
                         <tbody>
                             {elevesFiltres.length > 0 ? elevesFiltres.map(eleve => (
-                                <tr key={eleve.id}>
+                                <tr
+                                        key={eleve.id}
+                                        className={isAdmin ? 'clickable-row' : ''}
+                                        onClick={() => isAdmin && setEleveNotesSelectionne(eleve)}
+                                    >
+                                    
                                     <td>{eleve.numero_incorporation}</td>
                                     <td>{eleve.nom}</td>
                                     <td>{eleve.prenom}</td>
@@ -426,18 +673,8 @@ const ListeEleves = () => {
                                             {getStatutLabel(eleve.statut)}
                                         </span>
                                     </td>
-                                    {isAdmin && (
-                                        <td className="actions-cell">
-                                            <button className="btn-icon btn-edit" title="Modifier"
-                                                onClick={() => setEditingEleve(eleve)}>
-                                                <FaEdit />
-                                            </button>
-                                            <button className="btn-icon btn-delete" title="Supprimer"
-                                                onClick={() => setDeletingEleve(eleve)}>
-                                                <FaTrash />
-                                            </button>
-                                        </td>
-                                    )}
+                                                                       
+
                                 </tr>
                             )) : (
                                 <tr><td colSpan={isAdmin ? 9 : 8}>Aucun élève trouvé pour ces critères.</td></tr>
@@ -483,6 +720,8 @@ const ListeEleves = () => {
                 .alert { padding: 10px 15px; border-radius: 6px; margin: 10px 0; }
                 .alert-success { background: #c6f6d5; color: #276749; border: 1px solid #9ae6b4; }
                 .alert-danger { background: #fed7d7; color: #9b2c2c; border: 1px solid #feb2b2; }
+                .clickable-row { cursor: pointer; }
+                .clickable-row:hover { background: #ebf8ff; }
             `}</style>
         </div>
     );
