@@ -1387,7 +1387,10 @@ const SaisieDirecte = () => {
                     <div className="student-info-card">
                         <h3>{listeElevesSerie[currentIndex].nom} {listeElevesSerie[currentIndex].prenom}</h3>
                         <p>
-                            N° Incorp: {listeElevesSerie[currentIndex].numero_incorporation} |{' '}
+                           N° Incorp: {listeElevesSerie[currentIndex].numero_incorporation} |{' '}
+                           Esc: {listeElevesSerie[currentIndex].escadron || '-'} |{' '}
+                           Pon: {listeElevesSerie[currentIndex].peloton || '-'} |{' '}
+                           
                             <span className={`badge-statut ${listeElevesSerie[currentIndex].statut}`}>
                                 {listeElevesSerie[currentIndex].statut || 'Actif'}
                             </span>
