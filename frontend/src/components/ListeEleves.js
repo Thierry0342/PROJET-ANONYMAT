@@ -673,6 +673,24 @@ const [eleveNotesSelectionne, setEleveNotesSelectionne] = useState(null);
                                             {getStatutLabel(eleve.statut)}
                                         </span>
                                     </td>
+                                    {isAdmin && (
+                                        <td className="actions-cell" onClick={e => e.stopPropagation()}>
+                                            <button
+                                                className="btn-icon btn-edit"
+                                                onClick={() => setEditingEleve(eleve)}
+                                                title="Modifier"
+                                            >
+                                                <FaEdit />
+                                            </button>
+                                            <button
+                                                className="btn-icon btn-delete"
+                                                onClick={() => setDeletingEleve(eleve)}
+                                                title="Supprimer"
+                                            >
+                                                <FaTrash />
+                                            </button>
+                                        </td>
+                                   )}
                                                                        
 
                                 </tr>
