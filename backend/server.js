@@ -455,7 +455,38 @@ app.get(apiPaths.eleves.recherche, authenticateToken, async (req, res) => {
         res.status(500).json({ error: "Erreur interne du serveur." });
     }
 });
+app.get('/api/eleves/:id/notes-detaillees', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { id } = req.params;
 
+        const [eleveRows] = await db.query("SELECT * FROM eleves WHERE id = ?", [id]);
+        if (eleveRows.length === 0) {
+            return res.status(404).json({ message: "Élève non trouvé." });
+        }
+        const eleve = eleveRows[0];
+
+        const [notes] = await db.query(`
+            SELECT c.id, c.note, c.type_examen, c.note_saisie_a,
+                   m.id AS matiere_id, m.nom_matiere
+            FROM copies c
+            JOIN matieres m ON c.matiere_id = m.id
+            WHERE c.eleve_id = ? AND c.note IS NOT NULL
+            ORDER BY c.type_examen, m.nom_matiere
+        `, [id]);
+
+        const [absences] = await db.query(`
+            SELECT a.matiere_id, m.nom_matiere, a.type_examen, a.motif
+            FROM absences a
+            JOIN matieres m ON a.matiere_id = m.id
+            WHERE a.eleve_id = ?
+        `, [id]);
+
+        res.json({ eleve, notes, absences });
+    } catch (err) {
+        console.error("Erreur notes-detaillees:", err);
+        res.status(500).json({ message: "Erreur lors de la récupération des notes de l'élève." });
+    }
+});
 app.post('/api/eleves/importer-previsualisation', authenticateToken, checkRole(['admin']), upload.single('fichierEleves'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
     const { promotion } = req.body;
