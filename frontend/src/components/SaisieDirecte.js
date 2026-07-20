@@ -1041,7 +1041,9 @@ const SaisieDirecte = () => {
                     const sexeOrder = (s) => (s === 'feminin') ? 0 : 1;
                     const diff = sexeOrder(a.sexe) - sexeOrder(b.sexe);
                     if (diff !== 0) return diff;
-                    return (a.nom || '').localeCompare(b.nom || '', 'fr', { sensitivity: 'base' });
+                    const incorpA = parseInt(a.numero_incorporation) || 0;
+                   const incorpB = parseInt(b.numero_incorporation) || 0;
+                   return incorpA - incorpB;
                 });
                 setListeElevesSerie(sorted);
                 setCurrentIndex(0);
