@@ -4,7 +4,8 @@ import { jwtDecode } from 'jwt-decode';
 import {
     FaPlay, FaSave, FaUserPlus, FaUsers, FaArrowLeft, FaHistory,
     FaEdit, FaTrash, FaCheckCircle, FaUserSlash, FaClipboardList,
-    FaInfoCircle, FaLock, FaClock, FaChevronDown, FaChevronRight, FaFilter
+    FaInfoCircle, FaLock, FaClock, FaChevronDown, FaChevronRight, FaFilter,
+ FaArrowRight
 } from 'react-icons/fa';
 import apiPaths from '../config/apiPaths';
 
@@ -1071,13 +1072,26 @@ const SaisieDirecte = () => {
         matiere_id: selectedMatiereId,
         note: note,
         type_examen: selectedTypeExamen,
-        temp_id: `${Date.now()}-${currentEleve.id}`,
+      
         ...(isMatiereParcours ? {
             parcours_version: parcoursInfo.version,
             details_parcours: parcoursInfo.temps,
         } : {})
     };
-    setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
+     setSaisiesTemporaires(prev => {
+        const existeIndex = prev.findIndex(s =>
+            s.eleve_id === currentEleve.id &&
+            s.matiere_id === selectedMatiereId &&
+            s.type_examen === selectedTypeExamen
+        );
+        if (existeIndex !== -1) {
+            // L'élève avait déjà une saisie (note ou absence) : on la remplace.
+            const copie = [...prev];
+            copie[existeIndex] = { ...nouvelleSaisie, temp_id: copie[existeIndex].temp_id };
+            return copie;
+        }
+        return [...prev, { ...nouvelleSaisie, temp_id: `${Date.now()}-${currentEleve.id}` }];
+    });
     setNote('');
     setError('');
     if (isMatiereParcours) setParcoursResetSignal(s => s + 1);
@@ -1102,9 +1116,22 @@ const SaisieDirecte = () => {
             matiere_id: selectedMatiereId,
             motif: motif || 'Non spécifié',
             type_examen: selectedTypeExamen,
-            temp_id: `${Date.now()}-${eleve.id}`
+            
         };
-        setSaisiesTemporaires(prev => [...prev, nouvelleSaisie]);
+         setSaisiesTemporaires(prev => {
+            const existeIndex = prev.findIndex(s =>
+                s.eleve_id === eleve.id &&
+                s.matiere_id === selectedMatiereId &&
+                s.type_examen === selectedTypeExamen
+            );
+            if (existeIndex !== -1) {
+                const copie = [...prev];
+                copie[existeIndex] = { ...nouvelleSaisie, temp_id: copie[existeIndex].temp_id };
+                return copie;
+            }
+            return [...prev, { ...nouvelleSaisie, temp_id: `${Date.now()}-${eleve.id}` }];
+        });
+       
         setIsAbsenceModalOpen(false);
          if (isMatiereParcours) setParcoursResetSignal(s => s + 1)
         if (currentIndex < listeElevesSerie.length - 1) {
@@ -1114,6 +1141,45 @@ const SaisieDirecte = () => {
             setIsValidationModalOpen(true);
         }
     };
+    // ── Navigation libre dans la liste (sans forcer la saisie) ───────────────
+    const handlePrecedent = () => {
+        if (currentIndex > 0) {
+            setError('');
+            setCurrentIndex(prev => prev - 1);
+        }
+    };
+
+    const handleSuivantSansNote = () => {
+        setError('');
+        if (currentIndex < listeElevesSerie.length - 1) {
+            setCurrentIndex(prev => prev + 1);
+        } else {
+            // Dernier élève de la liste : on ouvre directement la validation.
+            setIsSaisieSerieActive(false);
+            setIsValidationModalOpen(true);
+        }
+    };
+
+    // Pré-remplit la note si on revient sur un élève déjà saisi (note simple,
+    // hors "Parcours chronométré" dont les heures détaillées ne sont pas
+    // restaurées automatiquement).
+    useEffect(() => {
+        if (!isSaisieSerieActive) return;
+        const eleveActuel = listeElevesSerie[currentIndex];
+        if (!eleveActuel) return;
+        const existante = saisiesTemporaires.find(s =>
+            s.eleve_id === eleveActuel.id &&
+            s.matiere_id === selectedMatiereId &&
+            s.type_examen === selectedTypeExamen
+        );
+        if (existante && existante.type === 'note' && !isMatiereParcours) {
+            setNote(existante.note);
+        } else {
+            setNote('');
+        }
+        setError('');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentIndex, isSaisieSerieActive]);
 
     // ── Recherche élève (mode manuel) ─────────────────────────────────────────
     useEffect(() => {
@@ -1324,6 +1390,45 @@ const SaisieDirecte = () => {
                                 {listeElevesSerie[currentIndex].statut || 'Actif'}
                             </span>
                         </p>
+                         {(() => {
+                            const eleveActuel = listeElevesSerie[currentIndex];
+                            const dejaSaisie = saisiesTemporaires.find(s =>
+                                s.eleve_id === eleveActuel.id &&
+                                s.matiere_id === selectedMatiereId &&
+                                s.type_examen === selectedTypeExamen
+                            );
+                            if (!dejaSaisie) return null;
+                            return (
+                                <div className="deja-saisie-badge">
+                                    {dejaSaisie.type === 'absence'
+                                        ? <><FaUserSlash /> Déjà marqué absent (motif : {dejaSaisie.motif})</>
+                                        : <><FaCheckCircle /> Déjà noté : {dejaSaisie.note} / 20</>}
+                                </div>
+                            );
+                        })()}
+
+
+
+
+                    </div>
+                    
+                    <div className="saisie-serie-navigation">
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handlePrecedent}
+                            disabled={currentIndex === 0}
+                        >
+                            <FaArrowLeft /> Précédent
+                        </button>
+                        <span className="nav-position">{currentIndex + 1} / {listeElevesSerie.length}</span>
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handleSuivantSansNote}
+                        >
+                            Suivant (ignorer) <FaArrowRight />
+                        </button>
                     </div>
                    <form onSubmit={handleSubmitNoteSerie}>
                         {isMatiereParcours ? (
@@ -1570,6 +1675,9 @@ const SaisieDirecte = () => {
                 .badge-statut.redoublant { background: #fed7d7; color: #9b2c2c; }
                 .badge-statut.ajourne_3m, .badge-statut.ajourne_6m { background: #feebc8; color: #7b341e; }
                 .saisie-serie-actions { display: flex; gap: 10px; margin-top: 15px; }
+                 .saisie-serie-navigation { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
+              .saisie-serie-navigation .nav-position { color: #718096; font-size: 0.85rem; font-weight: 600; }
+               .deja-saisie-badge { margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; background: #fefcbf; color: #744210; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; }
                 .alert { padding: 10px 15px; border-radius: 6px; margin: 10px 0; }
                 .alert-success { background: #c6f6d5; color: #276749; border: 1px solid #9ae6b4; }
                 .alert-danger { background: #fed7d7; color: #9b2c2c; border: 1px solid #feb2b2; }
