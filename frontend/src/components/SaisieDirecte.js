@@ -435,7 +435,7 @@ const ParcoursDetailsModal = ({ saisie, onClose }) => {
 // Filtres : Promotion -> Examen -> Matière. Affiche pour chaque peloton toutes
 // les notes déjà saisies (par n'importe quel opérateur) ET les élèves qui n'ont
 // pas encore de note pour cette combinaison examen/matière.
-const HistoriqueCompletModal = ({ isOpen, onClose, promotionsList, getAuthHeaders, onEdit }) => {
+const HistoriqueCompletModal = ({ isOpen, onClose, promotionsList, getAuthHeaders, onEdit, isAdmin }) => {
     const [promotion, setPromotion] = useState('');
     const [examTypesLocal, setExamTypesLocal] = useState([]);
     const [typeExamen, setTypeExamen] = useState('');
@@ -532,6 +532,15 @@ const HistoriqueCompletModal = ({ isOpen, onClose, promotionsList, getAuthHeader
     const togglePeloton = (key) => {
         setPelotonsOuverts(prev => ({ ...prev, [key]: !prev[key] }));
     };
+    const handleDelete = async (copieId, nomEleve) => {
+    if (!window.confirm(`Supprimer la note de ${nomEleve} ?`)) return;
+    try {
+        await axios.delete(`/api/resultats/${copieId}`, getAuthHeaders());
+        await handleCharger(); // recharge les données pour refléter la suppression
+    } catch (err) {
+        alert(err.response?.data?.message || "Erreur lors de la suppression.");
+    }
+};
 
     const nomMatiereSelectionnee = matieresLocal.find(m => m.id === parseInt(matiereId))?.nom_matiere || '';
 
@@ -627,28 +636,37 @@ const HistoriqueCompletModal = ({ isOpen, onClose, promotionsList, getAuthHeader
                                                                             </td>
                                                                             <td>{e.saisie_par || '-'}</td>
                                                                             <td style={{ display: 'flex', gap: '8px' }}>
-                                                                                {e.details_parcours && (
-                                                                                    <button className="btn-icon" onClick={() => setSaisieDetails(e)} title="Voir les heures">
-                                                                                        <FaClock />
-                                                                                    </button>
-                                                                                )}
-                                                                                {e.a_une_note && e.saisie_par_moi && (
-                                                                                    <button
-                                                                                        className="btn-icon btn-edit"
-                                                                                        onClick={() => onEdit({
-                                                                                            copie_id: e.copie_id,
-                                                                                            note: e.note,
-                                                                                            nom_matiere: nomMatiereSelectionnee,
-                                                                                            prenom: e.prenom,
-                                                                                            nom: e.nom,
-                                                                                            numero_incorporation: e.numero_incorporation
-                                                                                        })}
-                                                                                        title="Modifier cette note"
-                                                                                    >
-                                                                                        <FaEdit />
-                                                                                    </button>
-                                                                                )}
-                                                                            </td>
+                                                                            {e.details_parcours && (
+                                                                                <button className="btn-icon" onClick={() => setSaisieDetails(e)} title="Voir les heures">
+                                                                                    <FaClock />
+                                                                                </button>
+                                                                            )}
+                                                                            {e.a_une_note && e.saisie_par_moi && (
+                                                                                <button
+                                                                                    className="btn-icon btn-edit"
+                                                                                    onClick={() => onEdit({
+                                                                                        copie_id: e.copie_id,
+                                                                                        note: e.note,
+                                                                                        nom_matiere: nomMatiereSelectionnee,
+                                                                                        prenom: e.prenom,
+                                                                                        nom: e.nom,
+                                                                                        numero_incorporation: e.numero_incorporation
+                                                                                    })}
+                                                                                    title="Modifier cette note"
+                                                                                >
+                                                                                    <FaEdit />
+                                                                                </button>
+                                                                            )}
+                                                                            {isAdmin && e.a_une_note && (
+                                                                                <button
+                                                                                    className="btn-icon btn-delete"
+                                                                                    onClick={() => handleDelete(e.copie_id, `${e.prenom} ${e.nom}`)}
+                                                                                    title="Supprimer cette note (admin)"
+                                                                                >
+                                                                                    <FaTrash />
+                                                                                </button>
+                                                                            )}
+                                                                        </td>
                                                                         </tr>
                                                                     ))}
                                                                 </tbody>
@@ -836,6 +854,7 @@ const SaisieDirecte = () => {
     const [isLoadingMesNotes, setIsLoadingMesNotes] = useState(false);
     const noteInputRef = useRef(null);
     const rechercheEleveInputRef = useRef(null);
+    const [userRole, setUserRole] = useState(null);
 
     const getAuthHeaders = useCallback(() => ({
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
@@ -848,6 +867,7 @@ const SaisieDirecte = () => {
             try {
                 const token = localStorage.getItem('token');
                 const decoded = jwtDecode(token);
+                setUserRole(decoded.role);
 
                 const [elevesRes, matieresRes, promotionsRes] = await Promise.all([
                     axios.get(apiPaths.eleves.base, getAuthHeaders()),
@@ -1340,6 +1360,7 @@ const SaisieDirecte = () => {
                 promotionsList={promotionsList}
                 getAuthHeaders={getAuthHeaders}
                 onEdit={setEditingEntry}
+                isAdmin={userRole === 'admin'}
             />
             {editingEntry && (
                 <ModificationModal
