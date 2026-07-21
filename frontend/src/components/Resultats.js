@@ -374,16 +374,16 @@ const escadronsDisponibles = useMemo(() => {
     let base = resultats;
     if (selectedPromotion) base = base.filter(r => r.promotion === selectedPromotion);
     return [...new Set(base.map(r => r.escadron).filter(Boolean))]
-        .sort((a, b) => a - b);
+        .sort((a, b) => String(a).localeCompare(String(b), 'fr', { numeric: true }));
 }, [resultats, selectedPromotion]);
 
 // Pelotons disponibles, filtrés par promotion + escadron sélectionné
 const pelotonsDisponibles = useMemo(() => {
     if (!selectedEscadron) return [];
-    let base = resultats.filter(r => r.escadron === selectedEscadron);
+    let base = resultats.filter(r => String(r.escadron) === String(selectedEscadron));
     if (selectedPromotion) base = base.filter(r => r.promotion === selectedPromotion);
     return [...new Set(base.map(r => r.peloton).filter(Boolean))]
-        .sort((a, b) => a - b);
+        .sort((a, b) => String(a).localeCompare(String(b), 'fr', { numeric: true }));
 }, [resultats, selectedEscadron, selectedPromotion]);
    const filteredResults = useMemo(() => {
     let results = resultats;
