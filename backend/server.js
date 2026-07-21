@@ -3276,9 +3276,9 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
             }
 
             const [noteExistante] = await connection.query(
-                "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ?",
-                [note.eleve_id, note.matiere_id, note.type_examen]
-            );
+                    "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
+                    [note.eleve_id, note.matiere_id, note.type_examen]
+                );
             if(noteExistante.length > 0) {
                 throw new Error(`L'élève ${note.eleve_nom} a déjà une note pour ce type d'examen (${note.type_examen}). Opération annulée.`);
             }
@@ -3294,13 +3294,18 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
         ]);
         }
 
-       if (valuesToInsert.length > 0) {
-        const query = `
-            INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, details_parcours, parcours_version)
-            VALUES ?
-        `;
-        await connection.query(query, [valuesToInsert]);
-    }
+      if (valuesToInsert.length > 0) {
+    const query = `
+        INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, details_parcours, parcours_version)
+        VALUES ?
+        ON DUPLICATE KEY UPDATE
+            note = VALUES(note),
+            note_saisie_par_utilisateur_id = VALUES(note_saisie_par_utilisateur_id),
+            details_parcours = VALUES(details_parcours),
+            parcours_version = VALUES(parcours_version)
+    `;
+    await connection.query(query, [valuesToInsert]);
+}
 
         await connection.commit();
         res.status(201).json({ message: `${valuesToInsert.length} note(s) enregistrée(s) avec succès.` });
