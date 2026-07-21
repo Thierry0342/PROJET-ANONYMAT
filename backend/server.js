@@ -1845,15 +1845,28 @@ app.post(apiPaths.copies.noteDirecte, authenticateToken, checkRole(['admin','ope
              return res.status(409).json({ message: "Impossible d'enregistrer la note : cet élève est déclaré absent pour cette matière." });
         }
 
-        const query = `
-            INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, code_anonyme)
-            VALUES (?, ?, ?, ?, ?, NULL)
-            ON DUPLICATE KEY UPDATE
-                note = VALUES(note),
-                note_saisie_par_utilisateur_id = VALUES(note_saisie_par_utilisateur_id);
-        `;
-        await connection.query(query, [eleve_id, matiere_id, noteNum, type_examen, utilisateurId]);
+            const [existantes] = await connection.query(
+            "SELECT id, note FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? ORDER BY (note IS NOT NULL) DESC, id ASC FOR UPDATE",
+            [eleve_id, matiere_id, type_examen]
+        );
 
+        if (existantes.length > 0 && existantes[0].note !== null) {
+            await connection.rollback();
+            return res.status(409).json({ message: `Cet élève a déjà une note pour cette matière et ce type d'examen.` });
+        }
+
+        if (existantes.length > 0) {
+            // Une ligne existe mais sans note (ex: suite à une suppression) -> on la réutilise
+            await connection.query(
+                "UPDATE copies SET note = ?, note_saisie_par_utilisateur_id = ? WHERE id = ?",
+                [noteNum, utilisateurId, existantes[0].id]
+            );
+        } else {
+            await connection.query(
+                "INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, code_anonyme) VALUES (?, ?, ?, ?, ?, NULL)",
+                [eleve_id, matiere_id, noteNum, type_examen, utilisateurId]
+            );
+        }
         await connection.commit();
         res.status(201).json({ message: "Note enregistrée avec succès." });
 
@@ -3275,13 +3288,14 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
                  throw new Error(`L'élève ${note.eleve_nom} est déclaré absent pour cette matière. Opération annulée.`);
             }
 
-            const [noteExistante] = await connection.query(
-                    "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
+            const [lignesExistantes] = await connection.query(
+                    "SELECT id, note FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? ORDER BY (note IS NOT NULL) DESC, id ASC",
                     [note.eleve_id, note.matiere_id, note.type_examen]
                 );
-            if(noteExistante.length > 0) {
-                throw new Error(`L'élève ${note.eleve_nom} a déjà une note pour ce type d'examen (${note.type_examen}). Opération annulée.`);
-            }
+
+                if (lignesExistantes.length > 0 && lignesExistantes[0].note !== null) {
+                    throw new Error(`L'élève ${note.eleve_nom} a déjà une note pour ce type d'examen (${note.type_examen}). Opération annulée.`);
+                }
 
             valuesToInsert.push([
             note.eleve_id,
@@ -3294,19 +3308,28 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
         ]);
         }
 
-      if (valuesToInsert.length > 0) {
-    const query = `
-        INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, details_parcours, parcours_version)
-        VALUES ?
-        ON DUPLICATE KEY UPDATE
-            note = VALUES(note),
-            note_saisie_par_utilisateur_id = VALUES(note_saisie_par_utilisateur_id),
-            details_parcours = VALUES(details_parcours),
-            parcours_version = VALUES(parcours_version)
-    `;
-    await connection.query(query, [valuesToInsert]);
-}
+   for (const note of notes) {
+    const [lignesExistantes] = await connection.query(
+        "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? ORDER BY id ASC",
+        [note.eleve_id, note.matiere_id, note.type_examen]
+    );
 
+    const noteNum = parseFloat(note.note);
+    const detailsJson = note.details_parcours ? JSON.stringify(note.details_parcours) : null;
+    const version = note.parcours_version || null;
+
+    if (lignesExistantes.length > 0) {
+        await connection.query(
+            "UPDATE copies SET note = ?, note_saisie_par_utilisateur_id = ?, details_parcours = ?, parcours_version = ? WHERE id = ?",
+            [noteNum, utilisateurId, detailsJson, version, lignesExistantes[0].id]
+        );
+    } else {
+        await connection.query(
+            "INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, details_parcours, parcours_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [note.eleve_id, note.matiere_id, noteNum, note.type_examen, utilisateurId, detailsJson, version]
+        );
+    }
+}
         await connection.commit();
         res.status(201).json({ message: `${valuesToInsert.length} note(s) enregistrée(s) avec succès.` });
 
