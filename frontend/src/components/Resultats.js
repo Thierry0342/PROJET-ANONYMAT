@@ -184,6 +184,8 @@ function Resultats() {
     const [selectedPromotion, setSelectedPromotion]         = useState('');
     const [selectedMatiere, setSelectedMatiere]             = useState('');
     const [selectedTypeExamen, setSelectedTypeExamen]       = useState('');
+    const [selectedEscadron, setSelectedEscadron]           = useState('');
+const [selectedPeloton, setSelectedPeloton]              = useState('');
     const [searchTerm, setSearchTerm]                       = useState('');
     const [currentPage, setCurrentPage]                     = useState(1);
     const [resultsPerPage]                                  = useState(10);
@@ -367,21 +369,48 @@ const handleExportManquants = () => {
     }).finally(() => setTimeout(() => setIsExporting(false), 1000));
 };
     // ── Filtres ───────────────────────────────────────────────────────────────
-    const filteredResults = useMemo(() => {
-        let results = resultats;
-        if (selectedMatiere)    results = results.filter(r => r.matiere_id === parseInt(selectedMatiere, 10));
-        if (selectedTypeExamen) results = results.filter(r => r.type_examen === selectedTypeExamen);
-        if (selectedPromotion)  results = results.filter(r => r.promotion === selectedPromotion);
-        if (searchTerm) {
-            const low = searchTerm.toLowerCase().trim();
-            results = results.filter(r => {
-                const fullName = `${r.prenom} ${r.nom}`.toLowerCase();
-                const inc = r.numero_incorporation?.toString() || '';
-                return fullName.includes(low) || inc.includes(low);
-            });
-        }
-        return results;
-    }, [resultats, selectedMatiere, selectedTypeExamen, selectedPromotion, searchTerm]);
+    // Escadrons disponibles, filtrés par la promotion sélectionnée
+const escadronsDisponibles = useMemo(() => {
+    let base = resultats;
+    if (selectedPromotion) base = base.filter(r => r.promotion === selectedPromotion);
+    return [...new Set(base.map(r => r.escadron).filter(Boolean))]
+        .sort((a, b) => a - b);
+}, [resultats, selectedPromotion]);
+
+// Pelotons disponibles, filtrés par promotion + escadron sélectionné
+const pelotonsDisponibles = useMemo(() => {
+    if (!selectedEscadron) return [];
+    let base = resultats.filter(r => r.escadron === selectedEscadron);
+    if (selectedPromotion) base = base.filter(r => r.promotion === selectedPromotion);
+    return [...new Set(base.map(r => r.peloton).filter(Boolean))]
+        .sort((a, b) => a - b);
+}, [resultats, selectedEscadron, selectedPromotion]);
+   const filteredResults = useMemo(() => {
+    let results = resultats;
+    if (selectedMatiere)    results = results.filter(r => r.matiere_id === parseInt(selectedMatiere, 10));
+    if (selectedTypeExamen) results = results.filter(r => r.type_examen === selectedTypeExamen);
+    if (selectedPromotion)  results = results.filter(r => r.promotion === selectedPromotion);
+    if (selectedEscadron)   results = results.filter(r => String(r.escadron) === String(selectedEscadron));
+    if (selectedPeloton)    results = results.filter(r => String(r.peloton) === String(selectedPeloton));
+    if (searchTerm) {
+        const low = searchTerm.toLowerCase().trim();
+        results = results.filter(r => {
+            const fullName = `${r.prenom} ${r.nom}`.toLowerCase();
+            const inc = r.numero_incorporation?.toString() || '';
+            return fullName.includes(low) || inc.includes(low);
+        });
+    }
+    // ✅ Tri par numéro d'incorporation (croissant, numérique)
+    results = [...results].sort((a, b) => {
+        const incA = parseInt(a.numero_incorporation, 10) || 0;
+        const incB = parseInt(b.numero_incorporation, 10) || 0;
+        return incA - incB;
+    });
+    return results;
+}, [resultats, selectedMatiere, selectedTypeExamen, selectedPromotion, selectedEscadron, selectedPeloton, searchTerm]);
+useEffect(() => {
+    setSelectedPeloton('');
+}, [selectedEscadron]);
 
     const suggestions = useMemo(() => {
         if (!searchTerm || searchTerm.length < 1) return [];
@@ -494,8 +523,11 @@ const handleExportManquants = () => {
                                 className="form-select"
                                 value={selectedPromotion}
                                 onChange={e => {
+                                   
                                     setSelectedPromotion(e.target.value);
-                                    setSelectedTypeExamen(''); // ← ajouter ce reset
+                                    setSelectedTypeExamen('');
+                                    setSelectedEscadron('');   // 
+                                    setSelectedPeloton('');    // 
                                     setCurrentPage(1);
                                 }}
 >
@@ -532,6 +564,28 @@ const handleExportManquants = () => {
                                     <option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>
                                 ))
                             }
+                        </select>
+                        <select
+                            className="form-select"
+                            value={selectedEscadron}
+                            onChange={e => { setSelectedEscadron(e.target.value); setCurrentPage(1); }}
+                        >
+                            <option value="">Tous les escadrons</option>
+                            {escadronsDisponibles.map(esc => (
+                                <option key={esc} value={esc}>Escadron {esc}</option>
+                            ))}
+                        </select>
+
+                        <select
+                            className="form-select"
+                            value={selectedPeloton}
+                            onChange={e => { setSelectedPeloton(e.target.value); setCurrentPage(1); }}
+                            disabled={!selectedEscadron}
+                        >
+                            <option value="">Tous les pelotons</option>
+                            {pelotonsDisponibles.map(pon => (
+                                <option key={pon} value={pon}>Peloton {pon}</option>
+                            ))}
                         </select>
                     </div>
 
