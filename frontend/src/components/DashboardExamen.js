@@ -20,6 +20,17 @@ const normalizeStudentData = (s) => {
 };
 
 const formatNom = (nom) => nom ? nom.toUpperCase() : '';
+// ── Mention — même barème que côté backend (getMention dans server.js) ──
+const getMention = (moyenne) => {
+    if (moyenne === null || moyenne === undefined || isNaN(moyenne)) return 'Non classé';
+    const m = parseFloat(moyenne);
+    if (m >= 18) return 'Excellent';
+    if (m >= 16) return 'Très Bien';
+    if (m >= 14) return 'Bien';
+    if (m >= 12) return 'Assez Bien';
+    if (m >= 10) return 'Passable';
+    return 'Insuffisant';
+};
 const formatPrenom = (prenom) => {
     if (!prenom) return '';
     return prenom.toLowerCase().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -250,6 +261,7 @@ const DashboardExamen = () => {
     };
 
     // ── Export classement complet Excel ───────────────────────────────────────
+// ── Export classement complet Excel ───────────────────────────────────────
     const handleExportClassementExcel = () => {
         const classes = filteredClassement.filter(s => s.rang != null);
         const nonClasses = filteredClassement.filter(s => s.rang == null);
@@ -258,18 +270,24 @@ const DashboardExamen = () => {
         const data = ordonne.map(s => ({
             'RANG': s.rang != null ? s.rang : 'Non classé',
             'NOM ET PRÉNOM': `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
+            'ESCADRON': s.escadron || '-',
+            'PELOTON': s.peloton || '-',
             'N° INCORPORATION': s.numero_incorporation || '',
-            'MOYENNE': s.moyenne != null ? s.moyenne : '-'
+            'MOYENNE': s.moyenne != null ? s.moyenne : '-',
+            'MENTION': getMention(s.moyenne)
         }));
 
         const ws = xlsx.utils.json_to_sheet(data);
 
         // Largeurs colonnes
         ws['!cols'] = [
-            { wch: 12 },
-            { wch: 35 },
-            { wch: 20 },
-            { wch: 12 }
+            { wch: 12 }, // RANG
+            { wch: 35 }, // NOM ET PRÉNOM
+            { wch: 12 }, // ESCADRON
+            { wch: 12 }, // PELOTON
+            { wch: 20 }, // N° INCORPORATION
+            { wch: 12 }, // MOYENNE
+            { wch: 15 }  // MENTION
         ];
 
         const wb = xlsx.utils.book_new();

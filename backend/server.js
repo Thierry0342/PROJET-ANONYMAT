@@ -1310,7 +1310,8 @@ app.get(apiPaths.resultats.exporter, authenticateToken, checkRole(['admin']), as
 
         for (const groupName in groupedData) {
             const sheetData = groupedData[groupName];
-            const headers = ["N° ORDRE", "NOM ET PRENOM", "N° INCORPORATION", "ESCADRON", "PELOTON", "SEXE", "NOTE / 20"];
+            // ✅ AJOUT colonne MENTION (même barème que getMention utilisé dans le classement)
+            const headers = ["N° ORDRE", "NOM ET PRENOM", "N° INCORPORATION", "ESCADRON", "PELOTON", "SEXE", "NOTE / 20", "MENTION"];
             const body = sheetData.map((row, index) => [
                 index + 1,
                 `${row.nom || ''} ${row.prenom || ''}`.trim(),
@@ -1318,12 +1319,14 @@ app.get(apiPaths.resultats.exporter, authenticateToken, checkRole(['admin']), as
                 row.escadron,
                 row.peloton,
                 (row.sexe === 'feminin' ? 'F' : 'M'),
-                row.note
+                row.note,
+                getMention(row.note)
             ]);
             const finalSheetData = [[`FICHE DE RECUEIL DE NOTE - ${nomMatiere}`], [], headers, ...body];
             const worksheet = xlsx.utils.aoa_to_sheet(finalSheetData);
-            worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
-            worksheet['!cols'] = [{ wch: 10 }, { wch: 35 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 10 }, { wch: 15 }];
+            // ✅ Fusion du titre étendue à 8 colonnes (0 à 7 au lieu de 0 à 6)
+            worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }];
+            worksheet['!cols'] = [{ wch: 10 }, { wch: 35 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 10 }, { wch: 15 }, { wch: 15 }];
             const sheetName = groupName.replace(/[\\/*?:]/g, '').substring(0, 31);
             xlsx.utils.book_append_sheet(workbook, worksheet, sheetName);
         }
@@ -1404,7 +1407,8 @@ app.post('/api/resultats/generer-document-pdf', authenticateToken, checkRole(['a
             doc.setFont('helvetica', 'bold');
             doc.text(`FICHE DE RECUEIL DE NOTE - ${nomMatiere}`, doc.internal.pageSize.getWidth() / 2, 20, { align: 'center' });
 
-            const head = [['N°', 'NOM/PRENOM', 'INCOR', 'ESC', 'PON', 'SEXE', 'NOTE / 20']];
+          // ✅ AJOUT colonne MENTION
+            const head = [['N°', 'NOM/PRENOM', 'INCOR', 'ESC', 'PON', 'SEXE', 'NOTE / 20', 'MENTION']];
             const body = groupedData[groupName].map((row, index) => [
                 index + 1,
                 `${row.nom || ''} ${row.prenom || ''}`.trim(),
@@ -1412,7 +1416,8 @@ app.post('/api/resultats/generer-document-pdf', authenticateToken, checkRole(['a
                 row.escadron,
                 row.peloton,
                 (row.sexe === 'feminin' ? 'F' : 'M'),
-                parseFloat(row.note).toFixed(2)
+                parseFloat(row.note).toFixed(2),
+                getMention(row.note)
             ]);
 
             autoTable(doc, {
