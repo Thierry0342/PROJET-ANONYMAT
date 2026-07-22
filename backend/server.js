@@ -4460,14 +4460,14 @@ app.get('/api/resultats/stats-eleve/:id', authenticateToken, async (req, res) =>
     try {
         const { id } = req.params;
 
-        // ✅ Récupère depuis statistiques_classement (moyennes calculées)
         const [statsClassement] = await db.query(`
             SELECT type_examen, moyenne, rang 
             FROM statistiques_classement 
             WHERE eleve_id = ?
         `, [id]);
 
-        // ✅ Récupère AUSSI les notes brutes par matière pour chaque type examen
+        // ✅ CORRECTION : on joint eleves pour connaître sa promotion
+        // et on filtre modeles_examens sur cette promotion précise
         const [notesDetail] = await db.query(`
             SELECT 
                 c.type_examen,
@@ -4477,9 +4477,12 @@ app.get('/api/resultats/stats-eleve/:id', authenticateToken, async (req, res) =>
                 ec.coefficient,
                 me.coefficient_general
             FROM copies c
+            JOIN eleves e ON c.eleve_id = e.id
             JOIN matieres m ON c.matiere_id = m.id
             JOIN examens_configurations ec ON ec.matiere_id = m.id
-            JOIN modeles_examens me ON ec.modele_examen_id = me.id AND me.nom_modele = c.type_examen
+            JOIN modeles_examens me ON ec.modele_examen_id = me.id 
+                AND me.nom_modele = c.type_examen
+                AND me.promotion = e.promotion
             WHERE c.eleve_id = ? AND c.note IS NOT NULL
         `, [id]);
 
