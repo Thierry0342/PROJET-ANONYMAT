@@ -5,18 +5,22 @@ import './Resultats.css';
 const IconPrint = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>;
 
 // 1. AJOUT de 'typeExamen' dans les props reçues
-const ElevesSansNoteModal = ({ matiereId, nomMatiere, typeExamen, onClose }) => {
+// 1. Ajouter 'promotion' dans les props reçues
+const ElevesSansNoteModal = ({ matiereId, nomMatiere, typeExamen, promotion, onClose }) => {
     const [eleves, setEleves] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // 2. AJOUT de la vérification de typeExamen
         if (!matiereId || !typeExamen) return;
 
         const fetchElevesSansNote = () => {
             const token = localStorage.getItem('token');
-            // 3. MODIFICATION de l'URL pour inclure le type d'examen
-            axios.get(`/api/resultats/sans-note/${matiereId}?type_examen=${encodeURIComponent(typeExamen)}`, {
+            // 2. Construire l'URL avec le paramètre promotion (optionnel mais recommandé)
+            const params = new URLSearchParams();
+            params.append('type_examen', typeExamen);
+            if (promotion) params.append('promotion', promotion);
+
+            axios.get(`/api/resultats/sans-note/${matiereId}?${params.toString()}`, {
                 headers: { Authorization: `Bearer ${token}` }
             })
             .then(response => {
@@ -24,7 +28,6 @@ const ElevesSansNoteModal = ({ matiereId, nomMatiere, typeExamen, onClose }) => 
             })
             .catch(error => {
                 console.error("Erreur lors du chargement des élèves sans note", error);
-                // Optionnel : ne pas alerter si c'est juste une annulation, mais utile pour le debug
             })
             .finally(() => {
                 setLoading(false);
@@ -32,8 +35,8 @@ const ElevesSansNoteModal = ({ matiereId, nomMatiere, typeExamen, onClose }) => 
         };
 
         fetchElevesSansNote();
-    // 4. AJOUT de typeExamen dans les dépendances pour recharger si ça change
-    }, [matiereId, typeExamen]);
+    // 3. Ajouter 'promotion' dans les dépendances
+    }, [matiereId, typeExamen, promotion]);
 
     const handlePrint = () => {
         window.print();

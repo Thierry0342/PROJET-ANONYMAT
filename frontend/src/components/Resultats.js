@@ -412,20 +412,26 @@ useEffect(() => {
     setSelectedPeloton('');
 }, [selectedEscadron]);
 
-    const suggestions = useMemo(() => {
-        if (!searchTerm || searchTerm.length < 1) return [];
-        const low  = searchTerm.toLowerCase();
-        const seen = new Set();
-        return resultats.filter(r => {
-            const fullName = `${r.prenom} ${r.nom}`.toLowerCase();
-            const inc      = r.numero_incorporation?.toString() || '';
-            if ((fullName.includes(low) || inc.includes(low)) && !seen.has(fullName)) {
-                seen.add(fullName);
-                return true;
-            }
-            return false;
-        }).slice(0, 5);
-    }, [resultats, searchTerm]);
+   // ✅ Base restreinte à la promotion sélectionnée (utilisée pour les suggestions)
+const resultatsPourPromotion = useMemo(() => {
+    if (!selectedPromotion) return resultats;
+    return resultats.filter(r => r.promotion === selectedPromotion);
+}, [resultats, selectedPromotion]);
+
+const suggestions = useMemo(() => {
+    if (!searchTerm || searchTerm.length < 1) return [];
+    const low  = searchTerm.toLowerCase();
+    const seen = new Set();
+    return resultatsPourPromotion.filter(r => {
+        const fullName = `${r.prenom} ${r.nom}`.toLowerCase();
+        const inc      = r.numero_incorporation?.toString() || '';
+        if ((fullName.includes(low) || inc.includes(low)) && !seen.has(fullName)) {
+            seen.add(fullName);
+            return true;
+        }
+        return false;
+    }).slice(0, 5);
+}, [resultatsPourPromotion, searchTerm]);
 
     const currentResults = filteredResults.slice(
         (currentPage - 1) * resultsPerPage,
