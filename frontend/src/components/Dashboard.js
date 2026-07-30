@@ -988,14 +988,20 @@ const sortedExams = (examSummaries || []).filter(e => {
                                         <div className="v">{countStudents}</div>
                                         <div className="card-legend">Total population</div>
                                     </div>
-
                                     <div className="m-card clickable green" onClick={() => {
                                         const list = filteredSourceData.filter(s => parseFloat(s.moyenne) >= 12).map(s => ({
                                             ...s,
                                             fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
                                             actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setModalData(null); setSelectedStudent(s); }}>Dossier</button>)
                                         }));
-                                        showModal('Admis (Moy ≥ 12)', [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
+                                        showModal('Admis (Moy ≥ 12)', [
+                                            { key: 'fullName', header: 'Nom & Prénom' },
+                                            { key: 'numero_incorporation', header: 'N° Inc.' },
+                                            { key: 'escadron', header: 'Escadron' },
+                                            { key: 'peloton', header: 'Peloton' },
+                                            { key: 'moyenne', header: 'Note' },
+                                            { key: 'actionBtn', header: 'Action' }
+                                        ], list);
                                     }}>
                                         <h5>Validés</h5>
                                         <div className="v">{countSup12}</div>
@@ -1008,7 +1014,14 @@ const sortedExams = (examSummaries || []).filter(e => {
                                             fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
                                             actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation(); setModalData(null); setSelectedStudent(s); }}>Dossier</button>)
                                         }));
-                                        showModal('Inférieur à 12 (Moy < 12)', [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
+                                        showModal('Inférieur à 12 (Moy < 12)', [
+                                            { key: 'fullName', header: 'Nom & Prénom' },
+                                            { key: 'numero_incorporation', header: 'N° Inc.' },
+                                            { key: 'escadron', header: 'Escadron' },
+                                            { key: 'peloton', header: 'Peloton' },
+                                            { key: 'moyenne', header: 'Note' },
+                                            { key: 'actionBtn', header: 'Action' }
+                                        ], list);
                                     }}>
                                         <h5>Inférieur à 12</h5>
                                         <div className="v">{countInf12}</div>
@@ -1021,7 +1034,14 @@ const sortedExams = (examSummaries || []).filter(e => {
                                             fullName: `${formatPrenom(s.prenom)} ${formatNom(s.nom)}`,
                                             actionBtn: (<button className="btn-table-action" onClick={(e) => { e.stopPropagation();  setModalData(null);setSelectedStudent(s); }}>Dossier</button>)
                                         }));
-                                        showModal(`Simulation Ajournement (< ${ajournementThreshold})`, [{key:'fullName', header:'Nom & Prénom'}, {key:'moyenne', header:'Note'}, {key:'actionBtn', header:'Action'}], list);
+                                        showModal(`Simulation Ajournement (< ${ajournementThreshold})`, [
+                                            { key: 'fullName', header: 'Nom & Prénom' },
+                                            { key: 'numero_incorporation', header: 'N° Inc.' },
+                                            { key: 'escadron', header: 'Escadron' },
+                                            { key: 'peloton', header: 'Peloton' },
+                                            { key: 'moyenne', header: 'Note' },
+                                            { key: 'actionBtn', header: 'Action' }
+                                        ], list);
                                     }}>
                                         <h5>Simulation</h5>
                                         <div className="threshold-input" onClick={e => e.stopPropagation()}>
