@@ -146,6 +146,7 @@ const ConfirmDeleteModal = ({ eleve, onConfirm, onCancel, isDeleting }) => (
 // ─── Modal Fiche de notes détaillée (clic sur une ligne, admin uniquement) ─
 const FicheNotesEleveModal = ({ eleveId, onClose, getAuthHeaders }) => {
     const [data, setData] = useState(null);
+    const [statsExamens, setStatsExamens] = useState([]); // ✅ moyennes officielles (backend)
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
     const [filtreExamen, setFiltreExamen] = useState('all');
@@ -156,10 +157,18 @@ const FicheNotesEleveModal = ({ eleveId, onClose, getAuthHeaders }) => {
             setIsLoading(true);
             setError('');
             try {
-                const res = await axios.get(`/api/eleves/${eleveId}/notes-detaillees`, getAuthHeaders());
-                setData(res.data);
-            } catch (err) {
-                setError(err.response?.data?.message || "Erreur lors du chargement des notes.");
+                const [notesRes, statsRes] = await Promise.allSettled([
+                    axios.get(`/api/eleves/${eleveId}/notes-detaillees`, getAuthHeaders()),
+                    axios.get(`/api/resultats/stats-eleve/${eleveId}`, getAuthHeaders())
+                ]);
+
+                if (notesRes.status === 'fulfilled') {
+                    setData(notesRes.value.data);
+                } else {
+                    setError(notesRes.reason?.response?.data?.message || "Erreur lors du chargement des notes.");
+                }
+
+                setStatsExamens(statsRes.status === 'fulfilled' ? (statsRes.value.data || []) : []);
             } finally {
                 setIsLoading(false);
             }
@@ -197,11 +206,11 @@ const FicheNotesEleveModal = ({ eleveId, onClose, getAuthHeaders }) => {
         });
     }, [data, filtreExamen, filtreMatiere]);
 
-    const moyenneAffichee = useMemo(() => {
-        if (notesFiltrees.length === 0) return null;
-        const somme = notesFiltrees.reduce((s, n) => s + parseFloat(n.note), 0);
-        return (somme / notesFiltrees.length).toFixed(2);
-    }, [notesFiltrees]);
+    // ✅ Moyenne officielle (backend) pour le type d'examen sélectionné
+    const statExamenSelectionne = useMemo(() => {
+        if (filtreExamen === 'all') return null;
+        return statsExamens.find(s => s.type_examen === filtreExamen) || null;
+    }, [statsExamens, filtreExamen]);
 
     return (
         <div className="modal-overlay" onClick={onClose}>
@@ -241,6 +250,68 @@ const FicheNotesEleveModal = ({ eleveId, onClose, getAuthHeaders }) => {
                             </div>
                         </div>
 
+                      {/* ✅ Bloc moyenne(s) officielle(s), rang juste à côté de la moyenne */}
+{filtreExamen !== 'all' ? (
+    statExamenSelectionne ? (
+        <div className="moyenne-officielle-box">
+            <span className="mo-label">Moyenne officielle — {filtreExamen}</span>
+            <span className="mo-value-rang">
+                <span className={`mo-value ${parseFloat(statExamenSelectionne.moyenne) >= 12 ? 'ok' : 'ko'}`}>
+                    {statExamenSelectionne.moyenne != null
+                        ? `${parseFloat(statExamenSelectionne.moyenne).toFixed(2)} / 20`
+                        : 'N/A'}
+                </span>
+                <span className="mo-rang-pill">
+                    {statExamenSelectionne.rang
+                        ? `Rang : ${statExamenSelectionne.rang}`
+                        : 'Non classé'}
+                </span>
+            </span>
+            {!statExamenSelectionne.est_complet && (
+                <span className="mo-badge-partiel">
+                    Partiel ({statExamenSelectionne.notes_presentes} note(s))
+                </span>
+            )}
+        </div>
+    ) : (
+        <div className="moyenne-officielle-box mo-empty">
+            Aucune moyenne officielle disponible pour cet examen.
+        </div>
+    )
+) : (
+    statsExamens.length > 0 && (
+        <div className="moyennes-recap">
+            <h4>Moyennes officielles par examen</h4>
+            <table className="results-table">
+                <thead>
+                    <tr>
+                        <th>Type d'examen</th>
+                        <th>Moyenne</th>
+                        <th>Rang</th>
+                        <th>Statut</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {statsExamens.map(s => (
+                        <tr key={s.type_examen}>
+                            <td>{s.type_examen}</td>
+                            <td>
+                                {s.moyenne != null ? `${parseFloat(s.moyenne).toFixed(2)} / 20` : 'N/A'}
+                            </td>
+                            <td>
+                                {s.rang
+                                    ? <strong style={{ color: '#007bff' }}>{s.rang}</strong>
+                                    : <span style={{ color: '#94a3b8' }}>Non classé</span>}
+                            </td>
+                            <td>{s.est_complet ? 'Complet' : `Partiel (${s.notes_presentes} note(s))`}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    )
+)}
+
                         <table className="results-table">
                             <thead>
                                 <tr>
@@ -262,15 +333,6 @@ const FicheNotesEleveModal = ({ eleveId, onClose, getAuthHeaders }) => {
                                     <tr><td colSpan={4}>Aucune note pour ces critères.</td></tr>
                                 )}
                             </tbody>
-                            {moyenneAffichee && (
-                                <tfoot>
-                                    <tr>
-                                        <td colSpan={2} style={{ fontWeight: 'bold' }}>Moyenne (simple, sur la sélection)</td>
-                                        <td style={{ fontWeight: 'bold' }}>{moyenneAffichee}</td>
-                                        <td></td>
-                                    </tr>
-                                </tfoot>
-                            )}
                         </table>
 
                         {absencesFiltrees.length > 0 && (
@@ -308,65 +370,54 @@ const FicheNotesEleveModal = ({ eleveId, onClose, getAuthHeaders }) => {
             </div>
 
             <style jsx>{`
-    .fiche-overlay {
-        background: transparent;
-        padding: 0;
-    }
+    .fiche-overlay { background: transparent; padding: 0; }
     .fiche-notes-modal {
-        max-width: 100%;
-        width: 100%;
-        height: 100vh;
-        max-height: 100vh;
-        margin: 0;
-        border-radius: 0;
-        display: flex;
-        flex-direction: column;
-        padding: 0;
-        overflow: hidden;
+        max-width: 100%; width: 100%; height: 100vh; max-height: 100vh;
+        margin: 0; border-radius: 0; display: flex; flex-direction: column;
+        padding: 0; overflow: hidden;
         box-shadow: 0 0 0 1px #e2e8f0, 0 10px 30px rgba(0,0,0,0.15);
     }
     .fiche-notes-modal .modal-header {
-        position: sticky;
-        top: 0;
-        background: #fff;
-        z-index: 2;
-        padding: 16px 24px;
-        border-bottom: 1px solid #e2e8f0;
-        margin-bottom: 0;
-        flex-shrink: 0;
+        position: sticky; top: 0; background: #fff; z-index: 2;
+        padding: 16px 24px; border-bottom: 1px solid #e2e8f0;
+        margin-bottom: 0; flex-shrink: 0;
     }
-    .fiche-notes-modal .modal-header h3 {
-        margin: 0;
-        font-size: 1.1rem;
-    }
+    .fiche-notes-modal .modal-header h3 { margin: 0; font-size: 1.1rem; }
     .fiche-notes-modal .print-area {
-        overflow-y: auto;
-        padding: 20px 24px;
-        flex: 1;
-        max-width: 900px;
-        margin: 0 auto;
-        width: 100%;
+        overflow-y: auto; padding: 20px 24px; flex: 1;
+        max-width: 900px; margin: 0 auto; width: 100%;
     }
     .fiche-notes-modal .modal-actions {
-        flex-shrink: 0;
-        padding: 12px 24px;
-        border-top: 1px solid #e2e8f0;
-        margin-top: 0;
+        flex-shrink: 0; padding: 12px 24px; border-top: 1px solid #e2e8f0; margin-top: 0;
     }
     .fiche-entete { text-align: center; margin-bottom: 16px; }
     .fiche-entete h2 { margin: 0 0 4px 0; font-size: 1.25rem; }
     .fiche-entete p { margin: 0; color: #718096; font-size: 0.9rem; }
     .absences-titre { margin-top: 20px; margin-bottom: 8px; }
 
-    .fiche-notes-modal .filtres-box {
-        position: sticky;
-        top: 0;
-        z-index: 1;
-        background: #f7fafc;
-    }
+    .fiche-notes-modal .filtres-box { position: sticky; top: 0; z-index: 1; background: #f7fafc; }
     .fiche-notes-modal .results-table { font-size: 0.9rem; }
     .fiche-notes-modal .results-table th,
     .fiche-notes-modal .results-table td { padding: 8px 10px; }
+
+    /* ✅ Nouveau : bloc moyenne officielle */
+    .moyenne-officielle-box {
+        display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+        background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px;
+        padding: 12px 16px; margin-bottom: 16px;
+    }
+    .moyenne-officielle-box.mo-empty { background: #f7fafc; color: #718096; }
+    .mo-label { font-weight: 600; color: #0369a1; }
+    .mo-value { font-size: 1.1rem; font-weight: bold; }
+    .mo-value.ok { color: #28a745; }
+    .mo-value.ko { color: #dc3545; }
+    .mo-rang { font-size: 0.9rem; color: #4a5568; }
+    .mo-badge-partiel {
+        font-size: 0.75rem; background: #fef3c7; color: #d97706;
+        padding: 2px 8px; border-radius: 4px; font-weight: 600;
+    }
+    .moyennes-recap { margin-bottom: 16px; }
+    .moyennes-recap h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: #4a5568; }
 `}</style>
             <style jsx global>{`
                 @media print {
@@ -740,6 +791,19 @@ const [eleveNotesSelectionne, setEleveNotesSelectionne] = useState(null);
                 .alert-danger { background: #fed7d7; color: #9b2c2c; border: 1px solid #feb2b2; }
                 .clickable-row { cursor: pointer; }
                 .clickable-row:hover { background: #ebf8ff; }
+                .mo-value-rang {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                .mo-rang-pill {
+                    background: #007bff;
+                    color: #fff;
+                    font-size: 0.8rem;
+                    font-weight: 700;
+                    padding: 3px 10px;
+                    border-radius: 999px;
+                }
             `}</style>
         </div>
     );

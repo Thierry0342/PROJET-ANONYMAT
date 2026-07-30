@@ -501,37 +501,47 @@ const DashboardExamen = () => {
     const handleDifficulteClick = () => showModalWithData('Élèves en Difficulté (< 10/20)', standardColumns, mapMoyenne(elevesEnDifficulte));
 
     const handleAbsentsClick = () => {
-        if (!isDataReady) return;
-        const mappedData = elevesIndisponibles.map(s => ({
-            ...s,
-            nomComplet: `EG ${s.prenom} ${s.nom}`,
-            numero: s.numero_incorporation,
-            motifIndisponibilite: s.consultationDays > 0 && s.absenceDays > 0
-                ? `Consultation Externe (${s.consultationDays}j) / Absence Total(${s.absenceDays}j)`
-                : (s.consultationDays > 0
-                    ? `Consultation Médicale (${s.consultationDays}j)`
-                    : `Absence (${s.absenceDays}j)`),
-            totalJours: s.absenceDays,
-            actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
-        })).sort((a, b) => b.totalJours - a.totalJours);
+    if (!isDataReady) return;
+    const mappedData = elevesIndisponibles.map(s => ({
+        ...s,
+        nomComplet: `EG ${s.prenom} ${s.nom}`,
+        numero: s.numero_incorporation,
+        motifIndisponibilite: s.consultationDays > 0 && s.absenceDays > 0
+            ? `Consultation Externe (${s.consultationDays}j) / Absence Total(${s.absenceDays}j)`
+            : (s.consultationDays > 0
+                ? `Consultation Médicale (${s.consultationDays}j)`
+                : `Absence (${s.absenceDays}j)`),
+        totalJours: s.absenceDays,
+        actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
+    })).sort((a, b) => b.totalJours - a.totalJours);
 
-        showModalWithData('Absents / Indisponibles', [
-            { key: 'rang',                 header: 'Rang'        },
-            { key: 'nomComplet',           header: 'Nom'         },
-            { key: 'numero',               header: 'N° Inc.'     },
-            { key: 'motifIndisponibilite', header: 'Motif'       },
-            { key: 'totalJours',           header: 'Total Jours' },
-            { key: 'actionBtn',            header: 'Action'      }
-        ], mappedData);
-    };
+    showModalWithData('Absents / Indisponibles', [
+        { key: 'rang',                 header: 'Rang'        },
+        { key: 'nomComplet',           header: 'Nom'         },
+        { key: 'numero',               header: 'N° Inc.'     },
+        { key: 'escadron',             header: 'Escadron'    },
+        { key: 'peloton',              header: 'Peloton'     },
+        { key: 'motifIndisponibilite', header: 'Motif'       },
+        { key: 'totalJours',           header: 'Total Jours' },
+        { key: 'actionBtn',            header: 'Action'      }
+    ], mappedData);
+};
 
-    const handleConsultationClick = () => {
-        if (!isDataReady) return;
-        showModalWithData('Élèves avec le plus de jours de consultation',
-            [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom Complet' }, { key: 'consultationDays', header: 'Jours Consultation' }, { key: 'actionBtn', header: 'Action' }],
-            mapMoyenne(elevesConsultation)
-        );
-    };
+   const handleConsultationClick = () => {
+    if (!isDataReady) return;
+    showModalWithData('Élèves avec le plus de jours de consultation',
+        [
+            { key: 'rang', header: 'Rang' },
+            { key: 'nomComplet', header: 'Nom Complet' },
+            { key: 'numero_incorporation', header: 'N° Inc.' },
+            { key: 'escadron', header: 'Escadron' },
+            { key: 'peloton', header: 'Peloton' },
+            { key: 'consultationDays', header: 'Jours Consultation' },
+            { key: 'actionBtn', header: 'Action' }
+        ],
+        mapMoyenne(elevesConsultation)
+    );
+};
 
     const handleSanctionsClick = () => {
         if (!isDataReady) return;
@@ -696,13 +706,27 @@ const DashboardExamen = () => {
                         onExportPdf={()   => exportDataToPdf  ("Eleves_Echec", standardColumns, mapMoyenne(studentsInf12))}
                     />
                     <StatCardRedesign
-                        title="Consultations Externes" value={countConsultations} isLoading={!isDataReady}
-                        onClick={handleConsultationClick}
-                        highlight={isDataReady && typeof countConsultations === 'number' && countConsultations > 0}
-                        icon="fa-medkit"
-                        onExportExcel={() => exportDataToExcel("Consultations", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'consultationDays', header: 'Jours' }], mapMoyenne(elevesConsultation))}
-                        onExportPdf={()   => exportDataToPdf  ("Consultations", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'consultationDays', header: 'Jours' }], mapMoyenne(elevesConsultation))}
-                    />
+                            title="Consultations Externes" value={countConsultations} isLoading={!isDataReady}
+                            onClick={handleConsultationClick}
+                            highlight={isDataReady && typeof countConsultations === 'number' && countConsultations > 0}
+                            icon="fa-medkit"
+                            onExportExcel={() => exportDataToExcel("Consultations", [
+                                { key: 'rang', header: 'Rang' },
+                                { key: 'nomComplet', header: 'Nom' },
+                                { key: 'numero_incorporation', header: 'N° Inc.' },
+                                { key: 'escadron', header: 'Escadron' },
+                                { key: 'peloton', header: 'Peloton' },
+                                { key: 'consultationDays', header: 'Jours' }
+                            ], mapMoyenne(elevesConsultation))}
+                            onExportPdf={() => exportDataToPdf("Consultations", [
+                                { key: 'rang', header: 'Rang' },
+                                { key: 'nomComplet', header: 'Nom' },
+                                { key: 'numero_incorporation', header: 'N° Inc.' },
+                                { key: 'escadron', header: 'Escadron' },
+                                { key: 'peloton', header: 'Peloton' },
+                                { key: 'consultationDays', header: 'Jours' }
+                            ], mapMoyenne(elevesConsultation))}
+                        />
                     <StatCardRedesign
                         title="Élèves Sanctionnés" value={countSanctions} isLoading={!isDataReady}
                         onClick={handleSanctionsClick}
@@ -712,11 +736,23 @@ const DashboardExamen = () => {
                         onExportPdf={()   => exportDataToPdf  ("Sanctions", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'sanctionCount', header: 'Nombre' }], mapMoyenne(elevesSanctionnes))}
                     />
                     <StatCardRedesign
-                        title="Absents / Indisponibles" value={countIndisponibles} isLoading={!isDataReady}
-                        onClick={handleAbsentsClick} icon="fa-user-times"
-                        onExportExcel={() => exportDataToExcel("Absents_Indisponibles", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }], mapMoyenne(elevesIndisponibles))}
-                        onExportPdf={()   => exportDataToPdf  ("Absents_Indisponibles", [{ key: 'rang', header: 'Rang' }, { key: 'nomComplet', header: 'Nom' }, { key: 'motifIndisponibilite', header: 'Motif' }], mapMoyenne(elevesIndisponibles))}
-                    />
+                            title="Absents / Indisponibles" value={countIndisponibles} isLoading={!isDataReady}
+                            onClick={handleAbsentsClick} icon="fa-user-times"
+                            onExportExcel={() => exportDataToExcel("Absents_Indisponibles", [
+                                { key: 'rang', header: 'Rang' },
+                                { key: 'nomComplet', header: 'Nom' },
+                                { key: 'escadron', header: 'Escadron' },
+                                { key: 'peloton', header: 'Peloton' },
+                                { key: 'motifIndisponibilite', header: 'Motif' }
+                            ], mapMoyenne(elevesIndisponibles))}
+                            onExportPdf={() => exportDataToPdf("Absents_Indisponibles", [
+                                { key: 'rang', header: 'Rang' },
+                                { key: 'nomComplet', header: 'Nom' },
+                                { key: 'escadron', header: 'Escadron' },
+                                { key: 'peloton', header: 'Peloton' },
+                                { key: 'motifIndisponibilite', header: 'Motif' }
+                            ], mapMoyenne(elevesIndisponibles))}
+                        />
                     <StatCardRedesign
                         title="Élèves < 10/20" value={elevesEnDifficulte.length}
                         onClick={handleDifficulteClick} icon="fa-times-circle"
@@ -764,61 +800,65 @@ const DashboardExamen = () => {
                             </div>
                         </div>
 
-                        <div className="table-responsive-dashboard">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Rang</th>
-                                        <th>Nom Complet</th>
-                                        <th>Incorporation</th>
-                                        <th>Moyenne</th>
-                                        <th style={{ width: '150px' }}>Statut Pendant Examen</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredClassement.map(s => (
-                                        <tr
-                                            key={s.id || s.numero_incorporation || Math.random()}
-                                            onClick={() => setSelectedStudent(s)}
-                                            className="clickable-row"
-                                        >
-                                            <td><strong>{s.rang}</strong></td>
-                                            <td>{s.prenom} {s.nom}</td>
-                                            <td>{s.numero_incorporation}</td>
-                                            <td>{s.moyenne}</td>
-                                            <td>
-                                                {s.rang == null ? (
-                                                    <span
-                                                        className="status-badge"
-                                                        style={{ backgroundColor: '#6b7280' }}
-                                                        title={s.motif_non_classe || 'Notes incomplètes'}
-                                                    >
-                                                        <i className="fa fa-ban"></i> NON CLASSÉ
+                       <div className="table-responsive-dashboard">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Rang</th>
+                                    <th>Nom Complet</th>
+                                    <th>Escadron</th>
+                                    <th>Peloton</th>
+                                    <th>Incorporation</th>
+                                    <th>Moyenne</th>
+                                    <th style={{ width: '150px' }}>Statut Pendant Examen</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredClassement.map(s => (
+                                    <tr
+                                        key={s.id || s.numero_incorporation || Math.random()}
+                                        onClick={() => setSelectedStudent(s)}
+                                        className="clickable-row"
+                                    >
+                                        <td><strong>{s.rang}</strong></td>
+                                        <td>{s.prenom} {s.nom}</td>
+                                        <td>{s.escadron || '-'}</td>
+                                        <td>{s.peloton || '-'}</td>
+                                        <td>{s.numero_incorporation}</td>
+                                        <td>{s.moyenne}</td>
+                                        <td>
+                                            {s.rang == null ? (
+                                                <span
+                                                    className="status-badge"
+                                                    style={{ backgroundColor: '#6b7280' }}
+                                                    title={s.motif_non_classe || 'Notes incomplètes'}
+                                                >
+                                                    <i className="fa fa-ban"></i> NON CLASSÉ
+                                                </span>
+                                            ) : null}
+                                            <div className="badges-container">
+                                                {s.consultationDays > 0 && (
+                                                    <span className="status-badge consultation-badge" title={`${s.consultationDays} jour(s) de consultation`}>
+                                                        <i className="fa fa-heartbeat"></i> {s.consultationDays} j
                                                     </span>
-                                                ) : null}
-                                                <div className="badges-container">
-                                                    {s.consultationDays > 0 && (
-                                                        <span className="status-badge consultation-badge" title={`${s.consultationDays} jour(s) de consultation`}>
-                                                            <i className="fa fa-heartbeat"></i> {s.consultationDays} j
-                                                        </span>
-                                                    )}
-                                                    {s.absenceDays > 0 && (
-                                                        <span className="status-badge absence-badge" title={`${s.absenceDays} jour(s) d'absence`}>
-                                                            <i className="fa fa-calendar-times-o"></i> {s.absenceDays} j
-                                                        </span>
-                                                    )}
-                                                    {s.sanctionCount > 0 && (
-                                                        <span className="status-badge sanction-badge" title={`${s.sanctionCount} sanction(s)`}>
-                                                            <i className="fa fa-gavel"></i> {s.sanctionCount} S
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                                )}
+                                                {s.absenceDays > 0 && (
+                                                    <span className="status-badge absence-badge" title={`${s.absenceDays} jour(s) d'absence`}>
+                                                        <i className="fa fa-calendar-times-o"></i> {s.absenceDays} j
+                                                    </span>
+                                                )}
+                                                {s.sanctionCount > 0 && (
+                                                    <span className="status-badge sanction-badge" title={`${s.sanctionCount} sanction(s)`}>
+                                                        <i className="fa fa-gavel"></i> {s.sanctionCount} S
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                     </div>
                 </div>
             </div>
