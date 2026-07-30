@@ -247,20 +247,50 @@ const DashboardGeneral = () => {
 
     const generateActionBtn = (s) => ( <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); setModalData(null); setSelectedStudent(s); }}> <i className="fa fa-eye"></i> Voir </button> );
 
-    const handleSup12Click = () => {
-        const list = dataToDisplay.filter(s => parseFloat(s.moyenne) >= 12).map(s => ({ ...s, actionBtn: generateActionBtn(s) }));
-        setModalTitle("Élèves Moyenne ≥ 12"); setModalColumns([{key:'nom', header:'Nom'},{key:'moyenne', header:'Moyenne'},{key:'actionBtn', header:'Action'}]); setModalData(list);
-    };
+  const handleSup12Click = () => {
+    const list = dataToDisplay.filter(s => parseFloat(s.moyenne) >= 12).map(s => ({ ...s, actionBtn: generateActionBtn(s) }));
+    setModalTitle("Élèves Moyenne ≥ 12");
+    setModalColumns([
+        { key: 'nom', header: 'Nom' },
+        { key: 'prenom', header: 'Prénom' },
+        { key: 'numero_incorporation', header: 'N° Inc.' },
+        { key: 'escadron', header: 'Escadron' },
+        { key: 'peloton', header: 'Peloton' },
+        { key: 'moyenne', header: 'Moyenne' },
+        { key: 'actionBtn', header: 'Action' }
+    ]);
+    setModalData(list);
+};
 
-    const handleInf12Click = () => {
-        const list = dataToDisplay.filter(s => parseFloat(s.moyenne) < 12).map(s => ({ ...s, actionBtn: generateActionBtn(s) }));
-        setModalTitle("Élèves Moyenne < 12"); setModalColumns([{key:'nom', header:'Nom'},{key:'moyenne', header:'Moyenne'},{key:'actionBtn', header:'Action'}]); setModalData(list);
-    };
+const handleInf12Click = () => {
+    const list = dataToDisplay.filter(s => parseFloat(s.moyenne) < 12).map(s => ({ ...s, actionBtn: generateActionBtn(s) }));
+    setModalTitle("Élèves Moyenne < 12");
+    setModalColumns([
+        { key: 'nom', header: 'Nom' },
+        { key: 'prenom', header: 'Prénom' },
+        { key: 'numero_incorporation', header: 'N° Inc.' },
+        { key: 'escadron', header: 'Escadron' },
+        { key: 'peloton', header: 'Peloton' },
+        { key: 'moyenne', header: 'Moyenne' },
+        { key: 'actionBtn', header: 'Action' }
+    ]);
+    setModalData(list);
+};
 
-    const handlePropositionAjournementClick = () => {
-        const list = dataToDisplay.filter(s => parseFloat(s.moyenne) < ajournementThreshold).map(s => ({ ...s, actionBtn: generateActionBtn(s) }));
-        setModalTitle("Proposition Ajournement"); setModalColumns([{key:'nom', header:'Nom'},{key:'moyenne', header:'Moyenne'},{key:'actionBtn', header:'Action'}]); setModalData(list);
-    };
+const handlePropositionAjournementClick = () => {
+    const list = dataToDisplay.filter(s => parseFloat(s.moyenne) < ajournementThreshold).map(s => ({ ...s, actionBtn: generateActionBtn(s) }));
+    setModalTitle("Proposition Ajournement");
+    setModalColumns([
+        { key: 'nom', header: 'Nom' },
+        { key: 'prenom', header: 'Prénom' },
+        { key: 'numero_incorporation', header: 'N° Inc.' },
+        { key: 'escadron', header: 'Escadron' },
+        { key: 'peloton', header: 'Peloton' },
+        { key: 'moyenne', header: 'Moyenne' },
+        { key: 'actionBtn', header: 'Action' }
+    ]);
+    setModalData(list);
+};
 
     const handleRedoublementClick = () => {
         const list = dataToDisplay.filter(s => (s.consultationDays || 0) >= 60 || parseFloat(s.moyenne) < 8).map(s => ({ ...s, actionBtn: generateActionBtn(s) }));
