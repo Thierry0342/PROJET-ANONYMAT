@@ -424,13 +424,19 @@ const DashboardExamen = () => {
     const sourceDataDynamique = useMemo(() => {
         if (!isDataReady) return details ? details.classement : [];
         return classementWithRawDetails.map(student => {
-            let consultationDays = 0;
-            if (Array.isArray(student.rawConsultations)) {
-                student.rawConsultations.forEach(c => {
-                    const dateArriveEffective = c.dateArrive || new Date().toISOString();
-                    consultationDays += getOverlappingDays(c.dateDepart, dateArriveEffective, startDate, endDate);
-                });
-            }
+           let consultationDays = 0;
+                if (Array.isArray(student.rawConsultations)) {
+                    student.rawConsultations.forEach(c => {
+                        const dateArriveEffective = c.dateArrive || new Date().toISOString();
+                        const start = new Date(c.dateDepart);
+                        const end = new Date(dateArriveEffective);
+                        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+                            // Même formule que calculateDaysBetween / consultationStats
+                            // dans StudentDetailsModal (total global, pas limité à la période)
+                            consultationDays += Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24));
+                        }
+                    });
+                }
             let absenceDays = 0;
             if (Array.isArray(student.rawAbsences)) {
                 student.rawAbsences.forEach(a => {

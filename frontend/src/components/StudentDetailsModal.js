@@ -379,6 +379,15 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
         : `${totalDays} jours discontinus`;
     return { totalDays, label };
 }, [consultations]);
+const EXCLUDED_ABSENCE_MOTIFS = ['CONSULTATION EXTERNE', 'ADMIS HOMI', 'ADMIS CENHOSOA'];
+
+const totalAbsencesGenerales = useMemo(() => {
+    const totalSante = consultationStats ? consultationStats.totalDays : 0;
+    const totalRegistre = processedAbsences
+        .filter(g => !EXCLUDED_ABSENCE_MOTIFS.includes((g.motif || '').trim().toUpperCase()))
+        .reduce((sum, g) => sum + g.totalDays, 0);
+    return totalSante + totalRegistre;
+}, [consultationStats, processedAbsences]);
 
     if (!student) return null;
 
@@ -551,6 +560,27 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
                         
                         <section className="cv-section">
                             <h3 className="cv-section-title"><i className="fa fa-medkit fa-fw"></i>Suivi Disciplinaire & Médical (Historique Global)</h3>
+                            {!loading && (
+                                    <div style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        background: 'linear-gradient(135deg, #fff3cd, #ffe8a1)',
+                                        border: '2px solid #f0ad4e',
+                                        borderRadius: '10px',
+                                        padding: '14px 18px',
+                                        margin: '10px 0 20px 0',
+                                        boxShadow: '0 2px 6px rgba(240,173,78,0.35)'
+                                    }}>
+                                        <span style={{ fontWeight: 'bold', fontSize: '1.05em', color: '#8a6d3b' }}>
+                                            <i className="fa fa-exclamation-circle" style={{ marginRight: '8px' }}></i>
+                                            Total des Absences (Santé + Registre)
+                                        </span>
+                                        <span style={{ fontWeight: 800, fontSize: '1.4em', color: '#8a6d3b' }}>
+                                            {totalAbsencesGenerales} jour(s)
+                                        </span>
+                                    </div>
+                                )}
                             {loading ? <p style={{padding: '10px'}}>Chargement des données externes...</p> : (
                                 <>
                                     <div className="external-info-item">
