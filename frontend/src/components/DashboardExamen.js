@@ -72,6 +72,8 @@ const getOverlappingDays = (start1, end1, limitStart, limitEnd) => {
     return 0;
 };
 
+const EXCLUDED_ABSENCE_MOTIFS = ['CONSULTATION EXTERNE', 'ADMIS HOMI', 'ADMIS CENHOSOA'];
+
 const exportDataToExcel = (title, columns, data) => {
     const worksheetData = data.map(row => {
         const obj = {};
@@ -437,13 +439,17 @@ const DashboardExamen = () => {
                         }
                     });
                 }
-            let absenceDays = 0;
-            if (Array.isArray(student.rawAbsences)) {
-                student.rawAbsences.forEach(a => {
-                    const dateCible = a.date || a.dateDebut || a.createdAt || new Date();
-                    if (getOverlappingDays(dateCible, dateCible, startDate, endDate) > 0) absenceDays++;
-                });
-            }
+                        let absenceDays = 0;
+                if (Array.isArray(student.rawAbsences)) {
+                    student.rawAbsences.forEach(a => {
+                        const motif = (a.motif || '').trim().toUpperCase();
+                        // Global (pas limité à la période), même logique que processedAbsences
+                        // dans StudentDetailsModal — pour que le total corresponde à la fiche élève.
+                        if (!EXCLUDED_ABSENCE_MOTIFS.includes(motif)) {
+                            absenceDays++;
+                        }
+                    });
+                }
             return { ...student, consultationDays, absenceDays };
         });
     }, [classementWithRawDetails, isDataReady, startDate, endDate, details]);
@@ -517,7 +523,8 @@ const DashboardExamen = () => {
             : (s.consultationDays > 0
                 ? `Consultation Médicale (${s.consultationDays}j)`
                 : `Absence (${s.absenceDays}j)`),
-        totalJours: s.absenceDays,
+      
+        totalJours: (s.consultationDays || 0) + (s.absenceDays || 0),
         actionBtn: <button className="btn-details-action" onClick={(e) => { e.stopPropagation(); handleStudentSelectFromModal(s); }}><i className="fa fa-eye"></i> Détail</button>
     })).sort((a, b) => b.totalJours - a.totalJours);
 
