@@ -463,10 +463,9 @@ const DashboardExamen = () => {
     };
 
     const handleStudentSelectFromModal = (student) => {
-        setModalData(null);
-        setActiveModalType(null);
-        setSelectedStudent(student);
-    };
+  
+    setSelectedStudent(student);
+};
 
     const sourceData = sourceDataDynamique;
     const totalStudents = sourceData.length;
