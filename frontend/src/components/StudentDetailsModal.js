@@ -574,7 +574,7 @@ const totalAbsencesGenerales = useMemo(() => {
                                     }}>
                                         <span style={{ fontWeight: 'bold', fontSize: '1.05em', color: '#8a6d3b' }}>
                                             <i className="fa fa-exclamation-circle" style={{ marginRight: '8px' }}></i>
-                                            Total des Absences (Santé + Registre)
+                                            Total des Absences
                                         </span>
                                         <span style={{ fontWeight: 800, fontSize: '1.4em', color: '#8a6d3b' }}>
                                             {totalAbsencesGenerales} jour(s)
@@ -601,9 +601,21 @@ const totalAbsencesGenerales = useMemo(() => {
                                             </div>
                                         )}
                                     </div>
+                                     <div className="external-info-item" style={{marginTop: '20px'}}>
+                                        <h5 style={{borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>
+                                            Observations ({observations.length})
+                                        </h5>
+                                        {observations.length > 0 ? (
+                                            <ul className="details-list">
+                                                {observations.map((o) => <ObservationItem key={o.id} obs={o} />)}
+                                            </ul>
+                                        ) : (
+                                            <p className="text-muted" style={{padding: '5px'}}>Aucune observation enregistrée.</p>
+                                        )}
+                                    </div>
                                     <div className="external-info-item" style={{marginTop: '20px'}}>
                                         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>
-                                            <h5>Mouvements de Santé ({consultations.length})</h5>
+                                            <h5>Consultation Externe ({consultations.length})</h5>
                                             {consultationStats && (
                                                 <span className="absence-duration" style={{backgroundColor: '#28a745', color: '#fff', padding: '2px 10px', borderRadius: '12px', fontSize: '0.85em'}}>
                                                     {consultationStats.label}
@@ -617,7 +629,7 @@ const totalAbsencesGenerales = useMemo(() => {
                                         ) : <p className="text-muted" style={{padding: '5px'}}>Aucune consultation enregistrée.</p>}
                                     </div>
                                     <div className="external-info-item" style={{marginTop: '20px'}}>
-                                        <h5 style={{borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>Registre des Absences ({processedAbsences.reduce((acc, g) => acc + g.count, 0)})</h5>
+                                        <h5 style={{borderBottom: '2px solid #eee', paddingBottom: '6px', marginBottom: '10px'}}>S.P.A({processedAbsences.reduce((acc, g) => acc + g.count, 0)})</h5>
                                         {processedAbsences.length > 0 ? (
                                             <ul className="details-list">
                                                 {processedAbsences.map((group, index) => (
@@ -626,18 +638,7 @@ const totalAbsencesGenerales = useMemo(() => {
                                             </ul>
                                         ) : <p className="text-muted" style={{padding: '5px'}}>Aucune absence enregistrée.</p>}
                                     </div>
-                                    <div className="external-info-item" style={{marginTop: '20px'}}>
-    <h5 style={{borderBottom: '2px solid #eee', paddingBottom: '5px', marginBottom: '10px'}}>
-        Observations ({observations.length})
-    </h5>
-    {observations.length > 0 ? (
-        <ul className="details-list">
-            {observations.map((o) => <ObservationItem key={o.id} obs={o} />)}
-        </ul>
-    ) : (
-        <p className="text-muted" style={{padding: '5px'}}>Aucune observation enregistrée.</p>
-    )}
-</div>
+                                   
                                     
                                 </>
                             )}
