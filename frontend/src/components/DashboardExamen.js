@@ -15,7 +15,8 @@ const normalizeStudentData = (s) => {
     return {
         ...s,
         id: s.id || s.eleve_id || s.eleveId,
-        numero_incorporation: s.numero_incorporation || s.numeroIncorporation || s.incorp
+        numero_incorporation: s.numero_incorporation || s.numeroIncorporation || s.incorp,
+        matricule: s.matricule || s.mle || ''
     };
 };
 
@@ -195,107 +196,115 @@ const DashboardExamen = () => {
 
     // ── Export classement complet PDF ─────────────────────────────────────────
     const handleExportClassementPDF = () => {
-        const doc = new jsPDF();
+    const doc = new jsPDF();
 
-        // En-tête
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text("SECRETARIAT D'ETAT / CGN / EGN AMBOSITRA", 55, 15, { align: 'center' });
+    doc.text("REPOBLIKAN'I MADAGASIKARA", 155, 15, { align: 'center' });
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text(
+        `CLASSEMENT — ${typeExamen.replace(/_/g, ' ')}`,
+        105, 35, { align: 'center' }
+    );
+    if (selectedPromotion !== 'all') {
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        doc.text("SECRETARIAT D'ETAT / CGN / EGN AMBOSITRA", 55, 15, { align: 'center' });
-        doc.text("REPOBLIKAN'I MADAGASIKARA", 155, 15, { align: 'center' });
+        doc.text(`Promotion : ${selectedPromotion}`, 105, 43, { align: 'center' });
+    }
 
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text(
-            `CLASSEMENT — ${typeExamen.replace(/_/g, ' ')}`,
-            105, 35, { align: 'center' }
-        );
-        if (selectedPromotion !== 'all') {
-            doc.setFontSize(10);
-            doc.setFont('helvetica', 'normal');
-            doc.text(`Promotion : ${selectedPromotion}`, 105, 43, { align: 'center' });
+    const classes = filteredClassement.filter(s => s.rang != null);
+    const nonClasses = filteredClassement.filter(s => s.rang == null);
+    const ordonne = [...classes, ...nonClasses];
+
+    const body = ordonne.map(s => [
+        s.rang != null ? s.rang : 'Non classé',
+        `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
+        s.numero_incorporation || '',
+        s.matricule || '-',
+        s.escadron || '-',
+        s.peloton || '-',
+        s.moyenne != null ? s.moyenne : '-',
+        getMention(s.moyenne)
+    ]);
+
+    autoTable(doc, {
+        startY: selectedPromotion !== 'all' ? 50 : 43,
+        head: [['RANG', 'NOM ET PRÉNOM', 'INCORPORATION', 'MLE', 'ESCADRON', 'PELOTON', 'MOYENNE', 'MENTION']],
+        body,
+        theme: 'plain',
+        styles: {
+            font: 'helvetica',
+            textColor: [0, 0, 0],
+            lineColor: [0, 0, 0],
+            lineWidth: 0.1,
+            fontSize: 9,
+            cellPadding: 3
+        },
+        headStyles: {
+            fontStyle: 'bold',
+            fillColor: false,
+            textColor: [0, 0, 0],
+            halign: 'center'
+        },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: 18 },
+            1: { halign: 'left' },
+            2: { halign: 'center', cellWidth: 28 },
+            3: { halign: 'center', cellWidth: 22 },
+            4: { halign: 'center', cellWidth: 20 },
+            5: { halign: 'center', cellWidth: 20 },
+            6: { halign: 'center', cellWidth: 20 },
+            7: { halign: 'center', cellWidth: 25 }
         }
+    });
 
-        const classes = filteredClassement.filter(s => s.rang != null);
-        const nonClasses = filteredClassement.filter(s => s.rang == null);
-        const ordonne = [...classes, ...nonClasses];
+    const dateStr = new Date().toLocaleDateString('fr-FR');
+    const finalY = doc.lastAutoTable.finalY + 15;
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Édité le ${dateStr}`, 14, finalY);
 
-        const body = ordonne.map(s => [
-            s.rang != null ? s.rang : 'Non classé',
-            `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
-            s.numero_incorporation || '',
-            s.moyenne != null ? s.moyenne : '-'
-        ]);
-
-        autoTable(doc, {
-            startY: selectedPromotion !== 'all' ? 50 : 43,
-            head: [['RANG', 'NOM ET PRÉNOM', 'N° INCORPORATION', 'MOYENNE']],
-            body,
-            theme: 'plain',
-            styles: {
-                font: 'helvetica',
-                textColor: [0, 0, 0],
-                lineColor: [0, 0, 0],
-                lineWidth: 0.1,
-                fontSize: 10,
-                cellPadding: 3
-            },
-            headStyles: {
-                fontStyle: 'bold',
-                fillColor: false,
-                textColor: [0, 0, 0],
-                halign: 'center'
-            },
-            columnStyles: {
-                0: { halign: 'center', cellWidth: 25 },
-                1: { halign: 'left' },
-                2: { halign: 'center', cellWidth: 40 },
-                3: { halign: 'center', cellWidth: 25 }
-            }
-        });
-
-        const dateStr = new Date().toLocaleDateString('fr-FR');
-        const finalY = doc.lastAutoTable.finalY + 15;
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Édité le ${dateStr}`, 14, finalY);
-
-        doc.save(`Classement_${typeExamen}_${selectedPromotion}.pdf`);
-    };
+    doc.save(`Classement_${typeExamen}_${selectedPromotion}.pdf`);
+};
 
     // ── Export classement complet Excel ───────────────────────────────────────
 // ── Export classement complet Excel ───────────────────────────────────────
     const handleExportClassementExcel = () => {
-        const classes = filteredClassement.filter(s => s.rang != null);
-        const nonClasses = filteredClassement.filter(s => s.rang == null);
-        const ordonne = [...classes, ...nonClasses];
+    const classes = filteredClassement.filter(s => s.rang != null);
+    const nonClasses = filteredClassement.filter(s => s.rang == null);
+    const ordonne = [...classes, ...nonClasses];
 
-        const data = ordonne.map(s => ({
-            'RANG': s.rang != null ? s.rang : 'Non classé',
-            'NOM ET PRÉNOM': `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
-            'ESCADRON': s.escadron || '-',
-            'PELOTON': s.peloton || '-',
-            'N° INCORPORATION': s.numero_incorporation || '',
-            'MOYENNE': s.moyenne != null ? s.moyenne : '-',
-            'MENTION': getMention(s.moyenne)
-        }));
+    const data = ordonne.map(s => ({
+        'RANG': s.rang != null ? s.rang : 'Non classé',
+        'NOM ET PRÉNOM': `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
+        'INCORPORATION': s.numero_incorporation || '',
+        'MLE': s.matricule || '-',
+        'ESCADRON': s.escadron || '-',
+        'PELOTON': s.peloton || '-',
+        'MOYENNE': s.moyenne != null ? s.moyenne : '-',
+        'MENTION': getMention(s.moyenne)
+    }));
 
-        const ws = xlsx.utils.json_to_sheet(data);
+    const ws = xlsx.utils.json_to_sheet(data);
 
-        // Largeurs colonnes
-        ws['!cols'] = [
-            { wch: 12 }, // RANG
-            { wch: 35 }, // NOM ET PRÉNOM
-            { wch: 12 }, // ESCADRON
-            { wch: 12 }, // PELOTON
-            { wch: 20 }, // N° INCORPORATION
-            { wch: 12 }, // MOYENNE
-            { wch: 15 }  // MENTION
-        ];
+    ws['!cols'] = [
+        { wch: 12 }, // RANG
+        { wch: 35 }, // NOM ET PRÉNOM
+        { wch: 20 }, // INCORPORATION
+        { wch: 15 }, // MLE
+        { wch: 12 }, // ESCADRON
+        { wch: 12 }, // PELOTON
+        { wch: 12 }, // MOYENNE
+        { wch: 15 }  // MENTION
+    ];
 
-        const wb = xlsx.utils.book_new();
-        xlsx.utils.book_append_sheet(wb, ws, `${typeExamen}`);
-        xlsx.writeFile(wb, `Classement_${typeExamen}_${selectedPromotion}.xlsx`);
-    };
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, `${typeExamen}`);
+    xlsx.writeFile(wb, `Classement_${typeExamen}_${selectedPromotion}.xlsx`);
+};
 
     useEffect(() => {
         if (!typeExamen) return;

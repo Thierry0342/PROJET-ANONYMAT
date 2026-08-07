@@ -123,25 +123,41 @@ const runMigrations = async () => {
             }
         }
 
-    } catch (err) {
-        console.error('❌ Erreur migration log:', err.message);
-    }
-    // 4. Migration : détails_parcours (heures brutes PG)
-try {
-    const hasDetails = await columnExists('copies', 'details_parcours');
-    if (!hasDetails) {
-        await db.query(`
-            ALTER TABLE copies 
-            ADD COLUMN details_parcours JSON NULL DEFAULT NULL,
-            ADD COLUMN parcours_version VARCHAR(20) NULL DEFAULT NULL
-        `);
-        console.log('✅ Migration OK : copies.details_parcours créé');
-    } else {
-        console.log('⏭️  Migration skipped : copies.details_parcours existe déjà');
-    }
-} catch (err) {
-    console.error('❌ Erreur migration copies.details_parcours:', err.message);
-}
+            } catch (err) {
+                console.error('❌ Erreur migration log:', err.message);
+            }
+            // 4. Migration : détails_parcours (heures brutes PG)
+        try {
+            const hasDetails = await columnExists('copies', 'details_parcours');
+            if (!hasDetails) {
+                await db.query(`
+                    ALTER TABLE copies 
+                    ADD COLUMN details_parcours JSON NULL DEFAULT NULL,
+                    ADD COLUMN parcours_version VARCHAR(20) NULL DEFAULT NULL
+                `);
+                console.log('✅ Migration OK : copies.details_parcours créé');
+            } else {
+                console.log('⏭️  Migration skipped : copies.details_parcours existe déjà');
+            }
+        } catch (err) {
+            console.error('❌ Erreur migration copies.details_parcours:', err.message);
+        }
+        // 5. Migration : matricule (MLE)
+            try {
+                const hasMatricule = await columnExists('eleves', 'matricule');
+                if (!hasMatricule) {
+                    await db.query(`
+                        ALTER TABLE eleves 
+                        ADD COLUMN matricule VARCHAR(50) NULL DEFAULT NULL
+                    `);
+                    console.log('✅ Migration OK : eleves.matricule créé');
+                } else {
+                    console.log('⏭️  Migration skipped : eleves.matricule existe déjà');
+                }
+            } catch (err) {
+                console.error('❌ Erreur migration eleves.matricule:', err.message);
+            }
+
 };
 runMigrations();
 
@@ -604,6 +620,135 @@ app.post('/api/eleves/importer-previsualisation', authenticateToken, checkRole([
     } catch (err) {
         console.error("Erreur prévisualisation élèves:", err);
         res.status(500).json({ message: "Erreur interne lors du traitement du fichier Excel." });
+    }
+});
+// ── PRÉVISUALISATION import Matricules (MLE) ────────────────────────────────
+// Fichier attendu : Colonne A = N° Incorporation, Colonne B = Matricule (MLE)
+app.post('/api/eleves/importer-matricules-previsualisation', authenticateToken, checkRole(['admin']), upload.single('fichierMatricules'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
+    const { promotion } = req.body;
+    if (!promotion || promotion.trim() === '') {
+        return res.status(400).json({ message: "Veuillez sélectionner une promotion." });
+    }
+
+    try {
+        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+
+        // Charge les élèves de cette promotion pour vérifier l'existence de chaque incorporation
+        const [elevesPromo] = await db.query(
+            "SELECT id, nom, prenom, numero_incorporation, matricule FROM eleves WHERE promotion = ?",
+            [promotion.trim()]
+        );
+        const elevesMap = new Map(elevesPromo.map(e => [String(e.numero_incorporation).trim(), e]));
+
+        const donneesValides = [];
+        const erreurs = [];
+        const numerosVus = new Set();
+
+        for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            if (!row || row.length === 0) continue;
+
+            const numero_incorporation = row[0] ? String(row[0]).trim() : null;
+            const matricule = row[1] ? String(row[1]).trim() : '';
+
+            if (!numero_incorporation) {
+                erreurs.push({ ligne: i + 1, message: "Numéro d'incorporation manquant." });
+                continue;
+            }
+            if (!matricule) {
+                erreurs.push({ ligne: i + 1, message: `Matricule (MLE) manquant pour le N° ${numero_incorporation}.` });
+                continue;
+            }
+            if (numerosVus.has(numero_incorporation)) {
+                erreurs.push({ ligne: i + 1, message: `N° d'incorporation en double dans ce fichier : ${numero_incorporation}` });
+                continue;
+            }
+            numerosVus.add(numero_incorporation);
+
+            const eleveTrouve = elevesMap.get(numero_incorporation);
+            if (!eleveTrouve) {
+                erreurs.push({
+                    ligne: i + 1,
+                    message: `Aucun élève trouvé avec le N° ${numero_incorporation} pour la promotion ${promotion.trim()}.`
+                });
+                continue;
+            }
+
+            donneesValides.push({
+                numero_incorporation,
+                matricule,
+                nom: eleveTrouve.nom,
+                prenom: eleveTrouve.prenom,
+                ancienMatricule: eleveTrouve.matricule || '—'
+            });
+        }
+
+        res.json({ total: donneesValides.length, donneesValides, erreurs });
+    } catch (err) {
+        console.error("Erreur prévisualisation matricules:", err);
+        res.status(500).json({ message: "Erreur interne lors du traitement du fichier Excel." });
+    }
+});
+
+// ── CONFIRMATION import Matricules (MLE) ────────────────────────────────────
+app.post('/api/eleves/importer-matricules', authenticateToken, checkRole(['admin']), upload.single('fichierMatricules'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
+    const { promotion } = req.body;
+    if (!promotion || promotion.trim() === '') {
+        return res.status(400).json({ message: "Veuillez sélectionner une promotion." });
+    }
+
+    const connection = await db.getConnection();
+    try {
+        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+
+        const [elevesPromo] = await connection.query(
+            "SELECT id, numero_incorporation FROM eleves WHERE promotion = ?",
+            [promotion.trim()]
+        );
+        const elevesMap = new Map(elevesPromo.map(e => [String(e.numero_incorporation).trim(), e.id]));
+
+        const numerosVus = new Set();
+        const updates = []; // [eleveId, matricule]
+
+        for (const row of data.slice(1)) {
+            if (!row || row.length === 0) continue;
+            const numero_incorporation = row[0] ? String(row[0]).trim() : null;
+            const matricule = row[1] ? String(row[1]).trim() : '';
+            if (!numero_incorporation || !matricule) continue;
+            if (numerosVus.has(numero_incorporation)) continue;
+            numerosVus.add(numero_incorporation);
+
+            const eleveId = elevesMap.get(numero_incorporation);
+            if (eleveId) updates.push([eleveId, matricule]);
+        }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ message: "Aucun matricule valide à mettre à jour pour cette promotion." });
+        }
+
+        await connection.beginTransaction();
+        for (const [eleveId, matricule] of updates) {
+            await connection.query("UPDATE eleves SET matricule = ? WHERE id = ?", [matricule, eleveId]);
+        }
+        await connection.commit();
+
+        await logActivity(
+            req.user.id, req.user.nom_utilisateur, 'IMPORT_MATRICULES',
+            `A mis à jour le matricule (MLE) de ${updates.length} élève(s) pour la promotion '${promotion.trim()}'.`
+        );
+        res.json({ message: `Importation réussie. Le matricule de ${updates.length} élève(s) a été mis à jour pour la promotion ${promotion.trim()}.` });
+    } catch (err) {
+        await connection.rollback();
+        console.error("Erreur import matricules:", err);
+        res.status(500).json({ message: "Erreur interne lors du traitement de l'importation." });
+    } finally {
+        connection.release();
     }
 });
 
@@ -2205,13 +2350,13 @@ app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admi
     try {
         const { typeExamen, promotion, population } = req.query;
         
-        let queryBase = `
-            SELECT s.eleve_id, s.rang, s.moyenne, s.motif_non_classe,
-                   e.prenom, e.nom, e.numero_incorporation, e.escadron, e.peloton, e.statut
-            FROM statistiques_classement s
-            JOIN eleves e ON s.eleve_id = e.id
-            WHERE s.type_examen = ?
-        `;
+       let queryBase = `
+    SELECT s.eleve_id, s.rang, s.moyenne, s.motif_non_classe,
+           e.prenom, e.nom, e.numero_incorporation, e.escadron, e.peloton, e.statut, e.matricule
+    FROM statistiques_classement s
+    JOIN eleves e ON s.eleve_id = e.id
+    WHERE s.type_examen = ?
+`;
         
         const params = [typeExamen || 'General'];
         if (promotion && promotion !== 'all') { 

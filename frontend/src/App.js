@@ -11,6 +11,7 @@ import Resultats from './components/Resultats';
 import CreerMatiere from './components/CreerMatiere';
 import GestionUtilisateurs from './components/GestionUtilisateurs';
 import ImporterEleves from './components/ImporterEleves';
+import ImporterMatricules from './components/ImporterMatricules';
 import ImporterCodes from './components/ImporterCodes';
 import ImporterNotes from './components/ImporterNotes';
 import CopiesNotees from './components/CopiesNotees';
@@ -29,7 +30,7 @@ import Sidebar from './components/Sidebar';
 import AnimatedNodeBackground from './components/AnimatedNodeBackground';
 import GlobalActivityTracker from './components/GlobalActivityTracker';
 
-import { FiGrid, FiUsers, FiEdit, FiLink, FiFileText, FiPlusSquare, FiUserPlus, FiKey, FiCheckSquare, FiBarChart2, FiSlash, FiPrinter, FiUploadCloud } from 'react-icons/fi';
+import { FiGrid, FiUsers, FiEdit, FiLink, FiFileText, FiPlusSquare, FiUserPlus, FiKey, FiCheckSquare, FiBarChart2, FiSlash, FiPrinter, FiUploadCloud, FiHash } from 'react-icons/fi';
 import { FaGavel } from 'react-icons/fa';
 
 import './App.css';
@@ -91,6 +92,7 @@ const getNavItemsForUser = (user) => {
                     { label: "Assignations", to: "/config-assignation", icon: <FiCheckSquare /> },
                     { label: "Créer Matière", to: "/creer-matiere", icon: <FiPlusSquare /> },
                     { label: "Importer Élèves", to: "/importer-eleves", icon: <FiUserPlus /> },
+                    { label: "Importer Matricules (MLE)", to: "/importer-matricules", icon: <FiHash /> },
                     { label: "Importer Codes", to: "/importer-codes", icon: <FiKey /> },
                     { label: "Générer Codes", to: "/generer-codes-matiere", icon: <FiPrinter /> },
                 ]
@@ -166,6 +168,7 @@ const AppContent = () => {
                             <Route path="/gestion-utilisateurs" element={user.role === 'admin' ? <GestionUtilisateurs /> : <Navigate to="/" />} />
                             <Route path="/config-assignation" element={user.role === 'admin' ? <ConfigurationAssignation /> : <Navigate to="/" />} />
                             <Route path="/importer-eleves" element={user.role === 'admin' ? <ImporterEleves /> : <Navigate to="/" />} />
+                            <Route path="/importer-matricules" element={user.role === 'admin' ? <ImporterMatricules /> : <Navigate to="/" />} />
                             <Route path="/importer-notes" element={(user.role === 'admin' || user.role === 'operateur_note') ? <ImporterNotes /> : <Navigate to="/" />} />
                             <Route path="/importer-codes" element={user.role === 'admin' ? <ImporterCodes /> : <Navigate to="/" />} />
                             <Route path="/generer-codes-matiere" element={user.role === 'admin' ? <CreerCodesMatiere /> : <Navigate to="/" />} />
