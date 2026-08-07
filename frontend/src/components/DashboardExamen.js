@@ -519,7 +519,7 @@ const DashboardExamen = () => {
         nomComplet: `EG ${s.prenom} ${s.nom}`,
         numero: s.numero_incorporation,
         motifIndisponibilite: s.consultationDays > 0 && s.absenceDays > 0
-            ? `Consultation Externe (${s.consultationDays}j) / Absence Total(${s.absenceDays}j)`
+            ? `Consultation Externe (${s.consultationDays}j) / Absence(${s.absenceDays}j)`
             : (s.consultationDays > 0
                 ? `Consultation Médicale (${s.consultationDays}j)`
                 : `Absence (${s.absenceDays}j)`),
