@@ -447,3 +447,20 @@ select.input {
         display: none !important;
     }
 }
+.maintenance-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: #fff3cd;
+    border: 1px solid #ffe69c;
+    color: #664d03;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+    text-align: left;
+}
+
+.maintenance-banner__icon {
+    font-size: 1.1rem;
+}
