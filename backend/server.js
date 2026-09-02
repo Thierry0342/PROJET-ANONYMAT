@@ -13,6 +13,21 @@ const QRCode = require('qrcode');
 const app = express();
 const port = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET;
+const fs = require('fs');
+const path = require('path');
+
+
+const conseilUploadsDir = path.join(__dirname, 'uploads', 'conseil');
+if (!fs.existsSync(conseilUploadsDir)) fs.mkdirSync(conseilUploadsDir, { recursive: true });
+
+const conseilStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, conseilUploadsDir),
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
+    }
+});
+const uploadConseil = multer({ storage: conseilStorage, limits: { fileSize: 25 * 1024 * 1024 } }); // 25 Mo max
 
 if (!JWT_SECRET) {
     console.error("ERREUR FATALE : La variable d'environnement JWT_SECRET n'est pas définie.");
@@ -157,6 +172,85 @@ const runMigrations = async () => {
             } catch (err) {
                 console.error('❌ Erreur migration eleves.matricule:', err.message);
             }
+            // 6. Migration : table conseil_pieces_jointes
+try {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS conseil_pieces_jointes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            promotion VARCHAR(50) NOT NULL,
+            type_examen VARCHAR(100) NOT NULL,
+            eleve_id INT NULL,
+            nom_fichier VARCHAR(255) NOT NULL,
+            mime_type VARCHAR(100) NOT NULL,
+            taille INT NOT NULL,
+            contenu LONGBLOB NOT NULL,
+            categorie VARCHAR(50) DEFAULT 'autre',
+            uploaded_by_id INT NULL,
+            uploaded_by_nom VARCHAR(100) NULL,
+            date_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_promo_examen (promotion, type_examen),
+            INDEX idx_eleve (eleve_id)
+        )
+    `);
+    console.log('✅ Migration OK : table conseil_pieces_jointes prête');
+} catch (err) {
+    console.error('❌ Erreur migration conseil_pieces_jointes:', err.message);
+}
+
+// 7. Migration : table conseil_conclusions
+try {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS conseil_conclusions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            promotion VARCHAR(50) NOT NULL,
+            type_examen VARCHAR(100) NOT NULL,
+            date_conseil DATE NULL,
+            lieu VARCHAR(255) NULL,
+            president VARCHAR(255) NULL,
+            texte_conclusion TEXT NULL,
+            updated_by_id INT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_promo_examen (promotion, type_examen)
+        )
+    `);
+    console.log('✅ Migration OK : table conseil_conclusions prête');
+} catch (err) {
+    console.error('❌ Erreur migration conseil_conclusions:', err.message);
+}
+// 8. Migration : conseil_pieces_jointes -> stockage disque
+try {
+    const hasChemin = await columnExists('conseil_pieces_jointes', 'chemin_fichier');
+    if (!hasChemin) {
+        await db.query(`
+            ALTER TABLE conseil_pieces_jointes 
+            ADD COLUMN chemin_fichier VARCHAR(500) NULL AFTER taille
+        `);
+        await db.query(`
+            ALTER TABLE conseil_pieces_jointes 
+            MODIFY COLUMN contenu LONGBLOB NULL
+        `);
+        console.log('✅ Migration OK : conseil_pieces_jointes.chemin_fichier créé (stockage disque)');
+    } else {
+        console.log('⏭️  Migration skipped : conseil_pieces_jointes.chemin_fichier existe déjà');
+    }
+} catch (err) {
+    console.error('❌ Erreur migration chemin_fichier:', err.message);
+}
+// 9. Migration : decisions_conseil.type_examen (décisions liées à un examen précis)
+try {
+    const hasTypeExamenDecision = await columnExists('decisions_conseil', 'type_examen');
+    if (!hasTypeExamenDecision) {
+        await db.query(`
+            ALTER TABLE decisions_conseil 
+            ADD COLUMN type_examen VARCHAR(100) NOT NULL DEFAULT 'General' AFTER eleve_id
+        `);
+        console.log('✅ Migration OK : decisions_conseil.type_examen créé');
+    } else {
+        console.log('⏭️  Migration skipped : decisions_conseil.type_examen existe déjà');
+    }
+} catch (err) {
+    console.error('❌ Erreur migration decisions_conseil.type_examen:', err.message);
+}
 
 };
 runMigrations();
@@ -4173,9 +4267,9 @@ app.get('/api/stats/notes-utilisateur-specifique', authenticateToken, checkRole(
         res.status(500).json({ error: "Erreur lors du calcul des statistiques utilisateur spécifiques." });
     }
 });
-
 app.post('/api/decisions-conseil', authenticateToken, checkRole(['admin']), async (req, res) => {
-    const { eleve_id, type_decision, motif } = req.body;
+    const { eleve_id, type_decision, motif, type_examen } = req.body;
+    const typeExamenFinal = type_examen || 'General';
 
     if (!eleve_id || !type_decision) {
         return res.status(400).json({ message: "L'élève et le type de décision sont requis." });
@@ -4185,28 +4279,27 @@ app.post('/api/decisions-conseil', authenticateToken, checkRole(['admin']), asyn
     try {
         await connection.beginTransaction();
 
-        // 1. Enregistrer la décision dans l'historique du conseil
         await connection.query(
-            "INSERT INTO decisions_conseil (eleve_id, type_decision, motif) VALUES (?, ?, ?)",
-            [eleve_id, type_decision, motif && motif !== "" ? motif : null]
+            "INSERT INTO decisions_conseil (eleve_id, type_examen, type_decision, motif) VALUES (?, ?, ?, ?)",
+            [eleve_id, typeExamenFinal, type_decision, motif && motif !== "" ? motif : null]
         );
 
-        // 2. Déterminer le nouveau statut de l'élève
-        let nouveauStatut = 'actif';
-        if (type_decision === 'redoublement') nouveauStatut = 'redoublant';
-        else if (type_decision === 'ajournement_3m') nouveauStatut = 'ajourne_3m';
-        else if (type_decision === 'ajournement_6m') nouveauStatut = 'ajourne_6m';
-        else if (type_decision === 'radiation') nouveauStatut = 'radie';
+        // ✅ Seule une décision "General" (conseil de fin de formation) change le statut
+        // final de l'élève. Les décisions liées à un examen intermédiaire (FETTA, TEST...)
+        // sont des mesures ponctuelles (mise à disposition famille, proposition radiation)
+        // et ne touchent pas le statut global de l'élève.
+        if (typeExamenFinal === 'General') {
+            let nouveauStatut = 'actif';
+            if (type_decision === 'redoublement') nouveauStatut = 'redoublant';
+            else if (type_decision === 'ajournement_3m') nouveauStatut = 'ajourne_3m';
+            else if (type_decision === 'ajournement_6m') nouveauStatut = 'ajourne_6m';
+            else if (type_decision === 'radiation') nouveauStatut = 'radie';
 
-        // 3. Mettre à jour la fiche de l'élève
-        // Note : On pourrait aussi vider 'promotion_actuelle' pour les radiés
-        await connection.query(
-            "UPDATE eleves SET statut = ? WHERE id = ?",
-            [nouveauStatut, eleve_id]
-        );
+            await connection.query("UPDATE eleves SET statut = ? WHERE id = ?", [nouveauStatut, eleve_id]);
+        }
 
         await connection.commit();
-        res.status(201).json({ message: "Décision enregistrée et statut élève mis à jour." });
+        res.status(201).json({ message: "Décision enregistrée avec succès." });
     } catch (err) {
         await connection.rollback();
         console.error(err);
@@ -4216,15 +4309,183 @@ app.post('/api/decisions-conseil', authenticateToken, checkRole(['admin']), asyn
     }
 });
 
+app.post('/api/conseil/pieces-jointes', authenticateToken, checkRole(['admin']), uploadConseil.single('fichier'), async (req, res) => {
+    try {
+        const { promotion, type_examen, eleve_id, categorie } = req.body;
+        if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni." });
+        if (!promotion || !type_examen) {
+            fs.unlink(req.file.path, () => {});
+            return res.status(400).json({ message: "Promotion et type d'examen requis." });
+        }
+
+        const query = `
+            INSERT INTO conseil_pieces_jointes
+            (promotion, type_examen, eleve_id, nom_fichier, mime_type, taille, chemin_fichier, categorie, uploaded_by_id, uploaded_by_nom)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        await db.query(query, [
+            promotion, type_examen, eleve_id || null,
+            req.file.originalname, req.file.mimetype, req.file.size, req.file.filename,
+            categorie || 'autre', req.user.id, req.user.nom_utilisateur
+        ]);
+
+        await logActivity(
+            req.user.id, req.user.nom_utilisateur, 'AJOUT_PIECE_JOINTE_CONSEIL',
+            `A ajouté une pièce jointe (${categorie || 'autre'}) pour ${type_examen} - ${promotion}${eleve_id ? ' (élève ID ' + eleve_id + ')' : ''}.`
+        );
+
+        res.status(201).json({ message: "Pièce jointe enregistrée avec succès." });
+    } catch (err) {
+        if (req.file) fs.unlink(req.file.path, () => {});
+        console.error("Erreur upload pièce jointe:", err);
+        res.status(500).json({ message: "Erreur lors de l'enregistrement de la pièce jointe." });
+    }
+});
+
+// Liste des pièces jointes générales (niveau type d'examen, eleve_id NULL par défaut si non précisé)
+app.get('/api/conseil/pieces-jointes', authenticateToken, async (req, res) => {
+    try {
+        const { promotion, type_examen, scope } = req.query;
+        let query = `
+            SELECT id, promotion, type_examen, eleve_id, nom_fichier, mime_type, taille, categorie,
+                   uploaded_by_nom, date_upload
+            FROM conseil_pieces_jointes WHERE 1=1
+        `;
+        const params = [];
+        if (promotion) { query += " AND promotion = ?"; params.push(promotion); }
+        if (type_examen) { query += " AND type_examen = ?"; params.push(type_examen); }
+        // scope=general -> uniquement les pièces jointes non liées à un élève précis
+        if (scope === 'general') { query += " AND eleve_id IS NULL"; }
+        query += " ORDER BY date_upload DESC";
+
+        const [rows] = await db.query(query, params);
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ message: "Erreur lors de la récupération des pièces jointes." });
+    }
+});
+
+// Pièces jointes d'un élève précis (toutes promotions/examens confondus)
+app.get('/api/conseil/pieces-jointes/eleve/:eleveId', authenticateToken, async (req, res) => {
+    try {
+        const { eleveId } = req.params;
+        const [rows] = await db.query(`
+            SELECT id, promotion, type_examen, eleve_id, nom_fichier, mime_type, taille, categorie,
+                   uploaded_by_nom, date_upload
+            FROM conseil_pieces_jointes WHERE eleve_id = ? ORDER BY date_upload DESC
+        `, [eleveId]);
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ message: "Erreur lors de la récupération des pièces jointes de l'élève." });
+    }
+});
+
+app.get('/api/conseil/pieces-jointes/:id/telecharger', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [[piece]] = await db.query(
+            "SELECT nom_fichier, mime_type, chemin_fichier, contenu FROM conseil_pieces_jointes WHERE id = ?", [id]
+        );
+        if (!piece) return res.status(404).json({ message: "Pièce jointe non trouvée." });
+
+        // Nouveau système (fichier sur disque)
+        if (piece.chemin_fichier) {
+            const filePath = path.join(conseilUploadsDir, piece.chemin_fichier);
+            if (!fs.existsSync(filePath)) {
+                return res.status(404).json({ message: "Fichier introuvable sur le serveur." });
+            }
+            const buffer = fs.readFileSync(filePath);
+            res.writeHead(200, {
+                'Content-Type': piece.mime_type || 'application/octet-stream',
+                'Content-Length': buffer.length,
+                'Content-Disposition': `inline; filename="${encodeURIComponent(piece.nom_fichier)}"`,
+                'Cache-Control': 'no-store'
+            });
+            return res.end(buffer);
+        }
+
+        // Compatibilité anciennes pièces (BLOB en base, si existantes)
+        if (piece.contenu) {
+            res.writeHead(200, {
+                'Content-Type': piece.mime_type || 'application/octet-stream',
+                'Content-Length': piece.contenu.length,
+                'Content-Disposition': `inline; filename="${encodeURIComponent(piece.nom_fichier)}"`,
+                'Cache-Control': 'no-store'
+            });
+            return res.end(piece.contenu);
+        }
+
+        return res.status(404).json({ message: "Contenu introuvable pour cette pièce jointe." });
+    } catch (err) {
+        console.error("Erreur téléchargement pièce jointe:", err);
+        res.status(500).json({ message: "Erreur lors du téléchargement." });
+    }
+});
+
+app.delete('/api/conseil/pieces-jointes/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const [[piece]] = await db.query("SELECT chemin_fichier FROM conseil_pieces_jointes WHERE id = ?", [req.params.id]);
+        await db.query("DELETE FROM conseil_pieces_jointes WHERE id = ?", [req.params.id]);
+        if (piece && piece.chemin_fichier) {
+            fs.unlink(path.join(conseilUploadsDir, piece.chemin_fichier), () => {});
+        }
+        res.json({ message: "Pièce jointe supprimée." });
+    } catch (err) {
+        res.status(500).json({ message: "Erreur lors de la suppression." });
+    }
+});
+
+// ═══════════════════ CONCLUSIONS DU CONSEIL PAR TYPE D'EXAMEN ═══════════════════
+
+app.get('/api/conseil/conclusions', authenticateToken, async (req, res) => {
+    try {
+        const { promotion } = req.query;
+        let query = "SELECT * FROM conseil_conclusions WHERE 1=1";
+        const params = [];
+        if (promotion) { query += " AND promotion = ?"; params.push(promotion); }
+        const [rows] = await db.query(query, params);
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ message: "Erreur lors de la récupération des conclusions." });
+    }
+});
+
+app.put('/api/conseil/conclusions', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const { promotion, type_examen, date_conseil, lieu, president, texte_conclusion } = req.body;
+        if (!promotion || !type_examen) {
+            return res.status(400).json({ message: "Promotion et type d'examen requis." });
+        }
+        const query = `
+            INSERT INTO conseil_conclusions (promotion, type_examen, date_conseil, lieu, president, texte_conclusion, updated_by_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                date_conseil = VALUES(date_conseil),
+                lieu = VALUES(lieu),
+                president = VALUES(president),
+                texte_conclusion = VALUES(texte_conclusion),
+                updated_by_id = VALUES(updated_by_id),
+                updated_at = CURRENT_TIMESTAMP
+        `;
+        await db.query(query, [
+            promotion, type_examen, date_conseil || null, lieu || null,
+            president || null, texte_conclusion || null, req.user.id
+        ]);
+        res.json({ message: "Conclusion enregistrée avec succès." });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Erreur lors de l'enregistrement de la conclusion." });
+    }
+});
+
 // 2. Route pour MODIFIER une décision
 app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
     const { id } = req.params;
     const { type_decision, motif } = req.body;
-    
     try {
         await db.query(
             "UPDATE decisions_conseil SET type_decision = ?, motif = ? WHERE id = ?",
-            [type_decision, motif && motif !== "" ? motif : null, id] // Gère le "Non renseigné"
+            [type_decision, motif && motif !== "" ? motif : null, id]
         );
         res.json({ message: "Décision mise à jour avec succès" });
     } catch (err) {
@@ -4234,23 +4495,21 @@ app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), a
 
 app.get('/api/decisions-conseil', authenticateToken, async (req, res) => {
     try {
-        const [rows] = await db.query(`
+        const { type_examen, promotion } = req.query;
+        let query = `
             SELECT 
-                d.id, 
-                d.eleve_id, 
-                d.type_decision, 
-                d.motif, 
-                d.date_decision,
-                e.nom, 
-                e.prenom, 
-                e.numero_incorporation, 
-                e.promotion, 
-                e.escadron, 
-                e.peloton
+                d.id, d.eleve_id, d.type_examen, d.type_decision, d.motif, d.date_decision,
+                e.nom, e.prenom, e.numero_incorporation, e.promotion, e.escadron, e.peloton
             FROM decisions_conseil d
             JOIN eleves e ON d.eleve_id = e.id
-            ORDER BY d.date_decision DESC
-        `);
+            WHERE 1=1
+        `;
+        const params = [];
+        if (type_examen) { query += " AND d.type_examen = ?"; params.push(type_examen); }
+        if (promotion && promotion !== 'all') { query += " AND e.promotion = ?"; params.push(promotion); }
+        query += " ORDER BY d.date_decision DESC";
+
+        const [rows] = await db.query(query, params);
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -4271,6 +4530,7 @@ app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), a
         res.status(500).json({ error: err.message });
     }
 });
+
 
 app.delete('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {

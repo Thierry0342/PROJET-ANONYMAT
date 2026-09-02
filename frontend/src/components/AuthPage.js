@@ -2,9 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import './AuthPage.css';
 
-// Passer à false quand la mise à jour sera terminée pour réactiver la connexion
-const MAINTENANCE_MODE = true;
-
 const Notification = ({ title, message, index, total }) => {
     const visibleLimit = 3;
     const position = total - 1 - index;
@@ -105,7 +102,6 @@ const AuthPage = ({ onLoginSuccess }) => {
 
     const handleLoginSubmit = async (e) => {
         e.preventDefault();
-        if (MAINTENANCE_MODE) return;
         setIsLoginLoading(true);
         setLoginError('');
         try {
@@ -178,42 +174,12 @@ const AuthPage = ({ onLoginSuccess }) => {
                     <form className="form" onSubmit={handleLoginSubmit}>
                         <h2 className="form__title">Connexion</h2>
                         <p className="form__subtitle">Accédez à votre espace sécurisé</p>
-
-                        {MAINTENANCE_MODE && (
-                            <div className="maintenance-banner">
-                                <span className="maintenance-banner__icon">🔧</span>
-                                <p>Des mises à jour sont en cours de déploiement. La connexion est temporairement indisponible.</p>
-                            </div>
-                        )}
-
-                        <input
-                            type="text"
-                            placeholder="Nom d'utilisateur"
-                            name="nom_utilisateur"
-                            value={loginData.nom_utilisateur}
-                            onChange={handleLoginChange}
-                            className="input"
-                            autoComplete="username"
-                            disabled={MAINTENANCE_MODE}
-                            required
-                        />
-                        <input
-                            type="password"
-                            placeholder="Mot de passe"
-                            name="password"
-                            value={loginData.password}
-                            onChange={handleLoginChange}
-                            className="input"
-                            autoComplete="current-password"
-                            disabled={MAINTENANCE_MODE}
-                            required
-                        />
+                        <input type="text" placeholder="Nom d'utilisateur" name="nom_utilisateur" value={loginData.nom_utilisateur} onChange={handleLoginChange} className="input" autoComplete="username" required />
+                        <input type="password" placeholder="Mot de passe" name="password" value={loginData.password} onChange={handleLoginChange} className="input" autoComplete="current-password" required />
                         <a href="#" className="link">Mot de passe oublié ?</a>
 
-                        <button className="btn" type="submit" disabled={MAINTENANCE_MODE || isLoginLoading}>
-                            {MAINTENANCE_MODE
-                                ? 'Mise à jour en cours...'
-                                : (isLoginLoading ? 'Connexion en cours...' : 'Se connecter')}
+                        <button className="btn" type="submit" disabled={isLoginLoading}>
+                            {isLoginLoading ? 'Connexion en cours...' : 'Se connecter'}
                         </button>
 
                         {loginError && <p className="message error">{loginError}</p>}
