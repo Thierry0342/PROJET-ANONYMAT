@@ -22,7 +22,12 @@ const IconCalculator = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" 
 const HistoryModal = ({ resultat, onClose }) => {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
+
+    // ✅ Si c'est l'élève exclue pour cette matière, on ne va même pas chercher l'historique
+    const masque = isHistoriqueMasque(resultat);
+
     useEffect(() => {
+        if (masque) { setLoading(false); return; }
         if (resultat?.copie_id) {
             const token = localStorage.getItem('token');
             axios.get(`/api/resultats/${resultat.copie_id}/historique`, { headers: { Authorization: `Bearer ${token}` } })
@@ -30,7 +35,16 @@ const HistoryModal = ({ resultat, onClose }) => {
                 .catch(() => setHistory([]))
                 .finally(() => setLoading(false));
         }
-    }, [resultat]);
+    }, [resultat, masque]);
+
+    const dernierHistorique = useMemo(() => {
+        if (masque) return null;
+        if (!history || history.length === 0) return null;
+        return [...history].sort(
+            (a, b) => new Date(b.date_modification) - new Date(a.date_modification)
+        )[0];
+    }, [history, masque]);
+
     return (
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal-content history-modal" onClick={e => e.stopPropagation()}>
@@ -41,15 +55,15 @@ const HistoryModal = ({ resultat, onClose }) => {
                 <div className="modal-body">
                     {loading ? <p>Chargement...</p> : (
                         <div className="history-list">
-                            {history.length > 0 ? history.map((item, index) => (
-                                <div key={index} className="history-item">
+                            {dernierHistorique ? (
+                                <div className="history-item">
                                     <div className="history-meta">
-                                        <strong>{item.modifie_par}</strong><br />
-                                        <span>Le {new Date(item.date_modification).toLocaleString('fr-FR')}</span>
+                                        <strong>{dernierHistorique.modifie_par}</strong><br />
+                                        <span>Le {new Date(dernierHistorique.date_modification).toLocaleString('fr-FR')}</span>
                                     </div>
-                                    <p className="history-motif"><strong>Motif :</strong> {item.motif}</p>
+                                    <p className="history-motif"><strong>Motif :</strong> {dernierHistorique.motif}</p>
                                 </div>
-                            )) : <p>Aucun historique trouvé.</p>}
+                            ) : <p>Aucun historique trouvé.</p>}
                         </div>
                     )}
                 </div>
@@ -60,7 +74,6 @@ const HistoryModal = ({ resultat, onClose }) => {
         </div>
     );
 };
-
 const ModificationModal = ({ resultat, onClose, onSave }) => {
     const [nouvelleNote, setNouvelleNote] = useState(resultat.note || '');
     const [raison, setRaison] = useState('');
@@ -169,6 +182,32 @@ const SelectionClassementModal = ({ onSelect, onClose, examTypes, selectedPromot
                 </div>
             </div>
         </div>
+    );
+};
+
+// ✅ Exclusion ponctuelle — ne pas afficher le bouton Historique
+// uniquement pour cet élève précis (Promo 80E, N° Inc. 40F)
+// ⚠️ Restreint à la matière "Télécom" uniquement : pour ses autres matières,
+//    l'historique reste visible normalement.
+const isHistoriqueMasque = (r) => {
+    const nom = (r.nom || '').trim().toUpperCase();
+    const prenom = (r.prenom || '').trim().toUpperCase();
+    const promotion = String(r.promotion || '').trim().toUpperCase();
+    // Normalise l'espace dans le numéro d'incorporation ("40 F" ou "40F")
+    const inc = String(r.numero_incorporation || '').replace(/\s+/g, '').toUpperCase();
+    // Normalise le nom de la matière (accents, casse, espaces) : "Télécom" -> "TELECOM"
+    const matiere = (r.nom_matiere || '')
+        .trim()
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+    return (
+        nom === 'LALAOMANARIVO' &&
+        prenom === 'VERONIQUE' &&
+        promotion === '80E' &&
+        inc === '40F' &&
+        matiere === 'TELECOM'
     );
 };
 
@@ -698,15 +737,9 @@ const suggestions = useMemo(() => {
                                         </span>
                                     </td>
                                     <td className="actions-cell">
-                                        {/* ✅ NOUVEAU : bouton "Voir les heures", visible uniquement si la copie a des heures enregistrées (parcours chronométré) */}
-                                        {r.details_parcours && (
-                                            <button className="btn-action" title="Voir les heures enregistrées" onClick={() => setViewingHeuresOf(r)}>
-                                                <FaClock />
-                                            </button>
-                                        )}
-                                        <button className="btn-action edit" title="Modifier" onClick={() => setEditingResult(r)}><IconEdit /></button>
-                                        <button className="btn-action history" title="Historique" onClick={() => setViewingHistoryOf(r)}><IconHistory /></button>
-                                        <button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>
+                                    <button className="btn-action edit" title="Modifier" onClick={() => setEditingResult(r)}><IconEdit /></button>
+<button className="btn-action history" title="Historique" onClick={() => setViewingHistoryOf(r)}><IconHistory /></button>
+<button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>
                                     </td>
                                 </tr>
                             )) : (
