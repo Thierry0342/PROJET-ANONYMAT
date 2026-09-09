@@ -11,24 +11,40 @@ const PieceViewerModal = ({ piece, headers, onClose }) => {
         let objectUrl = null;
         let cancelled = false;
 
-        const load = async () => {
-            setLoading(true);
-            setError('');
-            try {
-                const res = await axios.get(`/api/conseil/pieces-jointes/${piece.id}/telecharger`, {
-                    headers, responseType: 'blob'
-                });
-                if (!res.data || res.data.size === 0) throw new Error("Fichier vide.");
-                const type = res.headers['content-type'] || piece.mime_type || 'application/octet-stream';
-                const blob = new Blob([res.data], { type });
-                objectUrl = window.URL.createObjectURL(blob);
-                if (!cancelled) setBlobUrl(objectUrl);
-            } catch (e) {
-                if (!cancelled) setError("Impossible de charger ce fichier. Il a peut-être été supprimé ou déplacé.");
-            } finally {
-                if (!cancelled) setLoading(false);
-            }
-        };
+    const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+        const res = await axios.get(`/api/conseil/pieces-jointes/${piece.id}/telecharger`, {
+            headers, responseType: 'blob'
+        });
+        if (!res.data || res.data.size === 0) throw new Error("Fichier vide.");
+
+        const type = res.headers['content-type'] || piece.mime_type || 'application/octet-stream';
+
+        // ✅ Si le serveur renvoie du JSON (page d'erreur) avec un statut 200,
+        // le blob contient en fait un message d'erreur texte, pas le fichier.
+        if (type.includes('application/json')) {
+            const text = await res.data.text();
+            throw new Error(JSON.parse(text)?.message || "Réponse invalide du serveur.");
+        }
+
+        const blob = new Blob([res.data], { type });
+        objectUrl = window.URL.createObjectURL(blob);
+        if (!cancelled) setBlobUrl(objectUrl);
+    } catch (e) {
+        //  Log complet en console pour diagnostiquer précisément
+        console.error('Erreur chargement pièce jointe:', e.response?.status, e.response?.data, e.message);
+        if (!cancelled) {
+            const status = e.response?.status;
+            if (status === 401) setError("Session expirée, veuillez vous reconnecter.");
+            else if (status === 404) setError("Fichier introuvable (peut-être supprimé).");
+            else setError(e.message || "Impossible de charger ce fichier.");
+        }
+    } finally {
+        if (!cancelled) setLoading(false);
+    }
+};
         load();
 
         return () => {
