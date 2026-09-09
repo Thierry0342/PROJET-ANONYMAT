@@ -248,10 +248,36 @@ try {
     } else {
         console.log('⏭️  Migration skipped : decisions_conseil.type_examen existe déjà');
     }
-} catch (err) {
-    console.error('❌ Erreur migration decisions_conseil.type_examen:', err.message);
-}
+        } catch (err) {
+        console.error('❌ Erreur migration decisions_conseil.type_examen:', err.message);
+    }
 
+    // 10. Migration : table copies_temporaires (workflow de validation en 2 temps)
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS copies_temporaires (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                source VARCHAR(20) NOT NULL,
+                eleve_id INT NULL,
+                code_anonyme VARCHAR(50) NULL,
+                matiere_id INT NOT NULL,
+                type_examen VARCHAR(100) NOT NULL,
+                note DECIMAL(5,2) NULL,
+                est_absence TINYINT(1) NOT NULL DEFAULT 0,
+                motif_absence VARCHAR(255) NULL,
+                details_parcours JSON NULL,
+                parcours_version VARCHAR(20) NULL,
+                saisi_par_utilisateur_id INT NOT NULL,
+                saisi_par_nom VARCHAR(100) NULL,
+                date_saisie TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_utilisateur (saisi_par_utilisateur_id),
+                INDEX idx_matiere_examen (matiere_id, type_examen)
+            )
+        `);
+        console.log('✅ Migration OK : table copies_temporaires prête');
+    } catch (err) {
+        console.error('❌ Erreur migration copies_temporaires:', err.message);
+    }
 };
 runMigrations();
 
@@ -3582,6 +3608,335 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
         res.status(409).json({ message: err.message || "Erreur lors de l'enregistrement en masse. Aucune note n'a été enregistrée." });
     } finally {
         connection.release();
+    }
+});
+// ═══════ Staging : saisie directe (bulk notes) ═══════
+app.post('/api/copies-temporaires/notes-directes-bulk', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+    const { notes } = req.body;
+    const utilisateurId = req.user.id;
+    const nomUtilisateur = req.user.nom_utilisateur;
+
+    if (!Array.isArray(notes) || notes.length === 0) {
+        return res.status(400).json({ message: "Aucune note à enregistrer n'a été fournie." });
+    }
+
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        const eleveMatierePairs = new Set();
+        let compteur = 0;
+
+        for (const note of notes) {
+            if (!note.eleve_id || !note.matiere_id || note.note === undefined || !note.type_examen) {
+                throw new Error("Une des saisies est incomplète. Opération annulée.");
+            }
+            const noteNum = parseFloat(note.note);
+            if (isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
+                throw new Error(`Note invalide (${note.note}) pour l'élève ${note.eleve_nom}. Opération annulée.`);
+            }
+
+            const key = `${note.eleve_id}-${note.matiere_id}-${note.type_examen}`;
+            if (eleveMatierePairs.has(key)) {
+                throw new Error(`Saisie en double pour ${note.eleve_nom} (${note.type_examen}). Opération annulée.`);
+            }
+            eleveMatierePairs.add(key);
+
+            const [absenceCheck] = await connection.query(
+                "SELECT id FROM absences WHERE eleve_id = ? AND matiere_id = ?",
+                [note.eleve_id, note.matiere_id]
+            );
+            if (absenceCheck.length > 0) {
+                throw new Error(`L'élève ${note.eleve_nom} est déclaré absent pour cette matière. Opération annulée.`);
+            }
+
+            const [dejaNote] = await connection.query(
+                "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
+                [note.eleve_id, note.matiere_id, note.type_examen]
+            );
+            if (dejaNote.length > 0) {
+                throw new Error(`L'élève ${note.eleve_nom} a déjà une note validée pour ce type d'examen (${note.type_examen}).`);
+            }
+
+            const [dejaEnAttente] = await connection.query(
+                "SELECT id FROM copies_temporaires WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ?",
+                [note.eleve_id, note.matiere_id, note.type_examen]
+            );
+            if (dejaEnAttente.length > 0) {
+                throw new Error(`Une saisie pour ${note.eleve_nom} (${note.type_examen}) est déjà en attente de validation.`);
+            }
+
+            await connection.query(`
+                INSERT INTO copies_temporaires
+                (source, eleve_id, matiere_id, type_examen, note, details_parcours, parcours_version, saisi_par_utilisateur_id, saisi_par_nom)
+                VALUES ('directe', ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                note.eleve_id, note.matiere_id, note.type_examen, noteNum,
+                note.details_parcours ? JSON.stringify(note.details_parcours) : null,
+                note.parcours_version || null,
+                utilisateurId, nomUtilisateur
+            ]);
+            compteur++;
+        }
+
+        await connection.commit();
+        res.status(201).json({ message: `${compteur} note(s) mise(s) en attente de validation.` });
+    } catch (err) {
+        await connection.rollback();
+        res.status(409).json({ message: err.message || "Erreur lors de la mise en attente des notes." });
+    } finally {
+        connection.release();
+    }
+});
+
+// ═══════ Staging : saisie directe (bulk absences) ═══════
+app.post('/api/copies-temporaires/absences-bulk', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+    const { absences } = req.body;
+    const utilisateurId = req.user.id;
+    const nomUtilisateur = req.user.nom_utilisateur;
+
+    if (!Array.isArray(absences) || absences.length === 0) {
+        return res.status(400).json({ message: "Aucune absence à enregistrer n'a été fournie." });
+    }
+
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        const dejaVus = new Set();
+
+        for (const absence of absences) {
+            if (!absence.eleve_id || !absence.matiere_id) {
+                throw new Error("Une des absences est incomplète. Opération annulée.");
+            }
+            const key = `${absence.eleve_id}-${absence.matiere_id}-${absence.type_examen || ''}`;
+            if (dejaVus.has(key)) {
+                throw new Error(`Absence en double pour ${absence.eleve_nom || 'un élève'}. Opération annulée.`);
+            }
+            dejaVus.add(key);
+
+            await connection.query(`
+                INSERT INTO copies_temporaires
+                (source, eleve_id, matiere_id, type_examen, est_absence, motif_absence, saisi_par_utilisateur_id, saisi_par_nom)
+                VALUES ('directe', ?, ?, ?, 1, ?, ?, ?)
+            `, [
+                absence.eleve_id, absence.matiere_id, absence.type_examen || 'General',
+                absence.motif || null, utilisateurId, nomUtilisateur
+            ]);
+        }
+
+        await connection.commit();
+        res.status(201).json({ message: `${absences.length} absence(s) mise(s) en attente de validation.` });
+    } catch (err) {
+        await connection.rollback();
+        res.status(409).json({ message: err.message || "Erreur lors de la mise en attente des absences." });
+    } finally {
+        connection.release();
+    }
+});
+
+// ═══════ Staging : notation anonyme ═══════
+app.post('/api/copies-temporaires/anonyme', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    const { matiere_id, code_anonyme, note, type_examen } = req.body;
+    const { id: utilisateurId, nom_utilisateur } = req.user;
+
+    if (!matiere_id || !code_anonyme || note === undefined || note === '' || !type_examen) {
+        return res.status(400).json({ message: "Matière, code, note et type d'examen sont requis." });
+    }
+    const noteNum = parseFloat(note);
+    if (isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
+        return res.status(400).json({ message: "La note doit être un nombre entre 0 et 20." });
+    }
+
+    try {
+        const [codesDispo] = await db.query("SELECT id FROM codes_anonymes_disponibles WHERE code = ?", [code_anonyme]);
+        if (codesDispo.length === 0) {
+            return res.status(404).json({ message: "Ce code anonyme n'existe pas dans la base de données générale." });
+        }
+        const [existingCopies] = await db.query("SELECT note FROM copies WHERE code_anonyme = ? AND matiere_id = ?", [code_anonyme, matiere_id]);
+        if (existingCopies.length > 0 && existingCopies[0].note !== null) {
+            return res.status(409).json({ message: "Ce code a déjà une note validée." });
+        }
+        const [enAttente] = await db.query("SELECT id FROM copies_temporaires WHERE code_anonyme = ? AND matiere_id = ?", [code_anonyme, matiere_id]);
+        if (enAttente.length > 0) {
+            return res.status(409).json({ message: "Ce code a déjà une note en attente de validation." });
+        }
+
+        await db.query(`
+            INSERT INTO copies_temporaires
+            (source, code_anonyme, matiere_id, type_examen, note, saisi_par_utilisateur_id, saisi_par_nom)
+            VALUES ('anonyme', ?, ?, ?, ?, ?, ?)
+        `, [code_anonyme, matiere_id, type_examen, noteNum, utilisateurId, nom_utilisateur]);
+
+        res.status(201).json({ message: `Note pour le code ${code_anonyme} mise en attente de validation.` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Erreur interne du serveur." });
+    }
+});
+
+// ═══════ Liste des saisies en attente ═══════
+app.get('/api/copies-temporaires', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    try {
+        const { mine } = req.query;
+        let query = `
+            SELECT
+                ct.id, ct.source, ct.eleve_id, ct.code_anonyme, ct.matiere_id, ct.type_examen,
+                ct.note, ct.est_absence, ct.motif_absence, ct.details_parcours, ct.parcours_version,
+                ct.saisi_par_utilisateur_id, ct.saisi_par_nom, ct.date_saisie,
+                m.nom_matiere,
+                e.nom AS eleve_nom, e.prenom AS eleve_prenom, e.numero_incorporation, e.escadron, e.peloton
+            FROM copies_temporaires ct
+            JOIN matieres m ON ct.matiere_id = m.id
+            LEFT JOIN eleves e ON ct.eleve_id = e.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        // Un opérateur ne voit que ses propres saisies. L'admin voit tout,
+        // sauf s'il précise explicitement mine=1 pour ne voir que les siennes.
+        if (req.user.role !== 'admin' || mine === '1') {
+            query += " AND ct.saisi_par_utilisateur_id = ?";
+            params.push(req.user.id);
+        }
+
+        query += " ORDER BY ct.date_saisie DESC";
+
+        const [rows] = await db.query(query, params);
+        res.json(rows);
+    } catch (err) {
+        console.error("Erreur GET /api/copies-temporaires:", err);
+        res.status(500).json({ message: "Erreur lors de la récupération des saisies en attente." });
+    }
+});
+
+// ═══════ Validation (staging -> table réelle) ═══════
+app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ message: "Aucune saisie sélectionnée." });
+    }
+
+    const resultats = { valides: [], echecs: [] };
+
+    for (const id of ids) {
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+
+            const [[temp]] = await connection.query("SELECT * FROM copies_temporaires WHERE id = ? FOR UPDATE", [id]);
+            if (!temp) {
+                await connection.rollback();
+                resultats.echecs.push({ id, message: "Saisie introuvable (déjà traitée ?)." });
+                continue;
+            }
+
+            if (req.user.role !== 'admin' && temp.saisi_par_utilisateur_id !== req.user.id) {
+                await connection.rollback();
+                resultats.echecs.push({ id, message: "Vous ne pouvez valider que vos propres saisies." });
+                continue;
+            }
+
+            if (temp.source === 'anonyme') {
+                const [existante] = await connection.query(
+                    "SELECT id, note FROM copies WHERE code_anonyme = ? AND matiere_id = ?",
+                    [temp.code_anonyme, temp.matiere_id]
+                );
+                if (existante.length > 0 && existante[0].note !== null) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: `Le code ${temp.code_anonyme} a déjà une note enregistrée.` });
+                    continue;
+                }
+                await connection.query(`
+                    INSERT INTO copies (matiere_id, code_anonyme, note, type_examen, note_saisie_par_utilisateur_id, eleve_id)
+                    VALUES (?, ?, ?, ?, ?, NULL)
+                    ON DUPLICATE KEY UPDATE
+                        note = VALUES(note),
+                        type_examen = VALUES(type_examen),
+                        note_saisie_par_utilisateur_id = VALUES(note_saisie_par_utilisateur_id)
+                `, [temp.matiere_id, temp.code_anonyme, temp.note, temp.type_examen, temp.saisi_par_utilisateur_id]);
+
+            } else if (temp.est_absence) {
+                const [dejaAbsent] = await connection.query(
+                    "SELECT id FROM absences WHERE eleve_id = ? AND matiere_id = ?",
+                    [temp.eleve_id, temp.matiere_id]
+                );
+                if (dejaAbsent.length === 0) {
+                    await connection.query(
+                        "INSERT INTO absences (eleve_id, matiere_id, enregistre_par_utilisateur_id, motif, type_examen) VALUES (?, ?, ?, ?, ?)",
+                        [temp.eleve_id, temp.matiere_id, temp.saisi_par_utilisateur_id, temp.motif_absence, temp.type_examen]
+                    );
+                }
+            } else {
+                const [absenceCheck] = await connection.query(
+                    "SELECT id FROM absences WHERE eleve_id = ? AND matiere_id = ?",
+                    [temp.eleve_id, temp.matiere_id]
+                );
+                if (absenceCheck.length > 0) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: "Cet élève est déclaré absent pour cette matière." });
+                    continue;
+                }
+
+                const [existantes] = await connection.query(
+                    "SELECT id, note FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? ORDER BY (note IS NOT NULL) DESC, id ASC FOR UPDATE",
+                    [temp.eleve_id, temp.matiere_id, temp.type_examen]
+                );
+                if (existantes.length > 0 && existantes[0].note !== null) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: "Cet élève a déjà une note pour cette matière et cet examen." });
+                    continue;
+                }
+
+                if (existantes.length > 0) {
+                    await connection.query(
+                        "UPDATE copies SET note = ?, note_saisie_par_utilisateur_id = ?, details_parcours = ?, parcours_version = ? WHERE id = ?",
+                        [temp.note, temp.saisi_par_utilisateur_id, JSON.stringify(temp.details_parcours), temp.parcours_version, existantes[0].id]
+                    );
+                } else {
+                    await connection.query(
+                        "INSERT INTO copies (eleve_id, matiere_id, note, type_examen, note_saisie_par_utilisateur_id, details_parcours, parcours_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        [temp.eleve_id, temp.matiere_id, temp.note, temp.type_examen, temp.saisi_par_utilisateur_id, JSON.stringify(temp.details_parcours), temp.parcours_version]
+                    );
+                }
+            }
+
+            await connection.query("DELETE FROM copies_temporaires WHERE id = ?", [id]);
+            await connection.commit();
+            resultats.valides.push(id);
+
+        } catch (err) {
+            await connection.rollback();
+            console.error(`Erreur validation copie temporaire ${id}:`, err);
+            resultats.echecs.push({ id, message: "Erreur interne lors de la validation." });
+        } finally {
+            connection.release();
+        }
+    }
+
+    if (resultats.valides.length > 0) {
+        await logActivity(
+            req.user.id, req.user.nom_utilisateur, 'VALIDATION_NOTES_TEMPORAIRES',
+            `A validé ${resultats.valides.length} saisie(s) temporaire(s) (échecs : ${resultats.echecs.length}).`
+        );
+    }
+
+    res.json(resultats);
+});
+
+// ═══════ Rejet d'une saisie en attente ═══════
+app.delete('/api/copies-temporaires/:id', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [[temp]] = await db.query("SELECT saisi_par_utilisateur_id FROM copies_temporaires WHERE id = ?", [id]);
+        if (!temp) return res.status(404).json({ message: "Saisie introuvable." });
+
+        if (req.user.role !== 'admin' && temp.saisi_par_utilisateur_id !== req.user.id) {
+            return res.status(403).json({ message: "Vous ne pouvez rejeter que vos propres saisies." });
+        }
+
+        await db.query("DELETE FROM copies_temporaires WHERE id = ?", [id]);
+        res.json({ message: "Saisie rejetée et supprimée." });
+    } catch (err) {
+        res.status(500).json({ message: "Erreur lors du rejet de la saisie." });
     }
 });
 

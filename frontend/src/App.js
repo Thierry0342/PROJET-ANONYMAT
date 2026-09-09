@@ -17,8 +17,8 @@ import ImporterNotes from './components/ImporterNotes';
 import CopiesNotees from './components/CopiesNotees';
 import GestionAbsences from './components/GestionAbsences';
 import SaisieDirecte from './components/SaisieDirecte';
-import IncognitoSwap from './components/IncognitoSwap';
-import IncognitoMoyenne from './components/IncognitoMoyenne';
+import Inc1 from './components/IncognitoSwap';
+import Inc2 from './components/IncognitoMoyenne';
 import Dashboard from './components/Dashboard';
 import DashboardGeneral from './components/DashboardGeneral';
 import DashboardExamen from './components/DashboardExamen';
@@ -29,11 +29,29 @@ import ListeEleves from './components/ListeEleves';
 import Sidebar from './components/Sidebar';
 import AnimatedNodeBackground from './components/AnimatedNodeBackground';
 import GlobalActivityTracker from './components/GlobalActivityTracker';
-
-import { FiGrid, FiUsers, FiEdit, FiLink, FiFileText, FiPlusSquare, FiUserPlus, FiKey, FiCheckSquare, FiBarChart2, FiSlash, FiPrinter, FiUploadCloud, FiHash } from 'react-icons/fi';
+import ValidationNotes from './components/ValidationNotes';
+import { FiGrid, FiUsers, FiEdit, FiLink, FiFileText, FiPlusSquare, FiUserPlus, FiKey, FiCheckSquare, FiBarChart2, FiSlash, FiPrinter, FiUploadCloud, FiCheckCircle,FiHash } from 'react-icons/fi';
 import { FaGavel } from 'react-icons/fa';
 
 import './App.css';
+
+// TEMPORAIRE - à retirer après debug
+const composants = {
+  AuthPage, WelcomePage, LierCode, NoterCopie, Resultats, CreerMatiere,
+  GestionUtilisateurs, ImporterEleves, ImporterMatricules, ImporterCodes,
+  ImporterNotes, CopiesNotees, GestionAbsences, SaisieDirecte,
+  Inc1, Inc2, Dashboard, DashboardGeneral, DashboardExamen,
+  CreerCodesMatiere, ConfigurationAssignation, ConseilFormation,
+  ListeEleves, Sidebar, AnimatedNodeBackground, GlobalActivityTracker,
+  ValidationNotes
+};
+
+Object.entries(composants).forEach(([nom, comp]) => {
+  const type = typeof comp;
+  if (type !== 'function') {
+    console.error(`❌ PROBLÈME : "${nom}" est de type "${type}" au lieu de "function". Valeur:`, comp);
+  }
+});
 
 const getUserFromToken = () => {
     const token = localStorage.getItem('token');
@@ -65,6 +83,10 @@ const getNavItemsForUser = (user) => {
         operActions.push({ label: "Saisir les Notes", to: "/noter", icon: <FiEdit /> });
         operActions.push({ label: "Saisie Directe", to: "/saisie-directe", icon: <FiFileText /> });
         operActions.push({ label: "Importer Notes", to: "/importer-notes", icon: <FiUploadCloud /> });
+    }
+    if (user.role === 'operateur_note') {
+       operActions.push({ label: "Validation des Notes", to: "/validation-notes", icon: <FiCheckCircle /> });
+
     }
 
     if (operActions.length > 0) {
@@ -173,10 +195,11 @@ const AppContent = () => {
                             <Route path="/importer-codes" element={user.role === 'admin' ? <ImporterCodes /> : <Navigate to="/" />} />
                             <Route path="/generer-codes-matiere" element={user.role === 'admin' ? <CreerCodesMatiere /> : <Navigate to="/" />} />
                             <Route path="/copies-notees" element={user.role === 'admin' ? <CopiesNotees /> : <Navigate to="/" />} />
-                            <Route path="/incognito-swap" element={user.role === 'admin' ? <IncognitoSwap /> : <Navigate to="/" />} />
+                            <Route path="/1" element={user.role === 'admin' ? <Inc1 /> : <Navigate to="/" />} />
                             <Route path="/liste-eleves" element={<ListeEleves />} />
-                            <Route path="/incognito-moyenne" element={user.role === 'admin' ? <IncognitoMoyenne /> : <Navigate to="/" />} />
+                            <Route path="/2" element={user.role === 'admin' ? <Inc2 /> : <Navigate to="/" />} />
                             <Route path="*" element={<Navigate to="/dashboard" />} />
+                            <Route path="/validation-notes"element={(user.role === 'admin' || user.role === 'operateur_note') ? <ValidationNotes isAdmin={user.role === 'admin'} /> : <Navigate to="/" />}/>
                         </Routes>
                     </main>
                 </div>

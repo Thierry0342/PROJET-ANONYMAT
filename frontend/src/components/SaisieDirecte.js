@@ -1262,28 +1262,28 @@ const SaisieDirecte = () => {
 
     // ── Validation finale ─────────────────────────────────────────────────────
     const handleValiderSaisies = async () => {
-        setIsSaving(true);
-        const notesToSave = saisiesTemporaires.filter(s => s.type === 'note');
-        const absencesToSave = saisiesTemporaires.filter(s => s.type === 'absence');
-        try {
-            const promises = [];
-            if (notesToSave.length > 0) {
-                promises.push(axios.post('/api/copies/notes-directes-bulk', { notes: notesToSave }, getAuthHeaders()));
-            }
-            if (absencesToSave.length > 0) {
-                promises.push(axios.post('/api/absences/direct-bulk', { absences: absencesToSave }, getAuthHeaders()));
-            }
-            await Promise.all(promises);
-            setSaisiesTemporaires([]);
-            setIsValidationModalOpen(false);
-            setMessage("Saisies enregistrées avec succès.");
-            fetchMesNotesParMatiere();
-        } catch (err) {
-            alert(err.response?.data?.message || "Erreur lors de l'enregistrement.");
-        } finally {
-            setIsSaving(false);
+    setIsSaving(true);
+    const notesToSave = saisiesTemporaires.filter(s => s.type === 'note');
+    const absencesToSave = saisiesTemporaires.filter(s => s.type === 'absence');
+    try {
+        const promises = [];
+        if (notesToSave.length > 0) {
+            promises.push(axios.post('/api/copies-temporaires/notes-directes-bulk', { notes: notesToSave }, getAuthHeaders()));
         }
-    };
+        if (absencesToSave.length > 0) {
+            promises.push(axios.post('/api/copies-temporaires/absences-bulk', { absences: absencesToSave }, getAuthHeaders()));
+        }
+        await Promise.all(promises);
+        setSaisiesTemporaires([]);
+        setIsValidationModalOpen(false);
+        setMessage("Saisies envoyées en attente de validation. Rendez-vous sur la page \"Validation des Notes\".");
+        fetchMesNotesParMatiere();
+    } catch (err) {
+        alert(err.response?.data?.message || "Erreur lors de l'enregistrement.");
+    } finally {
+        setIsSaving(false);
+    }
+};
 
     // ── Helper label population ───────────────────────────────────────────────
     const getPopulationLabel = (pop) => {
