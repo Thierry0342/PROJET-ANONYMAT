@@ -226,8 +226,8 @@ const DecisionPanel = ({ mode, typeExamen, promotion, headers, decisionsSaved, o
 
 // ═══════════════════ Panneau type d'examen — pleine largeur, accordéon ═══════════════════
 const ExamenConseilPanel = ({ examen, promotion, headers, statsExamen, decisionsSaved, onDecisionsChanged, quotas, setQuotas, onOpenEleve }) => {
-    const isGeneral = examen.nom_modele === 'General';
-    const [expanded, setExpanded] = useState(isGeneral);
+   const isGeneral = examen.nom_modele === 'General';
+const [expanded, setExpanded] = useState(false);
     const [conclusion, setConclusion] = useState({ date_conseil: '', lieu: '', president: '', texte_conclusion: '' });
     const [pieces, setPieces] = useState([]);
     const [fichier, setFichier] = useState(null);
