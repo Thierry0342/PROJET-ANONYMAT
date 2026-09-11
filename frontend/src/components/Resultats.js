@@ -738,8 +738,8 @@ const suggestions = useMemo(() => {
                                     </td>
                                     <td className="actions-cell">
                                     <button className="btn-action edit" title="Modifier" onClick={() => setEditingResult(r)}><IconEdit /></button>
-<button className="btn-action history" title="Historique" onClick={() => setViewingHistoryOf(r)}><IconHistory /></button>
-<button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>
+                                    <button className="btn-action history" title="Historique" onClick={() => setViewingHistoryOf(r)}><IconHistory /></button>
+                                     <button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>
                                     </td>
                                 </tr>
                             )) : (

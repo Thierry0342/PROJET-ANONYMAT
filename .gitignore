@@ -15,6 +15,9 @@ Thumbs.db
 **/dist/
 **/build/
 
+# Ignorer les fichiers uploadés par les utilisateurs (PDF, images, etc.)
+backend/uploads/
+
 # Ignorer les fichiers de configuration IDE et extensions
 .vscode/
 .idea/

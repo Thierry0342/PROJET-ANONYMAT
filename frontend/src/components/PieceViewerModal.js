@@ -58,7 +58,7 @@ const PieceViewerModal = ({ piece, headers, onClose }) => {
 
     return (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
-            <div style={{ background: '#fff', borderRadius: '12px', width: '850px', maxWidth: '94vw', height: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+           <div style={{ background: '#fff', borderRadius: '8px', width: '98vw', height: '96vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 18px', borderBottom: '1px solid #eee' }}>
                     <strong style={{ fontSize: '0.9rem' }}>{piece.nom_fichier}</strong>
                     <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
