@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { FiPrinter, FiPlusCircle, FiArchive, FiTrash2, FiAlertTriangle, FiFolder, FiArrowLeft, FiUsers } from 'react-icons/fi';
 import './CreerCodesMatiere.css';
@@ -49,36 +49,38 @@ const CreerCodesMatiere = () => {
     const [codesAPrevisualiser, setCodesAPrevisualiser] = useState([]);
     const [dataPourSauvegarde, setDataPourSauvegarde] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
-       const getConfig = useCallback(() => ({
+    
+    const getConfig = useCallback(() => ({
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     }), []);
 
     const populations = [
-    { id: 'all', label: 'Toute la promotion (Mixte)' },
-    { id: 'actif', label: 'Liste Originale (Actifs)' },
-    { id: 'conseil', label: 'Liste Conseil (Redoublants & Ajournés)' } // Groupe unique
-];
+        { id: 'all', label: 'Toute la promotion (Mixte)' },
+        { id: 'actif', label: 'Liste Originale (Actifs)' },
+        { id: 'conseil', label: 'Liste Conseil (Redoublants & Ajournés)' }
+    ];
 
     const promotionsList = Array.from({ length: 81 }, (_, i) => `${70 + i}E`);
 
-    const fetchData = async () => {
-        const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
+    const fetchData = useCallback(async () => {
         try {
             const [resM, resE, resL] = await Promise.all([
-                axios.get('/api/matieres', config),
-                axios.get('/api/examens', config),
-                axios.get('/api/codes/lots', config)
+                axios.get('/api/matieres', getConfig()),
+                axios.get('/api/examens', getConfig()),
+                axios.get('/api/codes/lots', getConfig())
             ]);
             setMatieres(resM.data); setExamens(resE.data); setHistorique(resL.data);
         } catch (err) { console.error(err); }
-    };
-       const fetchHistorique = async () => {
-    try {
-        const res = await axios.get('/api/codes/lots', getConfig());
-        setHistorique(res.data);
-    } catch (err) { console.error(err); }
-};
-    useEffect(() => { fetchHistorique(); }, []);
+    }, [getConfig]);
+
+    const fetchHistorique = useCallback(async () => {
+        try {
+            const res = await axios.get('/api/codes/lots', getConfig());
+            setHistorique(res.data);
+        } catch (err) { console.error(err); }
+    }, [getConfig]);
+
+    useEffect(() => { fetchHistorique(); }, [fetchHistorique]);
 
     // 1) Promotion -> examens
     useEffect(() => {
@@ -89,14 +91,13 @@ const CreerCodesMatiere = () => {
             if (!selectedPromotion) { setExamens([]); return; }
             setIsLoadingExamens(true);
             try {
-                const res = await axios.get(`/api/examens?promotion=${selectedPromotion}`, config);
+                const res = await axios.get(`/api/examens?promotion=${selectedPromotion}`, getConfig());
                 setExamens(res.data);
             } catch { setExamens([]); }
             finally { setIsLoadingExamens(false); }
         };
         load();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedPromotion]);
+    }, [selectedPromotion, getConfig]);
 
     // 2) Examen (+promotion) -> matières
     useEffect(() => {
@@ -107,17 +108,16 @@ const CreerCodesMatiere = () => {
             try {
                 const res = await axios.get(
                     `/api/matieres-par-examen?typeExamen=${selectedExamen}&promotion=${selectedPromotion}`,
-                    config
+                    getConfig()
                 );
                 setMatieres(res.data);
             } catch { setMatieres([]); }
             finally { setIsLoadingMatieres(false); }
         };
         load();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedExamen, selectedPromotion]);
+    }, [selectedExamen, selectedPromotion, getConfig]);
 
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => { fetchData(); }, [fetchData]);
 
     const groupedHistory = historique.reduce((acc, lot) => {
         const promo = lot.promotion || 'Inconnue';
@@ -130,9 +130,8 @@ const CreerCodesMatiere = () => {
     const handlePreview = async (e) => {
         e.preventDefault();
         setIsLoading(true);
-        const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
         try {
-            const res = await axios.post('/api/codes/previsualiser', { matiereId: selectedMatiere, nombreCodes }, config);
+            const res = await axios.post('/api/codes/previsualiser', { matiereId: selectedMatiere, nombreCodes }, getConfig());
             setCodesAPrevisualiser(res.data.codes);
             setDataPourSauvegarde({
                 matiereId: selectedMatiere, typeExamen: selectedExamen,
@@ -143,9 +142,8 @@ const CreerCodesMatiere = () => {
     };
 
     const handleConfirmSave = async () => {
-        const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
         try {
-            await axios.post('/api/codes/sauvegarder', dataPourSauvegarde, config);
+            await axios.post('/api/codes/sauvegarder', dataPourSauvegarde, getConfig());
             setIsModalOpen(false); fetchData();
         } catch (err) { alert('Erreur de sauvegarde'); }
     };
@@ -234,16 +232,14 @@ const CreerCodesMatiere = () => {
                                     </div>
                                     <div className="lot-card-footer" style={{display:'flex', gap:'10px'}}>
                                         <button onClick={async () => {
-                                            const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-                                            const res = await axios.get(`/api/codes/lot/${lot.id}`, config);
+                                            const res = await axios.get(`/api/codes/lot/${lot.id}`, getConfig());
                                             const printWindow = window.open('', '_blank');
                                             printWindow.document.write(`<html><body style="font-family:monospace;"><h3>${lot.nom_matiere} - ${getPopLabel(lot.population)}</h3><div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;">${res.data.codes.map(c => `<div style="border:1px solid black;padding:5px;text-align:center;">${c}</div><div style="border:1px solid black;padding:5px;text-align:center;">${c}</div>`).join('')}</div></body></html>`);
                                             printWindow.document.close(); printWindow.print();
                                         }} className="btn-success" title="Réimprimer"><FiPrinter /></button>
                                         <button onClick={async () => {
                                             if(window.confirm("Supprimer ce lot ?")) {
-                                                const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-                                                await axios.delete(`/api/codes/lot/${lot.id}`, config);
+                                                await axios.delete(`/api/codes/lot/${lot.id}`, getConfig());
                                                 fetchData();
                                             }
                                         }} className="btn-danger" title="Supprimer"><FiTrash2 /></button>
