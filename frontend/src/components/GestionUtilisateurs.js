@@ -17,7 +17,7 @@ const GestionUtilisateurs = () => {
 
     const pendingUsers = users.filter(user => user.statut === 'en_attente');
     const activeUsers = users.filter(user => user.statut !== 'en_attente');
-    const ROLES = ['admin', 'operateur_code', 'operateur_note'];
+    const ROLES = ['admin', 'operateur_code', 'operateur_note', 'controleur'];
 
     const getAuthHeaders = () => ({
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }

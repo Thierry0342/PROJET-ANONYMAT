@@ -405,7 +405,7 @@ app.put('/api/logs/mark-as-read', authenticateToken, checkRole(['admin']), async
 });
 // Vue complète : toutes les notes (saisies par n'importe qui) + élèves sans note,
 // filtrée par promotion / examen / matière, groupée par escadron puis peloton.
-app.get('/api/copies/vue-saisies-groupees', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/copies/vue-saisies-groupees', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { promotion, typeExamen, matiereId } = req.query;
         const utilisateurId = req.user.id;
@@ -479,7 +479,7 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ message: "Tous les champs marqués d'un * et le rôle sont requis." });
         }
 
-        const rolesAutorises = ['admin', 'operateur_code', 'operateur_note'];
+      const rolesAutorises = ['admin', 'operateur_code', 'operateur_note', 'controleur'];
         if (!rolesAutorises.includes(role)) {
             return res.status(400).json({ message: "Le rôle sélectionné est invalide." });
         }
@@ -536,9 +536,9 @@ app.get(apiPaths.eleves.base, authenticateToken, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// ── CRUD élève individuel (lecture pour tous, écriture réservée admin) ─────
+// ── CRUD élève individuel (lecture pour tous, écriture réservée admin + controleur) ─────
 
-app.post(apiPaths.eleves.base, authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post(apiPaths.eleves.base, authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion, statut } = req.body;
         if (!nom || !numero_incorporation) {
@@ -570,7 +570,7 @@ app.post(apiPaths.eleves.base, authenticateToken, checkRole(['admin']), async (r
     }
 });
 
-app.put('/api/eleves/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/eleves/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const { nom, prenom, numero_incorporation, sexe, escadron, peloton, promotion, statut } = req.body;
@@ -676,7 +676,7 @@ app.get(apiPaths.eleves.recherche, authenticateToken, async (req, res) => {
         res.status(500).json({ error: "Erreur interne du serveur." });
     }
 });
-app.get('/api/eleves/:id/notes-detaillees', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/eleves/:id/notes-detaillees', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -708,7 +708,7 @@ app.get('/api/eleves/:id/notes-detaillees', authenticateToken, checkRole(['admin
         res.status(500).json({ message: "Erreur lors de la récupération des notes de l'élève." });
     }
 });
-app.post('/api/eleves/importer-previsualisation', authenticateToken, checkRole(['admin']), upload.single('fichierEleves'), async (req, res) => {
+app.post('/api/eleves/importer-previsualisation', authenticateToken, checkRole(['admin', 'controleur']), upload.single('fichierEleves'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
     const { promotion } = req.body;
     if (!promotion || promotion.trim() === '') return res.status(400).json({ message: "La promotion est requise pour prévisualiser." });
@@ -762,7 +762,7 @@ app.post('/api/eleves/importer-previsualisation', authenticateToken, checkRole([
 });
 // ── PRÉVISUALISATION import Matricules (MLE) ────────────────────────────────
 // Fichier attendu : Colonne A = N° Incorporation, Colonne B = Matricule (MLE)
-app.post('/api/eleves/importer-matricules-previsualisation', authenticateToken, checkRole(['admin']), upload.single('fichierMatricules'), async (req, res) => {
+app.post('/api/eleves/importer-matricules-previsualisation', authenticateToken, checkRole(['admin', 'controleur']), upload.single('fichierMatricules'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
     const { promotion } = req.body;
     if (!promotion || promotion.trim() === '') {
@@ -832,7 +832,7 @@ app.post('/api/eleves/importer-matricules-previsualisation', authenticateToken, 
 });
 
 // ── CONFIRMATION import Matricules (MLE) ────────────────────────────────────
-app.post('/api/eleves/importer-matricules', authenticateToken, checkRole(['admin']), upload.single('fichierMatricules'), async (req, res) => {
+app.post('/api/eleves/importer-matricules', authenticateToken, checkRole(['admin', 'controleur']), upload.single('fichierMatricules'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
     const { promotion } = req.body;
     if (!promotion || promotion.trim() === '') {
@@ -890,7 +890,7 @@ app.post('/api/eleves/importer-matricules', authenticateToken, checkRole(['admin
     }
 });
 
-app.post(apiPaths.eleves.importer, authenticateToken, checkRole(['admin']), upload.single('fichierEleves'), async (req, res) => {
+app.post(apiPaths.eleves.importer, authenticateToken, checkRole(['admin', 'controleur']), upload.single('fichierEleves'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
     const { promotion } = req.body;
     if (!promotion || promotion.trim() === '') return res.status(400).json({ message: "La promotion est requise pour l'importation." });
@@ -966,7 +966,7 @@ app.get(apiPaths.matieres.base, authenticateToken, async (req, res) => {
     }
 });
 
-app.post(apiPaths.matieres.base, authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post(apiPaths.matieres.base, authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { nom_matiere } = req.body;
         if (!nom_matiere || nom_matiere.trim() === '') {
@@ -985,7 +985,7 @@ app.post(apiPaths.matieres.base, authenticateToken, checkRole(['admin']), async 
     }
 });
 
-app.get('/api/codes/verifier/:code', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/codes/verifier/:code', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { code } = req.params;
         const [rows] = await db.query("SELECT id FROM codes_anonymes_disponibles WHERE code = ?", [code]);
@@ -999,7 +999,7 @@ app.get('/api/codes/verifier/:code', authenticateToken, checkRole(['admin', 'ope
     }
 });
 
-app.post(apiPaths.codes.importer, authenticateToken, checkRole(['admin']), upload.single('fichierCodes'), async (req, res) => {
+app.post(apiPaths.codes.importer, authenticateToken, checkRole(['admin', 'controleur']), upload.single('fichierCodes'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Aucun fichier n'a été envoyé." });
     const connection = await db.getConnection();
     try {
@@ -1025,7 +1025,7 @@ app.post(apiPaths.codes.importer, authenticateToken, checkRole(['admin']), uploa
     }
 });
 
-app.post('/api/noter-copie-anonyme', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.post('/api/noter-copie-anonyme', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { matiere_id, code_anonyme, note, type_examen } = req.body;
     const { id: utilisateurId, nom_utilisateur } = req.user;
 
@@ -1072,7 +1072,7 @@ app.post('/api/noter-copie-anonyme', authenticateToken, checkRole(['admin', 'ope
     }
 });
 
-app.post('/api/reclamations', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.post('/api/reclamations', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { matiere_id, code_anonyme, note_proposee } = req.body;
     const utilisateurId = req.user.id;
 
@@ -1091,7 +1091,7 @@ app.post('/api/reclamations', authenticateToken, checkRole(['admin', 'operateur_
     }
 });
 
-app.get('/api/reclamations', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/reclamations', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const query = `
             SELECT r.id, r.code_anonyme, r.note_proposee, r.date_reclamation, r.statut,
@@ -1109,7 +1109,7 @@ app.get('/api/reclamations', authenticateToken, checkRole(['admin']), async (req
     }
 });
 
-app.get('/api/reclamations/details/:code_anonyme/:matiereId', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/reclamations/details/:code_anonyme/:matiereId', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { code_anonyme, matiereId } = req.params;
     try {
         const query = `
@@ -1133,7 +1133,7 @@ app.get('/api/reclamations/details/:code_anonyme/:matiereId', authenticateToken,
     }
 });
 
-app.put('/api/reclamations/:id/resoudre', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/reclamations/:id/resoudre', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { id } = req.params;
     try {
         await db.query("UPDATE reclamations SET statut = 'resolu' WHERE id = ?", [id]);
@@ -1143,7 +1143,7 @@ app.put('/api/reclamations/:id/resoudre', authenticateToken, checkRole(['admin']
     }
 });
 
-app.put('/api/reclamations/corriger', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/reclamations/corriger', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { reclamationId, code_anonyme, matiereId, nouvelle_note } = req.body;
     const adminId = req.user.id;
 
@@ -1187,7 +1187,7 @@ app.put('/api/reclamations/corriger', authenticateToken, checkRole(['admin']), a
     }
 });
 
-app.put('/api/lier-copie', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.put('/api/lier-copie', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     const { eleve_id, matiere_id, code_anonyme, type_examen } = req.body;
     const { id: utilisateurId, nom_utilisateur } = req.user;
 
@@ -1261,7 +1261,7 @@ app.put('/api/lier-copie', authenticateToken, checkRole(['admin', 'operateur_cod
     }
 });
 
-app.get(apiPaths.copies.verifier, authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get(apiPaths.copies.verifier, authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { code } = req.params;
         if (!code) return res.status(400).json({ message: "Le code est requis." });
@@ -1276,7 +1276,7 @@ app.get(apiPaths.copies.verifier, authenticateToken, checkRole(['admin', 'operat
     }
 });
 
-app.get('/api/copies/notees-non-liees', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.get('/api/copies/notees-non-liees', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const { matiereId, promotion, population } = req.query;
         
@@ -1306,7 +1306,7 @@ app.get('/api/copies/notees-non-liees', authenticateToken, checkRole(['admin', '
     }
 });
 
-app.get('/api/copies/mes-liages', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.get('/api/copies/mes-liages', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const utilisateurId = req.user.id;
         const { matiere_id, type_examen } = req.query;
@@ -1338,7 +1338,7 @@ app.get('/api/copies/mes-liages', authenticateToken, checkRole(['admin', 'operat
     }
 });
 
-app.get('/api/copies/mes-saisies-notes', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/copies/mes-saisies-notes', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const utilisateurId = req.user.id;
         const query = `
@@ -1349,11 +1349,12 @@ app.get('/api/copies/mes-saisies-notes', authenticateToken, checkRole(['admin', 
         const [rows] = await db.query(query, [utilisateurId]);
         res.json(rows);
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: "Erreur interne du serveur." });
     }
 });
 
-app.get(apiPaths.stats.nonLiesTotal, authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.get(apiPaths.stats.nonLiesTotal, authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const [[{ total: totalEleves }]] = await db.query("SELECT COUNT(*) as total FROM eleves");
         const [[{ total: totalMatieres }]] = await db.query("SELECT COUNT(*) as total FROM matieres");
@@ -1369,7 +1370,7 @@ app.get(apiPaths.stats.nonLiesTotal, authenticateToken, checkRole(['admin', 'ope
 });
 
 
-app.get(apiPaths.stats.liaisonsUtilisateur, authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.get(apiPaths.stats.liaisonsUtilisateur, authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const { matiere_id, type_examen } = req.query;
         const utilisateurId = req.user.id;
@@ -1394,7 +1395,7 @@ app.get(apiPaths.stats.liaisonsUtilisateur, authenticateToken, checkRole(['admin
     }
 });
 
-app.get('/api/stats/notes-utilisateur', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/stats/notes-utilisateur', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const [[result]] = await db.query("SELECT COUNT(*) as notesSaisies FROM copies WHERE note_saisie_par_utilisateur_id = ?", [req.user.id]);
         res.json(result);
@@ -1403,7 +1404,7 @@ app.get('/api/stats/notes-utilisateur', authenticateToken, checkRole(['admin', '
     }
 });
 
-app.get('/api/stats/notation/:matiereId', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/stats/notation/:matiereId', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { matiereId } = req.params;
         const [[{ totalEleves }]] = await db.query("SELECT COUNT(*) as totalEleves FROM eleves");
@@ -1415,7 +1416,7 @@ app.get('/api/stats/notation/:matiereId', authenticateToken, checkRole(['admin',
     }
 });
 
-app.get(apiPaths.matieres.elevesRestants, authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.get(apiPaths.matieres.elevesRestants, authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const { type_examen } = req.query;
@@ -1438,7 +1439,7 @@ app.get(apiPaths.matieres.elevesRestants, authenticateToken, checkRole(['admin',
 });
 
 // backend/server.js
-app.get(apiPaths.resultats.base, authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get(apiPaths.resultats.base, authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const query = `
             SELECT
@@ -1463,7 +1464,7 @@ app.get(apiPaths.resultats.base, authenticateToken, checkRole(['admin']), async 
     }
 });
 
-app.put('/api/resultats/:copieId', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/resultats/:copieId', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { copieId } = req.params;
     const { nouvelle_note, motif } = req.body;
     const utilisateurId = req.user.id;
@@ -1498,7 +1499,7 @@ app.put('/api/resultats/:copieId', authenticateToken, checkRole(['admin']), asyn
     }
 });
 
-app.delete('/api/resultats/:copieId', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete('/api/resultats/:copieId', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { copieId } = req.params;
     const utilisateurId = req.user.id;
     const connection = await db.getConnection();
@@ -1526,7 +1527,7 @@ app.delete('/api/resultats/:copieId', authenticateToken, checkRole(['admin']), a
     }
 });
 
-app.get('/api/resultats/:copieId/historique', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/resultats/:copieId/historique', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { copieId } = req.params;
         const query = `
@@ -1733,7 +1734,7 @@ app.post('/api/resultats/generer-document-pdf', authenticateToken, checkRole(['a
     }
 });
 
-app.get(apiPaths.utilisateurs.base, authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get(apiPaths.utilisateurs.base, authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const [users] = await db.query(`
             SELECT id, nom, prenom, nom_utilisateur, role, statut,
@@ -1748,7 +1749,7 @@ app.get(apiPaths.utilisateurs.base, authenticateToken, checkRole(['admin']), asy
     }
 });
 
-app.put(apiPaths.utilisateurs.byId, authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put(apiPaths.utilisateurs.byId, authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const { 
@@ -1776,7 +1777,7 @@ app.put(apiPaths.utilisateurs.byId, authenticateToken, checkRole(['admin']), asy
     }
 });
 
-app.delete(apiPaths.utilisateurs.byId, authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete(apiPaths.utilisateurs.byId, authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         if (parseInt(id, 10) === req.user.id) return res.status(403).json({ message: "Vous ne pouvez pas supprimer votre propre compte." });
@@ -1795,7 +1796,7 @@ app.delete(apiPaths.utilisateurs.byId, authenticateToken, checkRole(['admin']), 
     }
 });
 
-app.put('/api/utilisateurs/:id/approuver', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/utilisateurs/:id/approuver', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const { role, assigned_matiere_id, assigned_type_examen, assigned_promotion } = req.body;
@@ -1811,7 +1812,7 @@ app.put('/api/utilisateurs/:id/approuver', authenticateToken, checkRole(['admin'
     }
 });
 
-app.put('/api/utilisateurs/:id/rejeter', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/utilisateurs/:id/rejeter', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const [result] = await db.query("UPDATE utilisateurs SET statut = 'rejete' WHERE id = ?", [id]);
@@ -1822,7 +1823,7 @@ app.put('/api/utilisateurs/:id/rejeter', authenticateToken, checkRole(['admin'])
     }
 });
 
-app.get('/api/stats/copies-par-matiere', authenticateToken, checkRole(['admin', 'operateur_code', 'operateur_note']), async (req, res) => {
+app.get('/api/stats/copies-par-matiere', authenticateToken, checkRole(['admin', 'operateur_code', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { promotion, population } = req.query;
 
@@ -1860,7 +1861,7 @@ app.get('/api/stats/copies-par-matiere', authenticateToken, checkRole(['admin', 
     }
 });
 
-app.get('/api/copies/non-notees', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.get('/api/copies/non-notees', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const { matiereId } = req.query;
         let query = `
@@ -1881,7 +1882,8 @@ app.get('/api/copies/non-notees', authenticateToken, checkRole(['admin', 'operat
     }
 });
 
-app.get('/api/codes/sans-note/:matiereId', authenticateToken, checkRole(['admin', 'operateur_code', 'operateur_note']), async (req, res) => {
+app.get('/api/codes/sans-note/:matiereId', authenticateToken, checkRole(['admin', 'operateur_code', 'operateur_note', 'controleur']), async (req, res) => {
+
     try {
         const { matiereId } = req.params;
 
@@ -1907,7 +1909,7 @@ app.get('/api/codes/sans-note/:matiereId', authenticateToken, checkRole(['admin'
     }
 });
 
-app.post('/api/absences/bulk', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post('/api/absences/bulk', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const absencesData = req.body;
     const utilisateurId = req.user.id;
 
@@ -1954,7 +1956,7 @@ app.post('/api/absences/bulk', authenticateToken, checkRole(['admin']), async (r
 });
 // Route utilisée par la Saisie Directe (mode série) pour enregistrer en masse
 // les absences temporaires accumulées, en parallèle des notes.
-app.post('/api/absences/direct-bulk', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.post('/api/absences/direct-bulk', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { absences } = req.body;
     const utilisateurId = req.user.id;
 
@@ -2007,7 +2009,7 @@ app.post('/api/absences/direct-bulk', authenticateToken, checkRole(['admin', 'op
     }
 });
 
-app.get('/api/absences', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/absences', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { promotion } = req.query;
       
 
@@ -2062,7 +2064,7 @@ app.get('/api/absences', authenticateToken, checkRole(['admin', 'operateur_note'
     }
 });
 
-app.delete('/api/absences/:eleveId', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete('/api/absences/:eleveId', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { eleveId } = req.params;
         await db.query("DELETE FROM absences WHERE eleve_id = ?", [eleveId]);
@@ -2072,7 +2074,7 @@ app.delete('/api/absences/:eleveId', authenticateToken, checkRole(['admin']), as
     }
 });
 
-app.put('/api/absences/:eleveId', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/absences/:eleveId', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { eleveId } = req.params;
     const { matieres, motif } = req.body;
     const utilisateurId = req.user.id;
@@ -2108,7 +2110,7 @@ app.put('/api/absences/:eleveId', authenticateToken, checkRole(['admin']), async
     }
 });
 
-app.post(apiPaths.copies.noteDirecte, authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.post(apiPaths.copies.noteDirecte, authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { eleve_id, matiere_id, note, type_examen } = req.body;
     const utilisateurId = req.user.id;
 
@@ -2169,7 +2171,7 @@ app.post(apiPaths.copies.noteDirecte, authenticateToken, checkRole(['admin','ope
     }
 });
 
-app.get('/api/eleves-par-groupe', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.get('/api/eleves-par-groupe', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { matiereId, typeExamen, escadron, peloton, promotion, population } = req.query;
 
     if (!matiereId || !typeExamen) {
@@ -2225,7 +2227,7 @@ app.get('/api/eleves-par-groupe', authenticateToken, checkRole(['admin','operate
     }
 });
 
-app.put('/api/matieres/coefficients', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/matieres/coefficients', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const coefficients = req.body;
     if (!Array.isArray(coefficients) || coefficients.length === 0) {
         return res.status(400).json({ message: "Les données des coefficients sont invalides." });
@@ -2484,7 +2486,7 @@ async function calculerClassementDetaille(typeExamen, promotion) {
     };
 }
 
-app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { typeExamen, promotion, population } = req.query;
         
@@ -2548,7 +2550,7 @@ app.get('/api/resultats/classement-details', authenticateToken, checkRole(['admi
 });
 
 
-app.get('/api/resultats/exporter-classement-excel', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/resultats/exporter-classement-excel', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { typeExamen, promotion } = req.query;
        const { classement, matieres } = await calculerClassementDetaille(typeExamen, promotion);
@@ -2611,7 +2613,7 @@ app.get('/api/resultats/exporter-classement-excel', authenticateToken, checkRole
     }
 });
 
-app.put('/api/copies/relier/:copieId', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.put('/api/copies/relier/:copieId', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     const { copieId } = req.params;
     const { nouvel_eleve_id, matiere_id } = req.body;
     const utilisateurId = req.user.id;
@@ -2662,7 +2664,7 @@ app.put('/api/copies/relier/:copieId', authenticateToken, checkRole(['admin', 'o
     }
 });
 
-app.delete('/api/copies/delier/:copieId', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.delete('/api/copies/delier/:copieId', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     const { copieId } = req.params;
     const connection = await db.getConnection();
 
@@ -2696,7 +2698,7 @@ app.delete('/api/copies/delier/:copieId', authenticateToken, checkRole(['admin',
     }
 });
 
-app.get('/api/anomalies', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.get('/api/anomalies', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const query = `
             SELECT
@@ -2715,7 +2717,7 @@ app.get('/api/anomalies', authenticateToken, checkRole(['admin', 'operateur_code
     }
 });
 
-app.post('/api/anomalies', authenticateToken, checkRole(['admin', 'operateur_code']), async (req, res) => {
+app.post('/api/anomalies', authenticateToken, checkRole(['admin', 'operateur_code', 'controleur']), async (req, res) => {
     const { matiere_id, motif } = req.body;
     const utilisateurId = req.user.id;
 
@@ -2732,7 +2734,7 @@ app.post('/api/anomalies', authenticateToken, checkRole(['admin', 'operateur_cod
     }
 });
 
-app.get('/api/resultats/sans-note/:matiereId', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/resultats/sans-note/:matiereId', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { matiereId } = req.params;
         const { type_examen } = req.query;
@@ -3294,7 +3296,7 @@ const getMentionForNote = (note) => {
 };
 
 
-app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/dashboard/summary-by-exam-type', authenticateToken, checkRole(['admin','controleur']), async (req, res) => {
     try {
         const { promotion, population } = req.query;
 
@@ -3508,7 +3510,7 @@ app.get('/api/dashboard/general-summary', authenticateToken, checkRole(['admin']
     }
 });
 
-app.get('/api/copies/mes-saisies-directes-recentes', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/copies/mes-saisies-directes-recentes', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const utilisateurId = req.user.id;
         const query = `
@@ -3538,7 +3540,7 @@ app.get('/api/copies/mes-saisies-directes-recentes', authenticateToken, checkRol
     }
 });
 
-app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { notes } = req.body; 
     const utilisateurId = req.user.id;
 
@@ -3629,7 +3631,7 @@ app.post('/api/copies/notes-directes-bulk', authenticateToken, checkRole(['admin
     }
 });
 // ═══════ Staging : saisie directe (bulk notes) ═══════
-app.post('/api/copies-temporaires/notes-directes-bulk', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.post('/api/copies-temporaires/notes-directes-bulk', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { notes } = req.body;
     const utilisateurId = req.user.id;
     const nomUtilisateur = req.user.nom_utilisateur;
@@ -3705,9 +3707,48 @@ app.post('/api/copies-temporaires/notes-directes-bulk', authenticateToken, check
         connection.release();
     }
 });
+// ═══════ Modification d'une saisie en attente ═══════
+app.put('/api/copies-temporaires/:id', authenticateToken,
+    checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { note, est_absence, motif_absence, type_examen } = req.body;
+
+        const [[temp]] = await db.query("SELECT * FROM copies_temporaires WHERE id = ?", [id]);
+        if (!temp) return res.status(404).json({ message: "Saisie introuvable." });
+
+        if (req.user.role === 'operateur_note' && temp.saisi_par_utilisateur_id !== req.user.id) {
+            return res.status(403).json({ message: "Vous ne pouvez modifier que vos propres saisies." });
+        }
+
+        const estAbsence = est_absence ? 1 : 0;
+        let noteNum = null;
+        if (!estAbsence) {
+            noteNum = parseFloat(note);
+            if (isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
+                return res.status(400).json({ message: "La note doit être un nombre entre 0 et 20." });
+            }
+        }
+
+        await db.query(`
+            UPDATE copies_temporaires
+            SET note = ?, est_absence = ?, motif_absence = ?, type_examen = ?
+            WHERE id = ?
+        `, [noteNum, estAbsence, estAbsence ? (motif_absence || null) : null,
+            type_examen || temp.type_examen, id]);
+
+        await logActivity(req.user.id, req.user.nom_utilisateur, 'MODIFICATION_SAISIE_TEMPORAIRE',
+            `A modifié la saisie temporaire ID ${id} (ancienne note : ${temp.note ?? 'absence'}).`);
+
+        res.json({ message: "Saisie modifiée avec succès." });
+    } catch (err) {
+        console.error("Erreur PUT /api/copies-temporaires/:id", err);
+        res.status(500).json({ message: "Erreur lors de la modification." });
+    }
+});
 
 // ═══════ Staging : saisie directe (bulk absences) ═══════
-app.post('/api/copies-temporaires/absences-bulk', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.post('/api/copies-temporaires/absences-bulk', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { absences } = req.body;
     const utilisateurId = req.user.id;
     const nomUtilisateur = req.user.nom_utilisateur;
@@ -3752,7 +3793,7 @@ app.post('/api/copies-temporaires/absences-bulk', authenticateToken, checkRole([
 });
 
 // ═══════ Staging : notation anonyme ═══════
-app.post('/api/copies-temporaires/anonyme', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.post('/api/copies-temporaires/anonyme', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { matiere_id, code_anonyme, note, type_examen } = req.body;
     const { id: utilisateurId, nom_utilisateur } = req.user;
 
@@ -3792,26 +3833,35 @@ app.post('/api/copies-temporaires/anonyme', authenticateToken, checkRole(['admin
 });
 
 // ═══════ Liste des saisies en attente ═══════
-app.get('/api/copies-temporaires', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/copies-temporaires', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { mine } = req.query;
-        let query = `
-            SELECT
-                ct.id, ct.source, ct.eleve_id, ct.code_anonyme, ct.matiere_id, ct.type_examen,
-                ct.note, ct.est_absence, ct.motif_absence, ct.details_parcours, ct.parcours_version,
-                ct.saisi_par_utilisateur_id, ct.saisi_par_nom, ct.date_saisie,
-                m.nom_matiere,
-                e.nom AS eleve_nom, e.prenom AS eleve_prenom, e.numero_incorporation, e.escadron, e.peloton
-            FROM copies_temporaires ct
-            JOIN matieres m ON ct.matiere_id = m.id
-            LEFT JOIN eleves e ON ct.eleve_id = e.id
-            WHERE 1=1
-        `;
+       let query = `
+    SELECT
+        ct.id, ct.source, ct.eleve_id, ct.code_anonyme, ct.matiere_id, ct.type_examen,
+        ct.note, ct.est_absence, ct.motif_absence, ct.details_parcours, ct.parcours_version,
+        ct.saisi_par_utilisateur_id, ct.saisi_par_nom, ct.date_saisie,
+        m.nom_matiere,
+        COALESCE(e.nom, e2.nom)                           AS eleve_nom,
+        COALESCE(e.prenom, e2.prenom)                     AS eleve_prenom,
+        COALESCE(e.numero_incorporation, e2.numero_incorporation) AS numero_incorporation,
+        COALESCE(e.escadron, e2.escadron)                 AS escadron,
+        COALESCE(e.peloton, e2.peloton)                   AS peloton,
+        (e2.id IS NOT NULL AND ct.eleve_id IS NULL)       AS identifie_par_code
+    FROM copies_temporaires ct
+    JOIN matieres m ON ct.matiere_id = m.id
+    LEFT JOIN eleves e ON ct.eleve_id = e.id
+    LEFT JOIN copies c ON ct.code_anonyme IS NOT NULL
+                      AND c.code_anonyme = ct.code_anonyme
+                      AND c.eleve_id IS NOT NULL
+    LEFT JOIN eleves e2 ON c.eleve_id = e2.id
+    WHERE 1=1
+`;
         const params = [];
 
-        // Un opérateur ne voit que ses propres saisies. L'admin voit tout,
+        // Un opérateur ne voit que ses propres saisies. L'admin/controleur voit tout,
         // sauf s'il précise explicitement mine=1 pour ne voir que les siennes.
-        if (req.user.role !== 'admin' || mine === '1') {
+        if (req.user.role === 'operateur_note' || mine === '1') {
             query += " AND ct.saisi_par_utilisateur_id = ?";
             params.push(req.user.id);
         }
@@ -3827,7 +3877,7 @@ app.get('/api/copies-temporaires', authenticateToken, checkRole(['admin', 'opera
 });
 
 // ═══════ Validation (staging -> table réelle) ═══════
-app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
         return res.status(400).json({ message: "Aucune saisie sélectionnée." });
@@ -3847,7 +3897,7 @@ app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin
                 continue;
             }
 
-            if (req.user.role !== 'admin' && temp.saisi_par_utilisateur_id !== req.user.id) {
+            if (req.user.role === 'operateur_note' && temp.saisi_par_utilisateur_id !== req.user.id) {
                 await connection.rollback();
                 resultats.echecs.push({ id, message: "Vous ne pouvez valider que vos propres saisies." });
                 continue;
@@ -3941,13 +3991,13 @@ app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin
 });
 
 // ═══════ Rejet d'une saisie en attente ═══════
-app.delete('/api/copies-temporaires/:id', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.delete('/api/copies-temporaires/:id', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const [[temp]] = await db.query("SELECT saisi_par_utilisateur_id FROM copies_temporaires WHERE id = ?", [id]);
         if (!temp) return res.status(404).json({ message: "Saisie introuvable." });
 
-        if (req.user.role !== 'admin' && temp.saisi_par_utilisateur_id !== req.user.id) {
+        if (req.user.role === 'operateur_note' && temp.saisi_par_utilisateur_id !== req.user.id) {
             return res.status(403).json({ message: "Vous ne pouvez rejeter que vos propres saisies." });
         }
 
@@ -3958,7 +4008,7 @@ app.delete('/api/copies-temporaires/:id', authenticateToken, checkRole(['admin',
     }
 });
 
-app.get('/api/copies/:copieId/parcours-details', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.get('/api/copies/:copieId/parcours-details', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { copieId } = req.params;
     const [[copie]] = await db.query(
         "SELECT details_parcours, parcours_version, note FROM copies WHERE id = ?", [copieId]
@@ -3970,7 +4020,7 @@ app.get('/api/copies/:copieId/parcours-details', authenticateToken, checkRole(['
 });
 
 // APRÈS
-app.get('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/configuration/examens', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { promotion } = req.query;
         
@@ -3996,7 +4046,7 @@ app.get('/api/configuration/examens', authenticateToken, checkRole(['admin']), a
     }
 });
 
-app.put('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/configuration/examens', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const fullConfiguration = req.body;
     const connection = await db.getConnection();
 
@@ -4164,7 +4214,8 @@ app.get('/api/dashboard-details/general/eleves-par-mention/:mention', authentica
 });
 
 
-app.get('/api/examens', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code']), async (req, res) => {
+app.get('/api/examens', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code', 'controleur']), async (req, res) => {
+
     try {
         const { promotion } = req.query;
         let query = "SELECT id, nom_modele, promotion FROM modeles_examens WHERE 1=1";
@@ -4180,7 +4231,7 @@ app.get('/api/examens', authenticateToken, checkRole(['admin', 'operateur_note',
         res.status(500).json({ message: "Erreur lors de la récupération des types d'examen." });
     }
 });
-app.post('/api/codes/generer', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post('/api/codes/generer', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { matiereId, nombreCodes } = req.body;
 
     if (!matiereId || !nombreCodes || nombreCodes <= 0) {
@@ -4239,7 +4290,7 @@ app.post('/api/codes/generer', authenticateToken, checkRole(['admin']), async (r
     }
 });
 
-app.post('/api/codes/previsualiser', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post('/api/codes/previsualiser', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { matiereId, nombreCodes } = req.body;
     if (!matiereId || !nombreCodes || nombreCodes <= 0) {
         return res.status(400).json({ message: "ID de matière et nombre de codes valide sont requis." });
@@ -4280,7 +4331,7 @@ app.post('/api/codes/previsualiser', authenticateToken, checkRole(['admin']), as
 });
 
 
-app.delete('/api/codes/lot/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete('/api/codes/lot/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { id } = req.params;
     const connection = await db.getConnection();
 
@@ -4312,7 +4363,7 @@ app.delete('/api/codes/lot/:id', authenticateToken, checkRole(['admin']), async 
     }
 });
 
-app.post('/api/codes/sauvegarder', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post('/api/codes/sauvegarder', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { matiereId, typeExamen, codes, promotion, population } = req.body; // Ajout population
     const utilisateurId = req.user.id;
 
@@ -4351,7 +4402,7 @@ await connection.query("INSERT INTO codes_anonymes_disponibles (code, promotion,
     }
 });
 
-app.get('/api/codes/lots', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/codes/lots', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const [lots] = await db.query(
             "SELECT id, nom_matiere, type_examen, promotion, population, nombre_codes, date_generation FROM lots_codes_generes ORDER BY date_generation DESC"
@@ -4362,7 +4413,7 @@ app.get('/api/codes/lots', authenticateToken, checkRole(['admin']), async (req, 
     }
 });
 
-app.get('/api/codes/lot/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/codes/lot/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const [[lot]] = await db.query("SELECT codes_json FROM lots_codes_generes WHERE id = ?", [id]);
@@ -4376,7 +4427,7 @@ app.get('/api/codes/lot/:id', authenticateToken, checkRole(['admin']), async (re
     }
 });
 
-app.post('/api/notes/importer-previsualisation', authenticateToken, checkRole(['admin','operateur_note']), upload.single('fichierNotes'), async (req, res) => {
+app.post('/api/notes/importer-previsualisation', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), upload.single('fichierNotes'), async (req, res) => {
     const { matiere_id, escadron, peloton, type_examen } = req.body;
 
     if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni." });
@@ -4455,7 +4506,7 @@ app.post('/api/notes/importer-previsualisation', authenticateToken, checkRole(['
     }
 });
 
-app.post('/api/notes/enregistrer-importation', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.post('/api/notes/enregistrer-importation', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { notes, matiere_id, type_examen } = req.body;
     const utilisateurId = req.user.id;
 
@@ -4501,7 +4552,7 @@ app.post('/api/notes/enregistrer-importation', authenticateToken, checkRole(['ad
     }
 });
 
-app.get('/api/escadrons', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.get('/api/escadrons', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const [escadrons] = await db.query(
             "SELECT DISTINCT escadron FROM eleves WHERE escadron IS NOT NULL ORDER BY escadron ASC"
@@ -4513,7 +4564,7 @@ app.get('/api/escadrons', authenticateToken, checkRole(['admin','operateur_note'
     }
 });
 
-app.get('/api/pelotons/:escadron', authenticateToken, checkRole(['admin','operateur_note']), async (req, res) => {
+app.get('/api/pelotons/:escadron', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { escadron } = req.params;
     try {
         const [pelotons] = await db.query(
@@ -4528,7 +4579,7 @@ app.get('/api/pelotons/:escadron', authenticateToken, checkRole(['admin','operat
 });
 
 // APRÈS — ajouter promotion dans le body
-app.post('/api/configuration/examens', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post('/api/configuration/examens', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { nom_modele, promotion } = req.body;
 
     if (!nom_modele || nom_modele.trim() === '') {
@@ -4555,7 +4606,7 @@ app.post('/api/configuration/examens', authenticateToken, checkRole(['admin']), 
     }
 });
 
-app.delete('/api/configuration/examens/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete('/api/configuration/examens/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { id } = req.params;
     const connection = await db.getConnection();
 
@@ -4583,31 +4634,25 @@ app.delete('/api/configuration/examens/:id', authenticateToken, checkRole(['admi
     }
 });
 
-app.get('/api/matieres-par-examen', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/matieres-par-examen', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     const { typeExamen, promotion } = req.query;
-
     if (!typeExamen) {
         return res.status(400).json({ message: "Le paramètre typeExamen est requis." });
     }
-
     try {
         let query = `
-            SELECT m.id, m.nom_matiere
+            SELECT m.id, m.nom_matiere, m.code_prefixe
             FROM matieres m
             JOIN examens_configurations ec ON m.id = ec.matiere_id
             JOIN modeles_examens me ON ec.modele_examen_id = me.id
             WHERE me.nom_modele = ?
         `;
         const params = [typeExamen];
-
-        // ✅ Filtrer par promotion si fournie
         if (promotion && promotion !== 'all') {
             query += " AND me.promotion = ?";
             params.push(promotion);
         }
-
         query += " ORDER BY m.nom_matiere";
-
         const [matieres] = await db.query(query, params);
         res.json(matieres);
     } catch (err) {
@@ -4615,7 +4660,7 @@ app.get('/api/matieres-par-examen', authenticateToken, checkRole(['admin', 'oper
         res.status(500).json({ message: "Erreur lors de la récupération des matières pour cet examen." });
     }
 });
-app.get('/api/stats/notes-utilisateur-specifique', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/stats/notes-utilisateur-specifique', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { matiereId, typeExamen } = req.query;
         const utilisateurId = req.user.id;
@@ -4640,7 +4685,7 @@ app.get('/api/stats/notes-utilisateur-specifique', authenticateToken, checkRole(
         res.status(500).json({ error: "Erreur lors du calcul des statistiques utilisateur spécifiques." });
     }
 });
-app.post('/api/decisions-conseil', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post('/api/decisions-conseil', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { eleve_id, type_decision, motif, type_examen } = req.body;
     const typeExamenFinal = type_examen || 'General';
 
@@ -4682,7 +4727,7 @@ app.post('/api/decisions-conseil', authenticateToken, checkRole(['admin']), asyn
     }
 });
 
-app.post('/api/conseil/pieces-jointes', authenticateToken, checkRole(['admin']), uploadConseil.single('fichier'), async (req, res) => {
+app.post('/api/conseil/pieces-jointes', authenticateToken, checkRole(['admin', 'controleur']), uploadConseil.single('fichier'), async (req, res) => {
     try {
         const { promotion, type_examen, eleve_id, categorie } = req.body;
         if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni." });
@@ -4795,7 +4840,7 @@ app.get('/api/conseil/pieces-jointes/:id/telecharger', authenticateToken, async 
     }
 });
 
-app.delete('/api/conseil/pieces-jointes/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete('/api/conseil/pieces-jointes/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const [[piece]] = await db.query("SELECT chemin_fichier FROM conseil_pieces_jointes WHERE id = ?", [req.params.id]);
         await db.query("DELETE FROM conseil_pieces_jointes WHERE id = ?", [req.params.id]);
@@ -4823,7 +4868,7 @@ app.get('/api/conseil/conclusions', authenticateToken, async (req, res) => {
     }
 });
 
-app.put('/api/conseil/conclusions', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/conseil/conclusions', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { promotion, type_examen, date_conseil, lieu, president, texte_conclusion } = req.body;
         if (!promotion || !type_examen) {
@@ -4852,7 +4897,7 @@ app.put('/api/conseil/conclusions', authenticateToken, checkRole(['admin']), asy
 });
 
 // 2. Route pour MODIFIER une décision
-app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { id } = req.params;
     const { type_decision, motif } = req.body;
     try {
@@ -4890,7 +4935,7 @@ app.get('/api/decisions-conseil', authenticateToken, async (req, res) => {
 });
 
 // Ajoute aussi cette route pour la mise à jour (Action modifier)
-app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { id } = req.params;
     const { type_decision, motif } = req.body;
     try {
@@ -4905,7 +4950,7 @@ app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), a
 });
 
 
-app.delete('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         await db.query("DELETE FROM decisions_conseil WHERE id = ?", [req.params.id]);
         res.json({ message: "Décision supprimée" });
@@ -4913,7 +4958,7 @@ app.delete('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin'])
         res.status(500).json({ error: err.message });
     }
 });
-app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const { id } = req.params;
     const { type_decision, motif } = req.body;
     try {
@@ -4928,7 +4973,7 @@ app.put('/api/decisions-conseil/:id', authenticateToken, checkRole(['admin']), a
 });
 
 
-app.get('/api/dashboard/evolution-conseil', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/dashboard/evolution-conseil', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { promotion } = req.query;
         const [elevesConseil] = await db.query(
@@ -4978,7 +5023,7 @@ app.get('/api/dashboard/evolution-conseil', authenticateToken, checkRole(['admin
 
 // Route pour déclencher le calcul global et remplir la table de cache
 
-app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.post('/api/resultats/generer-statistiques', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     const connection = await db.getConnection();
     req.setTimeout(600000);
     try {
@@ -5325,7 +5370,7 @@ app.get('/api/resultats/stats-eleve/:id', authenticateToken, async (req, res) =>
         res.status(500).json({ error: "Erreur lors de la récupération des statistiques." });
     }
 });
-app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { typeExamen, promotion, population } = req.query;
 
@@ -5415,7 +5460,7 @@ app.get('/api/resultats/sans-note-complete', authenticateToken, checkRole(['admi
         res.status(500).json({ error: err.message });
     }
 });
-app.get('/api/resultats/exporter-manquants', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.get('/api/resultats/exporter-manquants', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
     try {
         const { matiereId, typeExamen, promotion, population } = req.query;
 
@@ -5515,7 +5560,7 @@ app.get('/api/resultats/exporter-manquants', authenticateToken, checkRole(['admi
         res.status(500).json({ error: "Erreur lors de la génération du fichier Excel des manquants." });
     }
 });
-app.get('/api/stats/mes-notes-directes-par-matiere', authenticateToken, checkRole(['admin', 'operateur_note']), async (req, res) => {
+app.get('/api/stats/mes-notes-directes-par-matiere', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
     try {
         const { typeExamen, promotion } = req.query;
         const utilisateurId = req.user.id;

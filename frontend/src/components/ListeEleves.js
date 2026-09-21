@@ -453,15 +453,16 @@ const [eleveNotesSelectionne, setEleveNotesSelectionne] = useState(null);
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     }), []);
 
-    useEffect(() => {
-        const token = localStorage.getItem('token');
-        if (token) {
-            try {
-                const decoded = jwtDecode(token);
-                setIsAdmin(decoded.role === 'admin');
-            } catch (e) { /* ignore */ }
-        }
-    }, []);
+   useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+        try {
+            const decoded = jwtDecode(token);
+            const rolesAutorises = ['admin', 'controleur'];
+            setIsAdmin(rolesAutorises.includes(decoded.role));
+        } catch (e) { /* ignore */ }
+    }
+}, []);
 
     // ── Chargement initial des promotions ──────────────────────────────────
     useEffect(() => {

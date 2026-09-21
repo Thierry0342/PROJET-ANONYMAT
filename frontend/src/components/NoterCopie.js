@@ -5,11 +5,11 @@ import Counter from './Counter';
 import FizzyButton from './FizzyButton';
 import {
     FaCheckCircle,
-    FaExclamationTriangle,
+   
     FaTimesCircle,
     FaSpinner,
     FaBell,
-    FaPencilAlt,
+   
     FaQuestionCircle,
     FaInfoCircle,
     FaLock
@@ -267,14 +267,17 @@ function NoterCopie() {
 
     useEffect(() => {
         const isMilestone = statsUtilisateur > 0 && statsUtilisateur % 100 === 0;
-        const hasIncreased = statsUtilisateur > prevStatsUtilisateur.current;
-        if (isMilestone && hasIncreased) {
-            const totalNotes = statsMatiere.totalInscrits;
-            let message = { title: 'Félicitations !', body: 'Vous venez de franchir un nouveau cap ! Continuez comme ça !' };
-            setMilestoneMessage(message);
-            setMilestoneCount(statsUtilisateur);
-            setIsMilestoneModalOpen(true);
-        }
+const hasIncreased = statsUtilisateur > prevStatsUtilisateur.current;
+if (isMilestone && hasIncreased) {
+    const totalNotes = statsMatiere.totalInscrits;
+    let message = {
+        title: 'Félicitations !',
+        body: `Vous venez de franchir un nouveau cap ! ${totalNotes > 0 ? `(${totalNotes} notes au total pour cette matière)` : ''} Continuez comme ça !`
+    };
+    setMilestoneMessage(message);
+    setMilestoneCount(statsUtilisateur);
+    setIsMilestoneModalOpen(true);
+}
         prevStatsUtilisateur.current = statsUtilisateur;
     }, [statsUtilisateur, statsMatiere.totalInscrits, statsMatiere.notesManquantes]);
 
@@ -293,21 +296,25 @@ function NoterCopie() {
     }, [assignment]);
 
     // ── Changement de matière (mode libre) ───────────────────────────────────
-    const handleMatiereChange = (e) => {
-        const matiereId = e.target.value;
-        const matiereList = assignment ? matieres : filteredMatieres;
-        const selectedMatiere = matiereId
-            ? matiereList.find(m => m.id.toString() === matiereId)
-            : undefined;
-        setSelectedMatiereId(matiereId);
-        setSelectedMatierePrefix(
-            selectedMatiere?.code_prefixe
-                ? selectedMatiere.code_prefixe.trim().toUpperCase()
-                : ''
-        );
-        resetFields(false);
-        fetchStats(matiereId || null);
-    };
+ const handleMatiereChange = (e) => {
+    const matiereId = e.target.value;
+    const matiereList = assignment ? matieres : filteredMatieres;
+    let selectedMatiere = matiereId
+        ? matiereList.find(m => m.id.toString() === matiereId)
+        : undefined;
+
+    // Repli : la liste filtrée peut ne pas porter le préfixe
+    if (matiereId && !selectedMatiere?.code_prefixe) {
+        selectedMatiere = matieres.find(m => m.id.toString() === matiereId) || selectedMatiere;
+    }
+
+    setSelectedMatiereId(matiereId);
+    setSelectedMatierePrefix(
+        selectedMatiere?.code_prefixe ? selectedMatiere.code_prefixe.trim().toUpperCase() : ''
+    );
+    resetFields(false);
+    fetchStats(matiereId || null);
+};
 
     const handleCodeSuffixChange = (e) => {
         const suffix = e.target.value.toUpperCase().replace(/[^0-9]/g, '');
@@ -581,7 +588,7 @@ function NoterCopie() {
                     )}
 
                     {/* ── Champs communs Code + Note ── */}
-                    <div className="form-group">
+                <div className="form-group">
                         <label>Code Anonyme</label>
                         <div className="code-input-wrapper">
                             <span className="code-prefix">{selectedMatierePrefix}</span>
@@ -597,6 +604,11 @@ function NoterCopie() {
                                 autoComplete="off"
                                 required
                             />
+                            {selectedMatiereId && !selectedMatierePrefix && (
+                        <small style={{ color: '#e53e3e' }}>
+                            Cette matière n'a pas de préfixe de code défini — contactez l'administrateur.
+                        </small>
+                    )}
                             <div className="val-icon-container">
                                 {codeValidation.status === 'checking' ? <FaSpinner className="spinner" /> :
                                     codeValidation.status === 'valid' ? <FaCheckCircle className="valid" /> :
@@ -604,6 +616,7 @@ function NoterCopie() {
                             </div>
                         </div>
                     </div>
+                    
 
                     <div className="form-group">
                         <label>Note / 20</label>
@@ -630,6 +643,11 @@ function NoterCopie() {
                     >
                         Enregistrer
                     </button>
+                    {submitMessage && (
+    <div className={`message ${isSubmitError ? 'error' : 'success'}`}>
+        <span>{submitMessage}</span>
+    </div>
+)}
 
                     {conflictData && (
                         <div className="message warning">
@@ -664,17 +682,61 @@ function NoterCopie() {
                 </div>
             )}
 
-            {isReclamationModalOpen && (
-                <div className="modal-overlay">
-                    <div className="modal-content large">
-                        <h2>Réclamations</h2>
-                        {reclamations.map(r => (
-                            <div key={r.id}>{r.code_anonyme} - {r.note_proposee} <button onClick={() => handleFetchDetails(r)}>Détails</button></div>
-                        ))}
-                        <button onClick={() => setIsReclamationModalOpen(false)}>Fermer</button>
-                    </div>
+            {isMilestoneModalOpen && (
+    <div className="modal-overlay">
+        <div className="modal-content">
+            <h2>{milestoneMessage.title}</h2>
+            <p>{milestoneMessage.body}</p>
+            <p><strong>{milestoneCount}</strong> notes saisies au total.</p>
+            <button className="btn btn-primary" onClick={() => setIsMilestoneModalOpen(false)}>Continuer</button>
+        </div>
+    </div>
+)}{isReclamationModalOpen && (
+    <div className="modal-overlay">
+        <div className="modal-content large">
+            <h2>Réclamations</h2>
+            {isLoadingReclamations ? <p>Chargement...</p> : (
+                <>
+                    {reclamations.length === 0 && <p>Aucune réclamation en attente.</p>}
+                    {reclamations.map(r => (
+                        <div key={r.id} className="reclamation-row">
+                            <span>{r.nom_matiere} — {r.code_anonyme} — Note proposée : {r.note_proposee}</span>
+                            <button onClick={() => handleFetchDetails(r)}>Détails</button>
+                            <button onClick={() => handleResolveReclamation(r.id)}>Marquer résolu</button>
+                        </div>
+                    ))}
+                </>
+            )}
+
+            {selectedReclamation && selectedReclamationDetails && (
+                <div className="reclamation-details">
+                    <h3>Détails — {selectedReclamation.code_anonyme}</h3>
+                    {selectedReclamationDetails.isLoading ? <p>Chargement des détails...</p> :
+                     selectedReclamationDetails.error ? <p>{selectedReclamationDetails.error}</p> : (
+                        <>
+                            <p>Note originale : {selectedReclamationDetails.note_originale}</p>
+                            <p>Saisie par : {selectedReclamationDetails.nom_utilisateur}</p>
+                            <form onSubmit={handleCorrectionSubmit}>
+                                <label>Nouvelle note</label>
+                                <input
+                                    type="number" min="0" max="20" step="0.25"
+                                    value={nouvelleNoteCorrection}
+                                    onChange={e => setNouvelleNoteCorrection(e.target.value)}
+                                    required
+                                />
+                                <button type="submit" className="btn btn-primary">Corriger</button>
+                            </form>
+                        </>
+                    )}
                 </div>
             )}
+
+            <button onClick={() => { setIsReclamationModalOpen(false); setSelectedReclamation(null); setSelectedReclamationDetails(null); }}>
+                Fermer
+            </button>
+        </div>
+    </div>
+)}
 
             <style jsx>{`
                 .free-selectors-box {

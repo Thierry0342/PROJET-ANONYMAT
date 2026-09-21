@@ -53,23 +53,30 @@ const getUserFromToken = () => {
 const getNavItemsForUser = (user) => {
     if (!user) return [];
 
-    const navItems = [
-        { label: "Dashboard", to: "/dashboard", icon: <FiGrid /> },
-         { label: "Liste des Élèves", to: "/liste-eleves", icon: <FiUsers /> }
-    ];
+    const navItems = [];
+
+    // Dashboard : visible pour tous SAUF le controleur
+    if (user.role !== 'controleur') {
+        navItems.push({ label: "Dashboard", to: "/dashboard", icon: <FiGrid /> });
+    }
+
+    // Liste des Élèves : visible UNIQUEMENT pour le controleur (l'admin ne la voit pas)
+    if (user.role === 'controleur') {
+        navItems.push({ label: "Liste des Élèves", to: "/liste-eleves", icon: <FiUsers /> });
+    }
 
     const operActions = [];
-    if (user.role === 'admin' || user.role === 'operateur_code') {
+    if (user.role === 'admin' || user.role === 'operateur_code' || user.role === 'controleur') {
         operActions.push({ label: "Lier des Codes", to: "/", icon: <FiLink /> });
     }
-    if (user.role === 'admin' || user.role === 'operateur_note') {
+    if (user.role === 'admin' || user.role === 'operateur_note' || user.role === 'controleur') {
         operActions.push({ label: "Saisir les Notes", to: "/noter", icon: <FiEdit /> });
         operActions.push({ label: "Saisie Directe", to: "/saisie-directe", icon: <FiFileText /> });
         operActions.push({ label: "Importer Notes", to: "/importer-notes", icon: <FiUploadCloud /> });
     }
-    if (user.role === 'operateur_note') {
+    // Validation des Notes : UNIQUEMENT le controleur
+    if (user.role === 'controleur') {
        operActions.push({ label: "Validation des Notes", to: "/validation-notes", icon: <FiCheckCircle /> });
-
     }
 
     if (operActions.length > 0) {
@@ -79,31 +86,33 @@ const getNavItemsForUser = (user) => {
         });
     }
 
-    if (user.role === 'admin') {
-        navItems.push(
-            {
-                label: "Gestion",
-                subItems: [
-                    { label: "Conseil Formation", to: "/conseil-formation", icon: <FaGavel /> },
-                    { label: "Copies Notées", to: "/copies-notees", icon: <FiCheckSquare /> },
-                    { label: "Gérer Absences", to: "/gestion-absences", icon: <FiSlash /> },
-                    { label: "Voir Résultats", to: "/resultats", icon: <FiBarChart2 /> },
-                ]
-            },
-            {
-                label: "Administration",
-                subItems: [
-                    { label: "Gérer Utilisateurs", to: "/gestion-utilisateurs", icon: <FiUsers /> },
-                    { label: "Assignations", to: "/config-assignation", icon: <FiCheckSquare /> },
-                    { label: "Créer Matière", to: "/creer-matiere", icon: <FiPlusSquare /> },
-                    { label: "Importer Élèves", to: "/importer-eleves", icon: <FiUserPlus /> },
-                    { label: "Importer Matricules (MLE)", to: "/importer-matricules", icon: <FiHash /> },
-                    { label: "Importer Codes", to: "/importer-codes", icon: <FiKey /> },
-                    { label: "Générer Codes", to: "/generer-codes-matiere", icon: <FiPrinter /> },
-                ]
-            }
-        );
+    // Gestion + Administration : admin ET controleur
+    if (user.role === 'admin' || user.role === 'controleur') {
+        const gestionItems = [
+            { label: "Conseil Formation", to: "/conseil-formation", icon: <FaGavel /> },
+            { label: "Copies Notées", to: "/copies-notees", icon: <FiCheckSquare /> },
+            { label: "Gérer Absences", to: "/gestion-absences", icon: <FiSlash /> },
+        ];
+        // Voir Résultats reste réservé à l'admin
+        if (user.role === 'admin') {
+            gestionItems.push({ label: "Voir Résultats", to: "/resultats", icon: <FiBarChart2 /> });
+        }
+        navItems.push({ label: "Gestion", subItems: gestionItems });
+
+        navItems.push({
+            label: "Administration",
+            subItems: [
+                { label: "Gérer Utilisateurs", to: "/gestion-utilisateurs", icon: <FiUsers /> },
+                { label: "Assignations", to: "/config-assignation", icon: <FiCheckSquare /> },
+                { label: "Créer Matière", to: "/creer-matiere", icon: <FiPlusSquare /> },
+                { label: "Importer Élèves", to: "/importer-eleves", icon: <FiUserPlus /> },
+                { label: "Importer Matricules (MLE)", to: "/importer-matricules", icon: <FiHash /> },
+                { label: "Importer Codes", to: "/importer-codes", icon: <FiKey /> },
+                { label: "Générer Codes", to: "/generer-codes-matiere", icon: <FiPrinter /> },
+            ]
+        });
     }
+
     return navItems;
 };
 
@@ -126,6 +135,8 @@ const AppContent = () => {
                 navigate('/dashboard');
             } else if (currentUser.role === 'operateur_code') {
                 navigate('/');
+            } else if (currentUser.role === 'controleur') {
+                navigate('/validation-notes');
             } else {
                 navigate('/noter');
             }
@@ -163,26 +174,29 @@ const AppContent = () => {
                             <Route path="/dashboard" element={user.role === 'admin' ? <Dashboard /> : <Navigate to="/" />} />
                             <Route path="/dashboard/general" element={user.role === 'admin' ? <DashboardGeneral /> : <Navigate to="/" />} />
                             <Route path="/dashboard/:typeExamen" element={user.role === 'admin' ? <DashboardExamen /> : <Navigate to="/" />} />
-                            <Route path="/conseil-formation" element={user.role === 'admin' ? <ConseilFormation /> : <Navigate to="/" />} />
-                            <Route path="/" element={(user.role === 'admin' || user.role === 'operateur_code') ? <LierCode /> : <Navigate to="/noter" />} />
-                            <Route path="/noter" element={(user.role === 'admin' || user.role === 'operateur_note') ? <NoterCopie /> : <Navigate to="/" />} />
-                            <Route path="/saisie-directe" element={(user.role === 'admin' || user.role === 'operateur_note') ? <SaisieDirecte /> : <Navigate to="/" />} />
-                            <Route path="/gestion-absences" element={user.role === 'admin' ? <GestionAbsences /> : <Navigate to="/" />} />
+                            <Route path="/conseil-formation" element={(user.role === 'admin' || user.role === 'controleur') ? <ConseilFormation /> : <Navigate to="/" />} />
+                            <Route path="/" element={(user.role === 'admin' || user.role === 'operateur_code' || user.role === 'controleur') ? <LierCode /> : <Navigate to="/noter" />} />
+                            <Route path="/noter" element={(user.role === 'admin' || user.role === 'operateur_note' || user.role === 'controleur') ? <NoterCopie /> : <Navigate to="/" />} />
+                            <Route path="/saisie-directe" element={(user.role === 'admin' || user.role === 'operateur_note' || user.role === 'controleur') ? <SaisieDirecte /> : <Navigate to="/" />} />
+                            <Route path="/gestion-absences" element={(user.role === 'admin' || user.role === 'controleur') ? <GestionAbsences /> : <Navigate to="/" />} />
                             <Route path="/resultats" element={user.role === 'admin' ? <Resultats /> : <Navigate to="/" />} />
-                            <Route path="/creer-matiere" element={user.role === 'admin' ? <CreerMatiere /> : <Navigate to="/" />} />
-                            <Route path="/gestion-utilisateurs" element={user.role === 'admin' ? <GestionUtilisateurs /> : <Navigate to="/" />} />
-                            <Route path="/config-assignation" element={user.role === 'admin' ? <ConfigurationAssignation /> : <Navigate to="/" />} />
-                            <Route path="/importer-eleves" element={user.role === 'admin' ? <ImporterEleves /> : <Navigate to="/" />} />
-                            <Route path="/importer-matricules" element={user.role === 'admin' ? <ImporterMatricules /> : <Navigate to="/" />} />
-                            <Route path="/importer-notes" element={(user.role === 'admin' || user.role === 'operateur_note') ? <ImporterNotes /> : <Navigate to="/" />} />
-                            <Route path="/importer-codes" element={user.role === 'admin' ? <ImporterCodes /> : <Navigate to="/" />} />
-                            <Route path="/generer-codes-matiere" element={user.role === 'admin' ? <CreerCodesMatiere /> : <Navigate to="/" />} />
-                            <Route path="/copies-notees" element={user.role === 'admin' ? <CopiesNotees /> : <Navigate to="/" />} />
+                            <Route path="/creer-matiere" element={(user.role === 'admin' || user.role === 'controleur') ? <CreerMatiere /> : <Navigate to="/" />} />
+                            <Route path="/gestion-utilisateurs" element={(user.role === 'admin' || user.role === 'controleur') ? <GestionUtilisateurs /> : <Navigate to="/" />} />
+                            <Route path="/config-assignation" element={(user.role === 'admin' || user.role === 'controleur') ? <ConfigurationAssignation /> : <Navigate to="/" />} />
+                            <Route path="/importer-eleves" element={(user.role === 'admin' || user.role === 'controleur') ? <ImporterEleves /> : <Navigate to="/" />} />
+                            <Route path="/importer-matricules" element={(user.role === 'admin' || user.role === 'controleur') ? <ImporterMatricules /> : <Navigate to="/" />} />
+                            <Route path="/importer-notes" element={(user.role === 'admin' || user.role === 'operateur_note' || user.role === 'controleur') ? <ImporterNotes /> : <Navigate to="/" />} />
+                            <Route path="/importer-codes" element={(user.role === 'admin' || user.role === 'controleur') ? <ImporterCodes /> : <Navigate to="/" />} />
+                            <Route path="/generer-codes-matiere" element={(user.role === 'admin' || user.role === 'controleur') ? <CreerCodesMatiere /> : <Navigate to="/" />} />
+                            <Route path="/copies-notees" element={(user.role === 'admin' || user.role === 'controleur') ? <CopiesNotees /> : <Navigate to="/" />} />
                             <Route path="/1" element={user.role === 'admin' ? <Inc1 /> : <Navigate to="/" />} />
-                            <Route path="/liste-eleves" element={<ListeEleves />} />
+                            <Route path="/liste-eleves" element={user.role === 'controleur' ? <ListeEleves /> : <Navigate to="/" />} />
                             <Route path="/2" element={user.role === 'admin' ? <Inc2 /> : <Navigate to="/" />} />
                             <Route path="*" element={<Navigate to="/dashboard" />} />
-                            <Route path="/validation-notes"element={(user.role === 'admin' || user.role === 'operateur_note') ? <ValidationNotes isAdmin={user.role === 'admin'} /> : <Navigate to="/" />}/>
+                            <Route
+                                path="/validation-notes"
+                                element={user.role === 'controleur' ? <ValidationNotes isAdmin={false} /> : <Navigate to="/" />}
+                            />
                         </Routes>
                     </main>
                 </div>

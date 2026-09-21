@@ -39,6 +39,8 @@ const CreerCodesMatiere = () => {
     const [selectedMatiere, setSelectedMatiere] = useState('');
     const [selectedExamen, setSelectedExamen] = useState('');
     const [selectedPromotion, setSelectedPromotion] = useState('79E');
+    const [isLoadingExamens, setIsLoadingExamens] = useState(false);
+    const [isLoadingMatieres, setIsLoadingMatieres] = useState(false);
     const [selectedPopulation, setSelectedPopulation] = useState('all');
     const [nombreCodes, setNombreCodes] = useState(10);
     const [historique, setHistorique] = useState([]);
@@ -47,6 +49,9 @@ const CreerCodesMatiere = () => {
     const [codesAPrevisualiser, setCodesAPrevisualiser] = useState([]);
     const [dataPourSauvegarde, setDataPourSauvegarde] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+       const getConfig = useCallback(() => ({
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+    }), []);
 
     const populations = [
     { id: 'all', label: 'Toute la promotion (Mixte)' },
@@ -67,6 +72,50 @@ const CreerCodesMatiere = () => {
             setMatieres(resM.data); setExamens(resE.data); setHistorique(resL.data);
         } catch (err) { console.error(err); }
     };
+       const fetchHistorique = async () => {
+    try {
+        const res = await axios.get('/api/codes/lots', getConfig());
+        setHistorique(res.data);
+    } catch (err) { console.error(err); }
+};
+    useEffect(() => { fetchHistorique(); }, []);
+
+    // 1) Promotion -> examens
+    useEffect(() => {
+        const load = async () => {
+            setSelectedExamen('');
+            setSelectedMatiere('');
+            setMatieres([]);
+            if (!selectedPromotion) { setExamens([]); return; }
+            setIsLoadingExamens(true);
+            try {
+                const res = await axios.get(`/api/examens?promotion=${selectedPromotion}`, config);
+                setExamens(res.data);
+            } catch { setExamens([]); }
+            finally { setIsLoadingExamens(false); }
+        };
+        load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedPromotion]);
+
+    // 2) Examen (+promotion) -> matières
+    useEffect(() => {
+        const load = async () => {
+            setSelectedMatiere('');
+            if (!selectedExamen || !selectedPromotion) { setMatieres([]); return; }
+            setIsLoadingMatieres(true);
+            try {
+                const res = await axios.get(
+                    `/api/matieres-par-examen?typeExamen=${selectedExamen}&promotion=${selectedPromotion}`,
+                    config
+                );
+                setMatieres(res.data);
+            } catch { setMatieres([]); }
+            finally { setIsLoadingMatieres(false); }
+        };
+        load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedExamen, selectedPromotion]);
 
     useEffect(() => { fetchData(); }, []);
 
@@ -131,16 +180,22 @@ const CreerCodesMatiere = () => {
                         </select>
                     </div>
                     <div className="form-group"><label>Matière</label>
-                        <select value={selectedMatiere} onChange={e => setSelectedMatiere(e.target.value)} required>
+                        <select value={selectedMatiere} onChange={e => setSelectedMatiere(e.target.value)}
+                                disabled={!selectedExamen || isLoadingMatieres} required>
                             <option value="">-- Choisir --</option>
                             {matieres.map(m => <option key={m.id} value={m.id}>{m.nom_matiere}</option>)}
                         </select>
+                        {selectedExamen && !isLoadingMatieres && matieres.length === 0 &&
+                            <small style={{color:'#e53e3e'}}>Aucune matière configurée pour cet examen</small>}
                     </div>
                     <div className="form-group"><label>Examen</label>
-                        <select value={selectedExamen} onChange={e => setSelectedExamen(e.target.value)} required>
+                        <select value={selectedExamen} onChange={e => setSelectedExamen(e.target.value)}
+                                disabled={!selectedPromotion || isLoadingExamens} required>
                             <option value="">-- Type --</option>
                             {examens.map(ex => <option key={ex.id} value={ex.nom_modele}>{ex.nom_modele}</option>)}
                         </select>
+                        {selectedPromotion && !isLoadingExamens && examens.length === 0 &&
+                            <small style={{color:'#e53e3e'}}>Aucun examen configuré pour {selectedPromotion}</small>}
                     </div>
                     <div className="form-group"><label>Nombre de codes</label>
                         <input type="number" value={nombreCodes} onChange={e => setNombreCodes(e.target.value)} min="1" required />

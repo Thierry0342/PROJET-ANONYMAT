@@ -151,6 +151,7 @@ const AuthPage = ({ onLoginSuccess }) => {
                             <select name="role" value={registerData.role} onChange={handleRegisterChange} className="input" required>
                                 <option value="operateur_note">Rôle: Opérateur de Note</option>
                                 <option value="operateur_code">Rôle: Opérateur de Code</option>
+                                <option value="controleur">Rôle: Contrôleur</option>
                                 <option value="admin">Rôle: Administrateur</option>
                             </select>
                         </div>

@@ -739,11 +739,22 @@ const suggestions = useMemo(() => {
                                     <td className="actions-cell">
                                     <button className="btn-action edit" title="Modifier" onClick={() => setEditingResult(r)}><IconEdit /></button>
                                     <button className="btn-action history" title="Historique" onClick={() => setViewingHistoryOf(r)}><IconHistory /></button>
-                                     <button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>
-                                    </td>
+                                    <button className="btn-action delete" title="Supprimer" onClick={() => handleDelete(r.copie_id, `${r.prenom} ${r.nom}`)}><IconTrash /></button>
+                                    {(r.nom_matiere || '').trim().toUpperCase().startsWith('PG') && r.details_parcours && (
+                                        <button
+                                            className="btn-action heures"
+                                            title="Voir les heures (Parcours chronométré)"
+                                            onClick={() => setViewingHeuresOf(r)}
+                                        >
+                                            <FaClock />
+                                        </button>
+                                    )}
+                                    
+                                </td>
                                 </tr>
                             )) : (
-                                <tr><td colSpan="7" className="empty-state">Aucun résultat trouvé.</td></tr>
+                                <tr>
+                                    <td colSpan="7" className="empty-state">Aucun résultat trouvé.</td></tr>
                             )}
                         </tbody>
                     </table>
