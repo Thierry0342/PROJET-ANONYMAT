@@ -35,23 +35,6 @@ import { FaGavel } from 'react-icons/fa';
 
 import './App.css';
 
-// TEMPORAIRE - à retirer après debug
-const composants = {
-  AuthPage, WelcomePage, LierCode, NoterCopie, Resultats, CreerMatiere,
-  GestionUtilisateurs, ImporterEleves, ImporterMatricules, ImporterCodes,
-  ImporterNotes, CopiesNotees, GestionAbsences, SaisieDirecte,
-  Inc1, Inc2, Dashboard, DashboardGeneral, DashboardExamen,
-  CreerCodesMatiere, ConfigurationAssignation, ConseilFormation,
-  ListeEleves, Sidebar, AnimatedNodeBackground, GlobalActivityTracker,
-  ValidationNotes
-};
-
-Object.entries(composants).forEach(([nom, comp]) => {
-  const type = typeof comp;
-  if (type !== 'function') {
-    console.error(`❌ PROBLÈME : "${nom}" est de type "${type}" au lieu de "function". Valeur:`, comp);
-  }
-});
 
 const getUserFromToken = () => {
     const token = localStorage.getItem('token');

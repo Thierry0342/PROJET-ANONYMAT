@@ -72,6 +72,11 @@ const CHECKPOINTS_PARCOURS_NOUVEAU = [
     { key: 'tir', label: 'TIR', arrivee: true, depart: true },
     { key: 'os', label: 'OS', arrivee: true, depart: false },
 ];
+const CHECKPOINTS_PARCOURS_RATTRAPAGE = [
+    { key: 'vatambe', label: 'VATAMBE', arrivee: false, depart: true },
+    { key: 'ankofa', label: 'ANKOFA', arrivee: true, depart: true },
+    { key: 'ankorombe', label: 'ANKOROMBE', arrivee: true, depart: true, arriveeChainee: false },
+];
 
 // Construit la liste à plat de TOUS les champs saisissables d'un poste (pour
 // l'affichage du tableau et la vérification chronologique complète).
@@ -90,7 +95,6 @@ const construireChampsOrdonnes = (checkpoints) => checkpoints.reduce((champs, cp
     if (cp.depart) champs.push(`${cp.key}_depart`);
     return champs;
 }, []);
-
 // ── Configuration des 2 versions du circuit, sélectionnable dans le formulaire ──
 // Les deux versions partagent le MÊME barème (BAREME_PARCOURS) car la longueur
 // totale du circuit n'a pas changé, seuls des ateliers ont été ajoutés.
@@ -113,9 +117,18 @@ const VERSIONS_PARCOURS = {
         champsTous: construireChampsTous(CHECKPOINTS_PARCOURS_ANCIEN),
         champsOrdonnes: construireChampsOrdonnes(CHECKPOINTS_PARCOURS_ANCIEN),
     },
+    rattrapage: {
+        id: 'rattrapage',
+        label: 'Rattrapage',
+        description: 'Circuit de rattrapage (VATAMBE, ANKOFA, ANKOROMBE)',
+        checkpoints: CHECKPOINTS_PARCOURS_RATTRAPAGE,
+        bareme: BAREME_PARCOURS,
+        champsTous: construireChampsTous(CHECKPOINTS_PARCOURS_RATTRAPAGE),
+        champsOrdonnes: construireChampsOrdonnes(CHECKPOINTS_PARCOURS_RATTRAPAGE),
+    },
 };
 
-// ⚠️ Nom de la matière qui déclenche le mode "Parcours chronométré".
+//  Nom de la matière qui déclenche le mode "Parcours chronométré".
 // La comparaison est tolérante : elle matche toute matière dont le nom
 // commence par "PG" (ex: "PG", "PG (Bonus)", "PG Bonus"...).
 const MATIERE_PARCOURS_NOM = 'PG';
