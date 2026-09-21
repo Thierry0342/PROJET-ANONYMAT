@@ -278,7 +278,25 @@ try {
     } catch (err) {
         console.error('❌ Erreur migration copies_temporaires:', err.message);
     }
+    // 11. Migration : table listes_selection_eleves (listes réutilisables pour l'export ciblé)
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS listes_selection_eleves (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                utilisateur_id INT NOT NULL,
+                nom_liste VARCHAR(100) NOT NULL,
+                numeros_incorporation JSON NOT NULL,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                date_maj TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_liste_par_utilisateur (utilisateur_id, nom_liste)
+            )
+        `);
+        console.log('✅ Migration OK : table listes_selection_eleves prête');
+    } catch (err) {
+        console.error('❌ Erreur migration listes_selection_eleves:', err.message);
+    }
 };
+    
 runMigrations();
 
 const logActivity = async (userId, userName, actionType, description) => {
@@ -5533,6 +5551,73 @@ app.get('/api/stats/mes-notes-directes-par-matiere', authenticateToken, checkRol
     } catch (err) {
         console.error("Erreur sur /api/stats/mes-notes-directes-par-matiere", err);
         res.status(500).json({ error: "Erreur lors du calcul des notes saisies par matière." });
+    }
+});
+// ═══════════════════ LISTES DE SÉLECTION D'ÉLÈVES (export ciblé) ═══════════════════
+
+// Liste toutes les listes sauvegardées par l'utilisateur connecté
+app.get('/api/listes-selection', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await db.query(
+            `SELECT id, nom_liste, numeros_incorporation, date_creation, date_maj
+             FROM listes_selection_eleves
+             WHERE utilisateur_id = ?
+             ORDER BY date_maj DESC`,
+            [req.user.id]
+        );
+        res.json(rows.map(r => ({
+            ...r,
+            nombre_eleves: Array.isArray(r.numeros_incorporation) ? r.numeros_incorporation.length : 0
+        })));
+    } catch (err) {
+        console.error("Erreur GET /api/listes-selection:", err);
+        res.status(500).json({ message: "Erreur lors de la récupération des listes." });
+    }
+});
+
+// Crée ou met à jour (upsert par nom) une liste de sélection pour l'utilisateur connecté
+app.post('/api/listes-selection', authenticateToken, async (req, res) => {
+    try {
+        const { nom_liste, numeros_incorporation } = req.body;
+        if (!nom_liste || !nom_liste.trim()) {
+            return res.status(400).json({ message: "Le nom de la liste est requis." });
+        }
+        if (!Array.isArray(numeros_incorporation) || numeros_incorporation.length === 0) {
+            return res.status(400).json({ message: "La liste doit contenir au moins un numéro d'incorporation." });
+        }
+        const nomPropre = nom_liste.trim();
+        const numerosPropres = [...new Set(numeros_incorporation.map(n => String(n).trim()).filter(Boolean))];
+
+        await db.query(`
+            INSERT INTO listes_selection_eleves (utilisateur_id, nom_liste, numeros_incorporation)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                numeros_incorporation = VALUES(numeros_incorporation),
+                date_maj = CURRENT_TIMESTAMP
+        `, [req.user.id, nomPropre, JSON.stringify(numerosPropres)]);
+
+        res.status(201).json({ message: `Liste "${nomPropre}" enregistrée (${numerosPropres.length} élève(s)).` });
+    } catch (err) {
+        console.error("Erreur sauvegarde liste sélection:", err);
+        res.status(500).json({ message: "Erreur lors de l'enregistrement de la liste." });
+    }
+});
+
+// Supprime une liste de sélection (uniquement la sienne)
+app.delete('/api/listes-selection/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [result] = await db.query(
+            "DELETE FROM listes_selection_eleves WHERE id = ? AND utilisateur_id = ?",
+            [id, req.user.id]
+        );
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "Liste non trouvée." });
+        }
+        res.json({ message: "Liste supprimée." });
+    } catch (err) {
+        console.error("Erreur suppression liste sélection:", err);
+        res.status(500).json({ message: "Erreur lors de la suppression de la liste." });
     }
 });
 

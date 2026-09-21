@@ -130,6 +130,12 @@ const DashboardExamen = () => {
     const [classementWithRawDetails, setClassementWithRawDetails] = useState([]);
     const [isDataReady, setIsDataReady] = useState(false);
     const [examConfigForPromotion, setExamConfigForPromotion] = useState(null);
+        const [selectedIncorps, setSelectedIncorps] = useState(new Set());
+    const [isSelectionModalOpen, setIsSelectionModalOpen] = useState(false);
+    const [pasteListText, setPasteListText] = useState('');
+    const [savedLists, setSavedLists] = useState([]);
+    const [isLoadingSavedLists, setIsLoadingSavedLists] = useState(false);
+    const [newListName, setNewListName] = useState('');
 
     const getFilteredIncomplets = useCallback((term) => {
         const search = (term || '').toLowerCase();
@@ -590,6 +596,165 @@ const DashboardExamen = () => {
         const nonClasses = filtered.filter(s => s.rang == null);
         return [...classes, ...nonClasses];
     }, [sourceData, searchTerm]);
+        const toggleSelectStudent = (incorp) => {
+        const key = String(incorp);
+        setSelectedIncorps(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+        });
+    };
+
+    const allFilteredSelected = filteredClassement.length > 0 &&
+        filteredClassement.every(s => selectedIncorps.has(String(s.numero_incorporation)));
+
+    const toggleSelectAllFiltered = () => {
+        setSelectedIncorps(prev => {
+            const next = new Set(prev);
+            if (allFilteredSelected) {
+                filteredClassement.forEach(s => next.delete(String(s.numero_incorporation)));
+            } else {
+                filteredClassement.forEach(s => next.add(String(s.numero_incorporation)));
+            }
+            return next;
+        });
+    };
+
+    const applyPastedNumbers = () => {
+        const numeros = pasteListText.split(/[\n,;]+/).map(n => n.trim()).filter(Boolean);
+        if (numeros.length === 0) return;
+        setSelectedIncorps(prev => {
+            const next = new Set(prev);
+            numeros.forEach(n => next.add(n));
+            return next;
+        });
+        setPasteListText('');
+    };
+
+    const fetchSavedLists = async () => {
+        setIsLoadingSavedLists(true);
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.get('/api/listes-selection', { headers: { Authorization: `Bearer ${token}` } });
+            setSavedLists(res.data || []);
+        } catch (err) {
+            setSavedLists([]);
+        } finally {
+            setIsLoadingSavedLists(false);
+        }
+    };
+
+    const openSelectionModal = () => {
+        setIsSelectionModalOpen(true);
+        fetchSavedLists();
+    };
+
+    const handleLoadSavedList = (list) => {
+        setSelectedIncorps(new Set((list.numeros_incorporation || []).map(String)));
+    };
+
+    const handleSaveSelection = async () => {
+        if (!newListName.trim()) { alert("Donnez un nom à la liste."); return; }
+        if (selectedIncorps.size === 0) { alert("Sélectionnez au moins un élève avant de sauvegarder."); return; }
+        try {
+            const token = localStorage.getItem('token');
+            await axios.post('/api/listes-selection', {
+                nom_liste: newListName.trim(),
+                numeros_incorporation: Array.from(selectedIncorps)
+            }, { headers: { Authorization: `Bearer ${token}` } });
+            setNewListName('');
+            fetchSavedLists();
+        } catch (err) {
+            alert(err.response?.data?.message || "Erreur lors de la sauvegarde.");
+        }
+    };
+
+    const handleDeleteSavedList = async (id) => {
+        if (!window.confirm("Supprimer cette liste sauvegardée ?")) return;
+        try {
+            const token = localStorage.getItem('token');
+            await axios.delete(`/api/listes-selection/${id}`, { headers: { Authorization: `Bearer ${token}` } });
+            fetchSavedLists();
+        } catch (err) {
+            alert("Erreur lors de la suppression.");
+        }
+    };
+
+    const getSelectedStudentsData = () => filteredClassement.filter(s => selectedIncorps.has(String(s.numero_incorporation)));
+
+    const handleExportSelectionPDF = () => {
+        const selection = getSelectedStudentsData();
+        if (selection.length === 0) { alert("Aucun élève sélectionné."); return; }
+        const doc = new jsPDF();
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text("SECRETARIAT D'ETAT / CGN / EGN AMBOSITRA", 55, 15, { align: 'center' });
+        doc.text("REPOBLIKAN'I MADAGASIKARA", 155, 15, { align: 'center' });
+
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`SÉLECTION — ${typeExamen.replace(/_/g, ' ')} (${selection.length} élève(s))`, 105, 35, { align: 'center' });
+        if (selectedPromotion !== 'all') {
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`Promotion : ${selectedPromotion}`, 105, 43, { align: 'center' });
+        }
+
+        const body = selection.map(s => [
+            s.rang != null ? s.rang : 'Non classé',
+            `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
+            s.numero_incorporation || '',
+            s.matricule || '-',
+            s.escadron || '-',
+            s.peloton || '-',
+            s.moyenne != null ? s.moyenne : '-',
+            getMention(s.moyenne)
+        ]);
+
+        autoTable(doc, {
+            startY: selectedPromotion !== 'all' ? 50 : 43,
+            head: [['RANG', 'NOM ET PRÉNOM', 'INCORPORATION', 'MLE', 'ESCADRON', 'PELOTON', 'MOYENNE', 'MENTION']],
+            body,
+            theme: 'plain',
+            styles: { font: 'helvetica', textColor: [0, 0, 0], lineColor: [0, 0, 0], lineWidth: 0.1, fontSize: 9, cellPadding: 3 },
+            headStyles: { fontStyle: 'bold', fillColor: false, textColor: [0, 0, 0], halign: 'center' },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 18 }, 1: { halign: 'left' },
+                2: { halign: 'center', cellWidth: 28 }, 3: { halign: 'center', cellWidth: 22 },
+                4: { halign: 'center', cellWidth: 20 }, 5: { halign: 'center', cellWidth: 20 },
+                6: { halign: 'center', cellWidth: 20 }, 7: { halign: 'center', cellWidth: 25 }
+            }
+        });
+
+        const dateStr = new Date().toLocaleDateString('fr-FR');
+        const finalY = doc.lastAutoTable.finalY + 15;
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Édité le ${dateStr}`, 14, finalY);
+
+        doc.save(`Selection_${typeExamen}_${selectedPromotion}_${selection.length}eleves.pdf`);
+    };
+
+    const handleExportSelectionExcel = () => {
+        const selection = getSelectedStudentsData();
+        if (selection.length === 0) { alert("Aucun élève sélectionné."); return; }
+        const data = selection.map(s => ({
+            'RANG': s.rang != null ? s.rang : 'Non classé',
+            'NOM ET PRÉNOM': `${formatNom(s.nom)} ${formatPrenom(s.prenom)}`,
+            'INCORPORATION': s.numero_incorporation || '',
+            'MLE': s.matricule || '-',
+            'ESCADRON': s.escadron || '-',
+            'PELOTON': s.peloton || '-',
+            'MOYENNE': s.moyenne != null ? s.moyenne : '-',
+            'MENTION': getMention(s.moyenne)
+        }));
+        const ws = xlsx.utils.json_to_sheet(data);
+        ws['!cols'] = [{ wch: 12 }, { wch: 35 }, { wch: 20 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 15 }];
+        const wb = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(wb, ws, 'Sélection');
+        xlsx.writeFile(wb, `Selection_${typeExamen}_${selectedPromotion}_${selection.length}eleves.xlsx`);
+    };
 
     if (loading) return <div className="card"><h2>Chargement...</h2></div>;
     if (error)   return <div className="card"><h2>{error}</h2></div>;
@@ -622,6 +787,104 @@ const DashboardExamen = () => {
                     onClose={() => setSelectedStudent(null)}
                 />
             )}
+                        {isSelectionModalOpen && (
+                <div
+                    onClick={() => setIsSelectionModalOpen(false)}
+                    style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '90%', maxWidth: '600px', maxHeight: '85vh', overflowY: 'auto' }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                            <h3 style={{ margin: 0 }}>Export d'une sélection d'élèves</h3>
+                            <button onClick={() => setIsSelectionModalOpen(false)} style={{ background: 'none', border: 'none', fontSize: '22px', cursor: 'pointer' }}>&times;</button>
+                        </div>
+
+                        <p style={{ color: '#4b5563', fontSize: '0.9rem' }}>
+                            <strong>{selectedIncorps.size}</strong> élève(s) sélectionné(s) — cochez-les dans le tableau, ou collez leurs numéros ci-dessous.
+                        </p>
+
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ fontWeight: 'bold', fontSize: '0.85rem', display: 'block', marginBottom: '6px' }}>
+                                Coller des N° d'incorporation (séparés par virgule ou saut de ligne)
+                            </label>
+                            <textarea
+                                rows="4"
+                                value={pasteListText}
+                                onChange={(e) => setPasteListText(e.target.value)}
+                                placeholder={"Ex: 1234, 1235\n1236"}
+                                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}
+                            />
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                                <button onClick={applyPastedNumbers} style={{ padding: '6px 12px', borderRadius: '6px', border: 'none', background: '#3182ce', color: '#fff', cursor: 'pointer' }}>
+                                    Ajouter à la sélection
+                                </button>
+                                <button onClick={() => setSelectedIncorps(new Set())} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
+                                    Vider la sélection
+                                </button>
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '16px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+                            <label style={{ fontWeight: 'bold', fontSize: '0.85rem', display: 'block', marginBottom: '6px' }}>
+                                Listes sauvegardées
+                            </label>
+                            {isLoadingSavedLists ? (
+                                <p style={{ color: '#718096', fontSize: '0.85rem' }}>Chargement...</p>
+                            ) : savedLists.length === 0 ? (
+                                <p style={{ color: '#718096', fontSize: '0.85rem' }}>Aucune liste sauvegardée pour le moment.</p>
+                            ) : (
+                                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                                    {savedLists.map(list => (
+                                        <li key={list.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9' }}>
+                                            <span>{list.nom_liste} <small style={{ color: '#94a3b8' }}>({list.nombre_eleves} élève(s))</small></span>
+                                            <span style={{ display: 'flex', gap: '8px' }}>
+                                                <button onClick={() => handleLoadSavedList(list)} style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', background: '#3182ce', color: '#fff', cursor: 'pointer', fontSize: '0.8rem' }}>
+                                                    Charger
+                                                </button>
+                                                <button onClick={() => handleDeleteSavedList(list.id)} style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', background: '#dc3545', color: '#fff', cursor: 'pointer', fontSize: '0.8rem' }}>
+                                                    Supprimer
+                                                </button>
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                                <input
+                                    type="text"
+                                    placeholder="Nom de la liste (ex: Conseil discipline)"
+                                    value={newListName}
+                                    onChange={(e) => setNewListName(e.target.value)}
+                                    style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}
+                                />
+                                <button onClick={handleSaveSelection} style={{ padding: '8px 14px', borderRadius: '6px', border: 'none', background: '#28a745', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    Sauvegarder
+                                </button>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '10px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+                            <button
+                                onClick={handleExportSelectionPDF}
+                                disabled={selectedIncorps.size === 0}
+                                style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: '#dc3545', color: '#fff', fontWeight: 'bold', cursor: 'pointer', opacity: selectedIncorps.size === 0 ? 0.5 : 1 }}
+                            >
+                                <i className="fa fa-file-pdf-o"></i> Exporter PDF
+                            </button>
+                            <button
+                                onClick={handleExportSelectionExcel}
+                                disabled={selectedIncorps.size === 0}
+                                style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: '#28a745', color: '#fff', fontWeight: 'bold', cursor: 'pointer', opacity: selectedIncorps.size === 0 ? 0.5 : 1 }}
+                            >
+                                <i className="fa fa-file-excel-o"></i> Exporter Excel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ── En-tête ── */}
             <div className="top-header-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -637,6 +900,18 @@ const DashboardExamen = () => {
 
                 <div className="header-right-filters" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                     {/* ── Boutons export classement complet ── */}
+                                        <button
+                        onClick={openSelectionModal}
+                        style={{
+                            backgroundColor: '#6f42c1', color: 'white',
+                            padding: '0.6rem 1.1rem', borderRadius: '8px',
+                            border: 'none', cursor: 'pointer', fontWeight: 'bold',
+                            display: 'flex', alignItems: 'center', gap: '7px'
+                        }}
+                        title="Sélectionner des élèves précis et les exporter"
+                    >
+                        <i className="fa fa-check-square-o"></i> Export sélection {selectedIncorps.size > 0 ? `(${selectedIncorps.size})` : ''}
+                    </button>
                     <button
                         onClick={handleExportClassementPDF}
                         disabled={filteredClassement.length === 0}
@@ -822,9 +1097,12 @@ const DashboardExamen = () => {
                         </div>
 
                        <div className="table-responsive-dashboard">
-                        <table>
+                                               <table>
                             <thead>
                                 <tr>
+                                    <th style={{ width: '40px' }}>
+                                        <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAllFiltered} title="Tout sélectionner / désélectionner" />
+                                    </th>
                                     <th>Rang</th>
                                     <th>Nom Complet</th>
                                     <th>Escadron</th>
@@ -838,16 +1116,22 @@ const DashboardExamen = () => {
                                 {filteredClassement.map(s => (
                                     <tr
                                         key={s.id || s.numero_incorporation || Math.random()}
-                                        onClick={() => setSelectedStudent(s)}
                                         className="clickable-row"
                                     >
-                                        <td><strong>{s.rang}</strong></td>
-                                        <td>{s.prenom} {s.nom}</td>
-                                        <td>{s.escadron || '-'}</td>
-                                        <td>{s.peloton || '-'}</td>
-                                        <td>{s.numero_incorporation}</td>
-                                        <td>{s.moyenne}</td>
-                                        <td>
+                                        <td onClick={(e) => e.stopPropagation()}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedIncorps.has(String(s.numero_incorporation))}
+                                                onChange={() => toggleSelectStudent(s.numero_incorporation)}
+                                            />
+                                        </td>
+                                        <td onClick={() => setSelectedStudent(s)}><strong>{s.rang}</strong></td>
+                                        <td onClick={() => setSelectedStudent(s)}>{s.prenom} {s.nom}</td>
+                                        <td onClick={() => setSelectedStudent(s)}>{s.escadron || '-'}</td>
+                                        <td onClick={() => setSelectedStudent(s)}>{s.peloton || '-'}</td>
+                                        <td onClick={() => setSelectedStudent(s)}>{s.numero_incorporation}</td>
+                                        <td onClick={() => setSelectedStudent(s)}>{s.moyenne}</td>
+                                        <td onClick={() => setSelectedStudent(s)}>
                                             {s.rang == null ? (
                                                 <span
                                                     className="status-badge"
