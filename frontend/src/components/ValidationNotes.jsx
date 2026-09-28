@@ -1,7 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
-import { FiCheckCircle, FiXCircle, FiRefreshCw, FiEdit2, FiSave, FiX } from 'react-icons/fi';
+import { FiCheckCircle, FiXCircle, FiRefreshCw, FiEdit2, FiSave, FiX, FiSearch } from 'react-icons/fi';
 import './DashboardRedesign.css';
+
+const ONGLETS = [
+    { id: 'toutes',   label: 'Toutes' },
+    { id: 'directe',  label: 'Saisie directe' },
+    { id: 'anonyme',  label: 'Saisie anonyme' },
+    { id: 'liaison',  label: 'Liaisons' }
+];
+
+// Normalise pour une recherche insensible à la casse et aux accents
+const norm = (v) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
 const ValidationNotes = ({ isAdmin }) => {
     const [saisies, setSaisies] = useState([]);
@@ -10,6 +20,10 @@ const ValidationNotes = ({ isAdmin }) => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [resultat, setResultat] = useState(null);
+
+    // ── Onglets + recherche (une recherche par onglet) ──
+    const [onglet, setOnglet] = useState('toutes');
+    const [recherches, setRecherches] = useState({ toutes: '', directe: '', anonyme: '', liaison: '' });
 
     // ── Édition en ligne ──
     const [editionId, setEditionId] = useState(null);
@@ -35,6 +49,38 @@ const ValidationNotes = ({ isAdmin }) => {
 
     useEffect(() => { fetchSaisies(); }, [fetchSaisies]);
 
+    // Compteurs par onglet
+    const compteurs = useMemo(() => ({
+        toutes:  saisies.length,
+        directe: saisies.filter(s => s.source === 'directe').length,
+        anonyme: saisies.filter(s => s.source === 'anonyme').length,
+        liaison: saisies.filter(s => s.source === 'liaison').length
+    }), [saisies]);
+
+    // Liste filtrée : onglet + recherche
+    const saisiesAffichees = useMemo(() => {
+        const terme = norm(recherches[onglet]).trim();
+        return saisies
+            .filter(s => onglet === 'toutes' || s.source === onglet)
+            .filter(s => {
+                if (!terme) return true;
+                const texte = norm([
+                    s.eleve_nom, s.eleve_prenom, s.numero_incorporation,
+                    s.code_anonyme, s.nom_matiere, s.type_examen,
+                    s.saisi_par_nom, s.escadron, s.peloton, s.note, s.motif_absence
+                ].join(' '));
+                return terme.split(/\s+/).every(mot => texte.includes(mot));
+            });
+    }, [saisies, onglet, recherches]);
+
+    const changerOnglet = (id) => {
+        setOnglet(id);
+        setSelection(new Set());   // évite de valider des lignes non visibles
+        setEditionId(null);
+    };
+
+    const setRecherche = (valeur) => setRecherches(prev => ({ ...prev, [onglet]: valeur }));
+
     const toggleSelection = (id) => {
         setSelection(prev => {
             const next = new Set(prev);
@@ -43,8 +89,15 @@ const ValidationNotes = ({ isAdmin }) => {
         });
     };
 
+    const toutSelectionne = saisiesAffichees.length > 0 && saisiesAffichees.every(s => selection.has(s.id));
+
     const toggleTout = () =>
-        setSelection(prev => prev.size === saisies.length ? new Set() : new Set(saisies.map(s => s.id)));
+        setSelection(prev => {
+            const next = new Set(prev);
+            if (toutSelectionne) saisiesAffichees.forEach(s => next.delete(s.id));
+            else saisiesAffichees.forEach(s => next.add(s.id));
+            return next;
+        });
 
     const handleValider = async () => {
         if (selection.size === 0) return;
@@ -101,6 +154,19 @@ const ValidationNotes = ({ isAdmin }) => {
         );
     };
 
+    // Colonnes visibles selon l'onglet
+    const showType  = onglet === 'toutes';
+    const showCode  = onglet !== 'directe';
+    const showNote  = onglet !== 'liaison';
+    const nbColonnes = 1 + (showType ? 1 : 0) + (showCode ? 1 : 0) + 1 + 1 + 1 + (showNote ? 1 : 0) + 1 + 1 + 1;
+
+    const placeholderRecherche = {
+        toutes:  "Rechercher (élève, N°, code, matière, opérateur...)",
+        directe: "Rechercher un élève, N° d'incorporation, matière...",
+        anonyme: "Rechercher un code anonyme, matière, opérateur...",
+        liaison: "Rechercher un code, un élève, N° d'incorporation..."
+    }[onglet];
+
     return (
         <div className="dashboard-redesign-container">
             <div className="top-nav-bar">
@@ -127,12 +193,64 @@ const ValidationNotes = ({ isAdmin }) => {
             )}
 
             <div className="card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                {/* ── Onglets ── */}
+                <div style={{ display: 'flex', gap: '6px', borderBottom: '2px solid #e2e8f0', marginBottom: '14px', flexWrap: 'wrap' }}>
+                    {ONGLETS.map(o => {
+                        const actif = onglet === o.id;
+                        return (
+                            <button
+                                key={o.id}
+                                type="button"
+                                onClick={() => changerOnglet(o.id)}
+                                style={{
+                                    padding: '10px 16px',
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    fontWeight: actif ? 700 : 500,
+                                    color: actif ? '#2c5282' : '#4a5568',
+                                    borderBottom: actif ? '3px solid #2c5282' : '3px solid transparent',
+                                    marginBottom: '-2px'
+                                }}
+                            >
+                                {o.label}
+                                <span style={{
+                                    marginLeft: '8px',
+                                    padding: '1px 8px',
+                                    borderRadius: '10px',
+                                    fontSize: '0.75rem',
+                                    background: actif ? '#2c5282' : '#e2e8f0',
+                                    color: actif ? '#fff' : '#4a5568'
+                                }}>{compteurs[o.id]}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* ── Recherche (propre à chaque onglet) ── */}
+                <div style={{ position: 'relative', marginBottom: '12px', maxWidth: '480px' }}>
+                    <FiSearch style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#718096' }} />
+                    <input
+                        type="text"
+                        value={recherches[onglet]}
+                        onChange={e => setRecherche(e.target.value)}
+                        placeholder={placeholderRecherche}
+                        style={{ width: '100%', padding: '9px 32px 9px 32px', border: '1px solid #cbd5e0', borderRadius: '8px', boxSizing: 'border-box' }}
+                    />
+                    {recherches[onglet] && (
+                        <button type="button" onClick={() => setRecherche('')} title="Effacer"
+                                style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#718096' }}>
+                            <FiX />
+                        </button>
+                    )}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', gap: '10px', flexWrap: 'wrap' }}>
                     <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <input type="checkbox"
-                               checked={selection.size > 0 && selection.size === saisies.length}
+                               checked={toutSelectionne}
                                onChange={toggleTout} />
-                        Tout sélectionner ({saisies.length})
+                        Tout sélectionner ({saisiesAffichees.length})
                     </label>
                     <button className="btn-export excel-btn" onClick={handleValider}
                             disabled={selection.size === 0 || saving}>
@@ -145,49 +263,64 @@ const ValidationNotes = ({ isAdmin }) => {
                         <table>
                             <thead>
                                 <tr>
-                                    <th></th><th>Type</th><th>Code anonyme</th><th>Élève</th>
-                                    <th>Matière</th><th>Examen</th><th>Note</th>
-                                    <th>Saisi par</th><th>Date</th><th>Actions</th>
+                                    <th></th>
+                                    {showType && <th>Type</th>}
+                                    {showCode && <th>Code anonyme</th>}
+                                    <th>Élève</th>
+                                    <th>Matière</th>
+                                    <th>Examen</th>
+                                    {showNote && <th>Note</th>}
+                                    <th>Saisi par</th>
+                                    <th>Date</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {saisies.map(s => {
+                                {saisiesAffichees.map(s => {
                                     const enEdition = editionId === s.id;
                                     return (
                                         <tr key={s.id}>
                                             <td><input type="checkbox" checked={selection.has(s.id)}
                                                        onChange={() => toggleSelection(s.id)} /></td>
-                                            <td>{s.source === 'anonyme' ? 'Anonyme' : 'Directe'}</td>
-                                            <td>{s.code_anonyme
-                                                ? <strong style={{ fontFamily: 'monospace' }}>{s.code_anonyme}</strong>
-                                                : <span style={{ color: '#999' }}>—</span>}</td>
+                                            {showType && (
+                                                <td>{s.source === 'anonyme' ? 'Anonyme' : s.source === 'liaison' ? 'Liaison' : 'Directe'}</td>
+                                            )}
+                                            {showCode && (
+                                                <td>{s.code_anonyme
+                                                    ? <strong style={{ fontFamily: 'monospace' }}>{s.code_anonyme}</strong>
+                                                    : <span style={{ color: '#999' }}>—</span>}</td>
+                                            )}
                                             <td>{nomEleve(s)}</td>
                                             <td>{s.nom_matiere}</td>
                                             <td>{s.type_examen}</td>
-                                            <td>
-                                                {enEdition ? (
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                                        <label style={{ fontSize: '0.8rem' }}>
-                                                            <input type="checkbox" checked={editAbsence}
-                                                                   onChange={e => setEditAbsence(e.target.checked)} /> Absent
-                                                        </label>
-                                                        {editAbsence ? (
-                                                            <input type="text" value={editMotif} placeholder="Motif"
-                                                                   onChange={e => setEditMotif(e.target.value)}
-                                                                   style={{ width: '110px' }} />
-                                                        ) : (
-                                                            <input type="number" step="0.25" min="0" max="20"
-                                                                   value={editNote}
-                                                                   onChange={e => setEditNote(e.target.value)}
-                                                                   style={{ width: '80px' }} autoFocus />
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    s.est_absence
-                                                        ? <em>Absent{s.motif_absence ? ` (${s.motif_absence})` : ''}</em>
-                                                        : `${s.note} / 20`
-                                                )}
-                                            </td>
+                                            {showNote && (
+                                                <td>
+                                                    {s.source === 'liaison' ? (
+                                                        <em>Liaison code → élève</em>
+                                                    ) : enEdition ? (
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                            <label style={{ fontSize: '0.8rem' }}>
+                                                                <input type="checkbox" checked={editAbsence}
+                                                                       onChange={e => setEditAbsence(e.target.checked)} /> Absent
+                                                            </label>
+                                                            {editAbsence ? (
+                                                                <input type="text" value={editMotif} placeholder="Motif"
+                                                                       onChange={e => setEditMotif(e.target.value)}
+                                                                       style={{ width: '110px' }} />
+                                                            ) : (
+                                                                <input type="number" step="0.25" min="0" max="20"
+                                                                       value={editNote}
+                                                                       onChange={e => setEditNote(e.target.value)}
+                                                                       style={{ width: '80px' }} autoFocus />
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        s.est_absence
+                                                            ? <em>Absent{s.motif_absence ? ` (${s.motif_absence})` : ''}</em>
+                                                            : `${s.note} / 20`
+                                                    )}
+                                                </td>
+                                            )}
                                             <td>{s.saisi_par_nom}</td>
                                             <td>{new Date(s.date_saisie).toLocaleString('fr-FR')}</td>
                                             <td style={{ display: 'flex', gap: '6px' }}>
@@ -201,8 +334,9 @@ const ValidationNotes = ({ isAdmin }) => {
                                                     </>
                                                 ) : (
                                                     <>
-                                                        <button className="btn-icon" title="Modifier"
-                                                                onClick={() => ouvrirEdition(s)}><FiEdit2 /></button>
+                                                        {s.source !== 'liaison' && (
+                                                            <button className="btn-icon" title="Modifier" onClick={() => ouvrirEdition(s)}><FiEdit2 /></button>
+                                                        )}
                                                         <button className="btn-icon delete" title="Rejeter"
                                                                 onClick={() => handleRejeter(s.id)}><FiXCircle /></button>
                                                     </>
@@ -211,9 +345,11 @@ const ValidationNotes = ({ isAdmin }) => {
                                         </tr>
                                     );
                                 })}
-                                {saisies.length === 0 && (
-                                    <tr><td colSpan="10" style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
-                                        Aucune saisie en attente.
+                                {saisiesAffichees.length === 0 && (
+                                    <tr><td colSpan={nbColonnes} style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
+                                        {recherches[onglet].trim()
+                                            ? 'Aucun résultat pour cette recherche.'
+                                            : 'Aucune saisie en attente dans cet onglet.'}
                                     </td></tr>
                                 )}
                             </tbody>

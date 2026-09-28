@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import Select from 'react-select';
 import apiPaths from '../config/apiPaths';
-import './IncognitoMoyenne.css';
+import './IM.css';
 
 const IncognitoAnalyse = ({ onBack }) => {
     const [loading, setLoading] = useState(true);

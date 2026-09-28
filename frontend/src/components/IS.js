@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import apiPaths from '../config/apiPaths';
 // Le nouveau fichier CSS qui utilise les variables de App.css
-import './IncognitoSwap.css';
+import './IS.css';
 
 const IncognitoSwap = () => {
     const [matieres, setMatieres] = useState([]);

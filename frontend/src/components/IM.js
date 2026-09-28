@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import Select from 'react-select';
 import apiPaths from '../config/apiPaths';
-import IncognitoAnalyse from './IncognitoAnalyse';
-import './IncognitoMoyenne.css';
+import IncognitoAnalyse from './IA';
+import './IM.css';
 
 // Note : La surveillance globale (clics, inputs, heartbeat) est maintenant gérée par GlobalActivityTracker dans App.js
 

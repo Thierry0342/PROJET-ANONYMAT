@@ -350,12 +350,12 @@ if (isMilestone && hasIncreased) {
         setSubmitMessage(''); setIsSubmitError(false); setConflictData(null);
         try {
             const fullCode = `${selectedMatierePrefix}${codeSuffix}`;
-            await axios.post(`${API_BASE_URL}/api/noter-copie-anonyme`, {
-                matiere_id: selectedMatiereId,
-                code_anonyme: fullCode,
-                note: note,
-                type_examen: selectedTypeExamen
-            }, getAuthHeaders());
+          await axios.post(`${API_BASE_URL}/api/copies-temporaires/anonyme`, {
+    matiere_id: selectedMatiereId,
+    code_anonyme: fullCode,
+    note: note,
+    type_examen: selectedTypeExamen
+}, getAuthHeaders());
             if (isPacketMode) {
                 const newCount = packetCurrentCount + 1;
                 setPacketCurrentCount(newCount);
@@ -364,7 +364,7 @@ if (isMilestone && hasIncreased) {
                     setIsPacketMode(false); setPacketTotal(0); setPacketCurrentCount(0);
                 }
             }
-            setNotification(`Note enregistrée !`);
+            setNotification(`Note mise en attente de validation.`);
             setTimeout(() => setNotification(''), 4000);
             resetFields(false);
             fetchStats(selectedMatiereId);

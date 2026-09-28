@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
-import { FiPrinter, FiPlusCircle, FiArchive, FiTrash2, FiAlertTriangle, FiFolder, FiArrowLeft, FiUsers } from 'react-icons/fi';
+import { FiPrinter, FiPlusCircle, FiArchive, FiTrash2, FiFolder, FiArrowLeft, FiUsers, FiEye, FiSearch, FiRefreshCw } from 'react-icons/fi';
 import './CreerCodesMatiere.css';
 
 const PreviewModal = ({ codes, onConfirm, onCancel, matiereNom, examenNom, promotion, populationLabel }) => {
@@ -33,6 +33,157 @@ const PreviewModal = ({ codes, onConfirm, onCancel, matiereNom, examenNom, promo
     );
 };
 
+// ═══════════════════════════════════════════════════════════════════
+// Suivi des codes : sans note / noté mais pas lié à un élève / déjà liés
+// ═══════════════════════════════════════════════════════════════════
+const ONGLETS_STATUT = [
+    { id: 'sans_note',    label: 'Sans note',                   couleur: '#e53e3e' },
+    { id: 'note_non_lie', label: 'Noté, pas lié à un élève',    couleur: '#dd6b20' },
+    { id: 'lie',          label: 'Déjà liés',                   couleur: '#38a169' }
+];
+
+const StatutCodesModal = ({ matiereId, matiereNom, promotion, population, populationLabel, onClose }) => {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [erreur, setErreur] = useState('');
+    const [onglet, setOnglet] = useState('sans_note');
+    const [recherche, setRecherche] = useState('');
+
+    const charger = useCallback(async () => {
+        setLoading(true); setErreur('');
+        try {
+            const res = await axios.get('/api/codes/statut-liaison', {
+                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                params: {
+                    matiereId,
+                    promotion,
+                    population: population && population !== 'all' ? population : undefined
+                }
+            });
+            setData(res.data);
+        } catch (err) {
+            setErreur(err.response?.data?.message || 'Erreur lors du chargement.');
+        } finally { setLoading(false); }
+    }, [matiereId, promotion, population]);
+
+    useEffect(() => { charger(); }, [charger]);
+
+    const codesAffiches = useMemo(() => {
+        if (!data) return [];
+        const terme = recherche.trim().toLowerCase();
+        return data.codes
+            .filter(c => c.statut === onglet)
+            .filter(c => !terme || c.code.toLowerCase().includes(terme));
+    }, [data, onglet, recherche]);
+
+    const imprimer = () => {
+        const titre = ONGLETS_STATUT.find(o => o.id === onglet)?.label;
+        const w = window.open('', '_blank');
+        w.document.write(`<html><head><title>${titre}</title><style>body{font-family:sans-serif;margin:15px}h3,p{text-align:center;margin:5px}.g{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:15px}.c{border:1px solid black;padding:8px 4px;text-align:center;font-family:monospace;font-weight:bold}</style></head><body><h3>${matiereNom} — ${titre}</h3><p>Promo ${promotion} | ${populationLabel} | ${codesAffiches.length} code(s)</p><div class="g">${codesAffiches.map(c => `<div class="c">${c.code}</div>`).join('')}</div></body></html>`);
+        w.document.close(); w.print();
+    };
+
+    return (
+        <div className="modal-backdrop">
+            <div className="modal-content" style={{ maxWidth: '900px', width: '95%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                    <div>
+                        <h2 style={{ margin: 0 }}>État des codes — {matiereNom}</h2>
+                        <small style={{ color: '#718096' }}>Promotion {promotion} · {populationLabel}</small>
+                    </div>
+                    <button className="btn-secondary" onClick={charger} title="Actualiser"><FiRefreshCw /></button>
+                </div>
+
+                {loading ? <p>Chargement...</p> : erreur ? <p style={{ color: '#e53e3e' }}>{erreur}</p> : data && (
+                    <>
+                        {/* Onglets */}
+                        <div style={{ display: 'flex', gap: '8px', margin: '16px 0 10px', flexWrap: 'wrap' }}>
+                            {ONGLETS_STATUT.map(o => {
+                                const actif = onglet === o.id;
+                                return (
+                                    <button
+                                        key={o.id}
+                                        type="button"
+                                        onClick={() => setOnglet(o.id)}
+                                        style={{
+                                            padding: '8px 14px',
+                                            borderRadius: '8px',
+                                            border: `2px solid ${o.couleur}`,
+                                            background: actif ? o.couleur : '#fff',
+                                            color: actif ? '#fff' : o.couleur,
+                                            fontWeight: 700,
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        {o.label} ({data.compteurs[o.id]})
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Recherche + impression */}
+                        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', alignItems: 'center' }}>
+                            <div style={{ position: 'relative', flex: 1 }}>
+                                <FiSearch style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#718096' }} />
+                                <input
+                                    type="text"
+                                    value={recherche}
+                                    onChange={e => setRecherche(e.target.value)}
+                                    placeholder="Rechercher un code..."
+                                    style={{ width: '100%', padding: '9px 10px 9px 32px', border: '1px solid #cbd5e0', borderRadius: '8px', boxSizing: 'border-box' }}
+                                />
+                            </div>
+                            <button className="btn-secondary" onClick={imprimer} disabled={codesAffiches.length === 0}>
+                                <FiPrinter /> Imprimer la liste
+                            </button>
+                        </div>
+
+                        <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead style={{ position: 'sticky', top: 0, background: '#f7fafc' }}>
+                                    <tr>
+                                        <th style={{ textAlign: 'left', padding: '8px' }}>Code</th>
+                                        <th style={{ textAlign: 'left', padding: '8px' }}>Population</th>
+                                        {onglet !== 'sans_note' && <th style={{ textAlign: 'left', padding: '8px' }}>Examen</th>}
+                                        {onglet !== 'sans_note' && <th style={{ textAlign: 'left', padding: '8px' }}>Note</th>}
+                                        <th style={{ textAlign: 'left', padding: '8px' }}>Remarque</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {codesAffiches.map(c => (
+                                        <tr key={c.code} style={{ borderTop: '1px solid #edf2f7' }}>
+                                            <td style={{ padding: '8px', fontFamily: 'monospace', fontWeight: 700 }}>{c.code}</td>
+                                            <td style={{ padding: '8px' }}>{c.population || '-'}</td>
+                                            {onglet !== 'sans_note' && <td style={{ padding: '8px' }}>{c.type_examen || '-'}</td>}
+                                            {onglet !== 'sans_note' && <td style={{ padding: '8px' }}>{c.note} / 20</td>}
+                                            <td style={{ padding: '8px', fontSize: '0.85rem', color: '#dd6b20' }}>
+                                                {onglet === 'sans_note' && c.note_en_attente && 'Note en attente de validation'}
+                                                {onglet === 'note_non_lie' && c.liaison_en_attente && 'Liaison en attente de validation'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {codesAffiches.length === 0 && (
+                                        <tr><td colSpan="5" style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
+                                            {recherche.trim() ? 'Aucun code trouvé.' : 'Aucun code dans cette catégorie.'}
+                                        </td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        <small style={{ color: '#718096', marginTop: '6px' }}>
+                            {codesAffiches.length} code(s) affiché(s) sur {data.compteurs.total} au total.
+                        </small>
+                    </>
+                )}
+
+                <div className="modal-footer" style={{ marginTop: '12px' }}>
+                    <button onClick={onClose} className="btn-secondary">Fermer</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const CreerCodesMatiere = () => {
     const [matieres, setMatieres] = useState([]);
     const [examens, setExamens] = useState([]);
@@ -49,7 +200,8 @@ const CreerCodesMatiere = () => {
     const [codesAPrevisualiser, setCodesAPrevisualiser] = useState([]);
     const [dataPourSauvegarde, setDataPourSauvegarde] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
-    
+    const [isStatutOpen, setIsStatutOpen] = useState(false);
+
     const getConfig = useCallback(() => ({
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     }), []);
@@ -153,14 +305,25 @@ const CreerCodesMatiere = () => {
     return (
         <div className="creer-codes-container">
             {isModalOpen && (
-                <PreviewModal 
-                    codes={codesAPrevisualiser} 
-                    onConfirm={handleConfirmSave} 
-                    onCancel={() => setIsModalOpen(false)} 
-                    matiereNom={matieres.find(m => m.id.toString() === selectedMatiere)?.nom_matiere} 
-                    examenNom={selectedExamen} 
+                <PreviewModal
+                    codes={codesAPrevisualiser}
+                    onConfirm={handleConfirmSave}
+                    onCancel={() => setIsModalOpen(false)}
+                    matiereNom={matieres.find(m => m.id.toString() === selectedMatiere)?.nom_matiere}
+                    examenNom={selectedExamen}
                     promotion={selectedPromotion}
                     populationLabel={getPopLabel(selectedPopulation)}
+                />
+            )}
+
+            {isStatutOpen && selectedMatiere && (
+                <StatutCodesModal
+                    matiereId={selectedMatiere}
+                    matiereNom={matieres.find(m => m.id.toString() === selectedMatiere)?.nom_matiere}
+                    promotion={selectedPromotion}
+                    population={selectedPopulation}
+                    populationLabel={getPopLabel(selectedPopulation)}
+                    onClose={() => setIsStatutOpen(false)}
                 />
             )}
 
@@ -199,6 +362,15 @@ const CreerCodesMatiere = () => {
                         <input type="number" value={nombreCodes} onChange={e => setNombreCodes(e.target.value)} min="1" required />
                     </div>
                     <button type="submit" className="btn-primary" disabled={isLoading}>Générer & Prévisualiser</button>
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={!selectedMatiere}
+                        onClick={() => setIsStatutOpen(true)}
+                        title="Voir les codes sans note, et ceux notés mais pas encore liés à un élève"
+                    >
+                        <FiEye /> Voir l'état des codes
+                    </button>
                 </form>
             </div>
 

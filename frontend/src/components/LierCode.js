@@ -284,7 +284,7 @@ function LierCode() {
         if (!selectedEleve || !selectedMatiere || !selectedExamen || !codeSuffix.trim()) return;
         setIsLoading(true); setMessage('');
         try {
-            const response = await axios.put(`${API_BASE_URL}/api/lier-copie`, {
+            const response = await axios.post(`${API_BASE_URL}/api/copies-temporaires/liaison`, {
                 eleve_id:     selectedEleve.id,
                 matiere_id:   selectedMatiere,
                 code_anonyme: fullCode,
