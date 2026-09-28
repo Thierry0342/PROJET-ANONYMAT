@@ -25,6 +25,12 @@ const ValidationNotes = ({ isAdmin }) => {
     const [onglet, setOnglet] = useState('toutes');
     const [recherches, setRecherches] = useState({ toutes: '', directe: '', anonyme: '', liaison: '' });
 
+    // ── Filtres matière / escadron (un jeu de filtres par onglet) ──
+    const FILTRES_VIDES = { matiere: '', escadron: '' };
+    const [filtres, setFiltres] = useState({
+        toutes: FILTRES_VIDES, directe: FILTRES_VIDES, anonyme: FILTRES_VIDES, liaison: FILTRES_VIDES
+    });
+
     // ── Édition en ligne ──
     const [editionId, setEditionId] = useState(null);
     const [editNote, setEditNote] = useState('');
@@ -57,11 +63,50 @@ const ValidationNotes = ({ isAdmin }) => {
         liaison: saisies.filter(s => s.source === 'liaison').length
     }), [saisies]);
 
-    // Liste filtrée : onglet + recherche
+    // Saisies de l'onglet courant (avant recherche/filtres)
+    const saisiesOnglet = useMemo(
+        () => saisies.filter(s => onglet === 'toutes' || s.source === onglet),
+        [saisies, onglet]
+    );
+
+    // Options des listes déroulantes, construites à partir de l'onglet courant
+    const optionsMatieres = useMemo(() => {
+        const map = new Map();
+        saisiesOnglet.forEach(s => { if (s.matiere_id != null) map.set(String(s.matiere_id), s.nom_matiere); });
+        return [...map.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'fr'));
+    }, [saisiesOnglet]);
+
+    const { optionsEscadrons, aDesSansEscadron } = useMemo(() => {
+        const set = new Set();
+        let sans = false;
+        saisiesOnglet.forEach(s => {
+            if (s.escadron != null && s.escadron !== '') set.add(String(s.escadron));
+            else sans = true;
+        });
+        const liste = [...set].sort((a, b) => a.localeCompare(b, 'fr', { numeric: true }));
+        return { optionsEscadrons: liste, aDesSansEscadron: sans };
+    }, [saisiesOnglet]);
+
+    const filtreCourant = filtres[onglet];
+    const setFiltre = (cle, valeur) =>
+        setFiltres(prev => ({ ...prev, [onglet]: { ...prev[onglet], [cle]: valeur } }));
+    const filtresActifs = !!(filtreCourant.matiere || filtreCourant.escadron || recherches[onglet].trim());
+    const reinitialiserFiltres = () => {
+        setFiltres(prev => ({ ...prev, [onglet]: FILTRES_VIDES }));
+        setRecherches(prev => ({ ...prev, [onglet]: '' }));
+    };
+
+    // Liste filtrée : onglet + matière + escadron + recherche
     const saisiesAffichees = useMemo(() => {
         const terme = norm(recherches[onglet]).trim();
-        return saisies
-            .filter(s => onglet === 'toutes' || s.source === onglet)
+        const { matiere, escadron } = filtres[onglet];
+        return saisiesOnglet
+            .filter(s => !matiere || String(s.matiere_id) === matiere)
+            .filter(s => {
+                if (!escadron) return true;
+                if (escadron === '__aucun__') return s.escadron == null || s.escadron === '';
+                return String(s.escadron) === escadron;
+            })
             .filter(s => {
                 if (!terme) return true;
                 const texte = norm([
@@ -71,7 +116,13 @@ const ValidationNotes = ({ isAdmin }) => {
                 ].join(' '));
                 return terme.split(/\s+/).every(mot => texte.includes(mot));
             });
-    }, [saisies, onglet, recherches]);
+    }, [saisiesOnglet, onglet, recherches, filtres]);
+
+    // Seules les lignes sélectionnées ET visibles sont validées
+    const idsAValider = useMemo(
+        () => saisiesAffichees.filter(s => selection.has(s.id)).map(s => s.id),
+        [saisiesAffichees, selection]
+    );
 
     const changerOnglet = (id) => {
         setOnglet(id);
@@ -100,10 +151,10 @@ const ValidationNotes = ({ isAdmin }) => {
         });
 
     const handleValider = async () => {
-        if (selection.size === 0) return;
+        if (idsAValider.length === 0) return;
         setSaving(true); setResultat(null);
         try {
-            const res = await axios.post('/api/copies-temporaires/valider', { ids: [...selection] }, { headers });
+            const res = await axios.post('/api/copies-temporaires/valider', { ids: idsAValider }, { headers });
             setResultat(res.data);
             fetchSaisies();
         } catch (e) {
@@ -227,20 +278,48 @@ const ValidationNotes = ({ isAdmin }) => {
                     })}
                 </div>
 
-                {/* ── Recherche (propre à chaque onglet) ── */}
-                <div style={{ position: 'relative', marginBottom: '12px', maxWidth: '480px' }}>
-                    <FiSearch style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#718096' }} />
-                    <input
-                        type="text"
-                        value={recherches[onglet]}
-                        onChange={e => setRecherche(e.target.value)}
-                        placeholder={placeholderRecherche}
-                        style={{ width: '100%', padding: '9px 32px 9px 32px', border: '1px solid #cbd5e0', borderRadius: '8px', boxSizing: 'border-box' }}
-                    />
-                    {recherches[onglet] && (
-                        <button type="button" onClick={() => setRecherche('')} title="Effacer"
-                                style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#718096' }}>
-                            <FiX />
+                {/* ── Recherche + filtres matière / escadron (propres à chaque onglet) ── */}
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px' }}>
+                    <div style={{ position: 'relative', flex: '1 1 300px', maxWidth: '480px' }}>
+                        <FiSearch style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#718096' }} />
+                        <input
+                            type="text"
+                            value={recherches[onglet]}
+                            onChange={e => setRecherche(e.target.value)}
+                            placeholder={placeholderRecherche}
+                            style={{ width: '100%', padding: '9px 32px 9px 32px', border: '1px solid #cbd5e0', borderRadius: '8px', boxSizing: 'border-box' }}
+                        />
+                        {recherches[onglet] && (
+                            <button type="button" onClick={() => setRecherche('')} title="Effacer"
+                                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#718096' }}>
+                                <FiX />
+                            </button>
+                        )}
+                    </div>
+
+                    <select
+                        value={filtreCourant.matiere}
+                        onChange={e => setFiltre('matiere', e.target.value)}
+                        style={{ padding: '9px 10px', border: '1px solid #cbd5e0', borderRadius: '8px', minWidth: '180px' }}
+                    >
+                        <option value="">Toutes les matières</option>
+                        {optionsMatieres.map(([id, nom]) => <option key={id} value={id}>{nom}</option>)}
+                    </select>
+
+                    <select
+                        value={filtreCourant.escadron}
+                        onChange={e => setFiltre('escadron', e.target.value)}
+                        style={{ padding: '9px 10px', border: '1px solid #cbd5e0', borderRadius: '8px', minWidth: '160px' }}
+                    >
+                        <option value="">Tous les escadrons</option>
+                        {optionsEscadrons.map(esc => <option key={esc} value={esc}>Escadron {esc}</option>)}
+                        {aDesSansEscadron && <option value="__aucun__">Non identifié / sans escadron</option>}
+                    </select>
+
+                    {filtresActifs && (
+                        <button type="button" onClick={reinitialiserFiltres}
+                                style={{ padding: '9px 12px', border: '1px solid #cbd5e0', borderRadius: '8px', background: '#fff', cursor: 'pointer' }}>
+                            Réinitialiser
                         </button>
                     )}
                 </div>
@@ -253,8 +332,8 @@ const ValidationNotes = ({ isAdmin }) => {
                         Tout sélectionner ({saisiesAffichees.length})
                     </label>
                     <button className="btn-export excel-btn" onClick={handleValider}
-                            disabled={selection.size === 0 || saving}>
-                        <FiCheckCircle /> {saving ? 'Validation...' : `Valider la sélection (${selection.size})`}
+                            disabled={idsAValider.length === 0 || saving}>
+                        <FiCheckCircle /> {saving ? 'Validation...' : `Valider la sélection (${idsAValider.length})`}
                     </button>
                 </div>
 
@@ -347,8 +426,8 @@ const ValidationNotes = ({ isAdmin }) => {
                                 })}
                                 {saisiesAffichees.length === 0 && (
                                     <tr><td colSpan={nbColonnes} style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
-                                        {recherches[onglet].trim()
-                                            ? 'Aucun résultat pour cette recherche.'
+                                        {filtresActifs
+                                            ? 'Aucun résultat pour cette recherche / ces filtres.'
                                             : 'Aucune saisie en attente dans cet onglet.'}
                                     </td></tr>
                                 )}
