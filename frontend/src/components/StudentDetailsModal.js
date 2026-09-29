@@ -174,6 +174,31 @@ const AbsenceGroupItem = ({ group }) => {
         </li>
     );
 };
+const AncienCoursAbsences = ({ bloc }) => {
+    const grouped = Object.values(bloc.absences.reduce((acc, a) => {
+        const k = a.motif || 'Non spécifié';
+        if (!acc[k]) acc[k] = { motif: k, count: 0, totalDays: 0, dates: [] };
+        acc[k].count += 1;
+        acc[k].totalDays += 1;
+        acc[k].dates.push(a.date);
+        return acc;
+    }, {}));
+    const total = grouped.reduce((s, g) => s + g.totalDays, 0);
+
+    return (
+        <div className="external-info-item" style={{
+            marginTop: 20, padding: 12, border: '2px dashed #f0ad4e',
+            borderRadius: 8, background: '#fffaf0'
+        }}>
+            <h5 style={{ color: '#8a6d3b', borderBottom: '2px solid #f5deb3', paddingBottom: 6 }}>
+                <i className="fa fa-history"></i> Absences du cours {bloc.cour} (redoublement) — {total} jour(s)
+            </h5>
+            <ul className="details-list">
+                {grouped.map(g => <AbsenceGroupItem key={g.motif} group={g} />)}
+            </ul>
+        </div>
+    );
+};
 
 const ProfileInfoItem = ({ label, value, icon }) => (
     <div className="profile-info-item">
@@ -199,14 +224,17 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
     const [isImageFullscreen, setIsImageFullscreen] = useState(false);
     const [generalResults, setGeneralResults] = useState([]);
     const [loadingGeneral, setLoadingGeneral] = useState(false);
+    const [ancAbsences, setAncAbsences] = useState([]);
 
    useEffect(() => {
     if (!student) return;
     const currentIncorp = String(student.numero_incorporation || student.numeroIncorporation || '').trim();
     const courNormalise = selectedPromotion ? selectedPromotion.replace(/[^0-9]/g, '') : '';
     const fetchExternalData = async () => {
+
     setLoading(true);
     setError('');
+    setAncAbsences([]);
     setStudentDetails(student);
     try {
         const [sancRes, consultRes, absenceRes, detailsRes, obsRes] = await Promise.allSettled([
@@ -284,6 +312,15 @@ const StudentDetailsModal = ({ student, examSubjects, typeExamen, startDate, end
 
     fetchExternalData();
 }, [student, selectedPromotion]);
+useEffect(() => {
+    const extId = studentDetails?.id;
+    if (!extId || studentDetails === student) return;
+    let off = false;
+    axios.get(`${EXTERNAL_API_BASE_URL}/api/absence/historique/${extId}`, { timeout: 5000 })
+        .then(r => { if (!off) setAncAbsences(Array.isArray(r.data) ? r.data : []); })
+        .catch(() => { if (!off) setAncAbsences([]); });
+    return () => { off = true; };
+}, [studentDetails, student]);
 
     useEffect(() => {
         if (student) {
@@ -637,6 +674,7 @@ const totalAbsencesGenerales = useMemo(() => {
                                                 ))}
                                             </ul>
                                         ) : <p className="text-muted" style={{padding: '5px'}}>Aucune absence enregistrée.</p>}
+                                        {ancAbsences.map(b => <AncienCoursAbsences key={b.cour} bloc={b} />)}
                                     </div>
                                    
                                     
