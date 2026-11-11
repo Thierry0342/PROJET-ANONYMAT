@@ -3924,47 +3924,65 @@ app.post('/api/copies-temporaires/liaison', authenticateToken, checkRole(['admin
 app.get('/api/copies-temporaires', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const { mine } = req.query;
-       let query = `
-    SELECT
-        ct.id, ct.source, ct.eleve_id, ct.code_anonyme, ct.matiere_id, ct.type_examen,
-        ct.note, ct.est_absence, ct.motif_absence, ct.details_parcours, ct.parcours_version,
-        ct.saisi_par_utilisateur_id, ct.saisi_par_nom, ct.date_saisie,
-        m.nom_matiere,
-        COALESCE(e.nom, e2.nom)                           AS eleve_nom,
-        COALESCE(e.prenom, e2.prenom)                     AS eleve_prenom,
-        COALESCE(e.numero_incorporation, e2.numero_incorporation) AS numero_incorporation,
-        COALESCE(e.escadron, e2.escadron)                 AS escadron,
-        COALESCE(e.peloton, e2.peloton)                   AS peloton,
-        (e2.id IS NOT NULL AND ct.eleve_id IS NULL)       AS identifie_par_code
-    FROM copies_temporaires ct
-    JOIN matieres m ON ct.matiere_id = m.id
-    LEFT JOIN eleves e ON ct.eleve_id = e.id
-    LEFT JOIN copies c ON ct.code_anonyme IS NOT NULL
-                      AND c.code_anonyme = ct.code_anonyme
-                      AND c.eleve_id IS NOT NULL
-    LEFT JOIN eleves e2 ON c.eleve_id = e2.id
-    WHERE 1=1
-`;
+        let query = `
+            SELECT
+                ct.id, ct.source, ct.eleve_id, ct.code_anonyme, ct.matiere_id, ct.type_examen,
+                ct.note, ct.est_absence, ct.motif_absence, ct.details_parcours, ct.parcours_version,
+                ct.saisi_par_utilisateur_id, ct.saisi_par_nom, ct.date_saisie,
+                m.nom_matiere,
+                e.nom  AS eleve_nom,
+                e.prenom AS eleve_prenom,
+                e.numero_incorporation,
+                e.escadron,
+                e.peloton
+            FROM copies_temporaires ct
+            LEFT JOIN matieres m ON ct.matiere_id = m.id
+            LEFT JOIN eleves e ON ct.eleve_id = e.id
+            WHERE 1=1
+        `;
         const params = [];
 
-        // Un opérateur ne voit que ses propres saisies. L'admin/controleur voit tout,
-        // sauf s'il précise explicitement mine=1 pour ne voir que les siennes.
-        
         if (estOperateur(req.user) || mine === '1') {
-    query += " AND ct.saisi_par_utilisateur_id = ?";
-    params.push(req.user.id);
-}
-
+            query += " AND ct.saisi_par_utilisateur_id = ?";
+            params.push(req.user.id);
+        }
         query += " ORDER BY ct.date_saisie DESC";
 
         const [rows] = await db.query(query, params);
-        res.json(rows);
+
+        // Identification de l'élève via le code anonyme (fait en JS : évite tout conflit de collation SQL)
+        const codes = [...new Set(rows.filter(r => !r.eleve_id && r.code_anonyme).map(r => r.code_anonyme))];
+        const parCode = new Map();
+        if (codes.length > 0) {
+            const [liees] = await db.query(`
+                SELECT c.code_anonyme, c.matiere_id,
+                       e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton
+                FROM copies c
+                JOIN eleves e ON c.eleve_id = e.id
+                WHERE c.code_anonyme IN (?)
+            `, [codes]);
+            liees.forEach(l => parCode.set(`${l.code_anonyme}|${l.matiere_id}`, l));
+        }
+
+        const resultat = rows.map(r => {
+            const l = (!r.eleve_id && r.code_anonyme) ? parCode.get(`${r.code_anonyme}|${r.matiere_id}`) : null;
+            return {
+                ...r,
+                eleve_nom: r.eleve_nom ?? l?.nom ?? null,
+                eleve_prenom: r.eleve_prenom ?? l?.prenom ?? null,
+                numero_incorporation: r.numero_incorporation ?? l?.numero_incorporation ?? null,
+                escadron: r.escadron ?? l?.escadron ?? null,
+                peloton: r.peloton ?? l?.peloton ?? null,
+                identifie_par_code: !!l
+            };
+        });
+
+        res.json(resultat);
     } catch (err) {
         console.error("Erreur GET /api/copies-temporaires:", err);
         res.status(500).json({ message: "Erreur lors de la récupération des saisies en attente." });
     }
 });
-
 // ═══════ Validation (staging -> table réelle) ═══════
 app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code', 'controleur']), async (req, res) => {
     const { ids } = req.body;

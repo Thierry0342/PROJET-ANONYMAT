@@ -37,6 +37,7 @@ const ValidationNotes = ({ isAdmin }) => {
     const [editAbsence, setEditAbsence] = useState(false);
     const [editMotif, setEditMotif] = useState('');
     const [savingEdit, setSavingEdit] = useState(false);
+    const [erreur, setErreur] = useState(null);
 
     const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
 
@@ -48,8 +49,14 @@ const ValidationNotes = ({ isAdmin }) => {
             setSaisies(res.data);
             setSelection(new Set());
             setEditionId(null);
-        } catch (e) { }
+                } catch (e) {
+            setErreur(e.response?.data?.message || "Impossible de charger les saisies en attente.");
+            setSaisies([]);
+        }
         setLoading(false);
+        {erreur && (
+    <div className="card" style={{ marginBottom: '16px', color: '#dc3545', fontWeight: 600 }}>{erreur}</div>
+)}
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [afficherToutes]);
 
@@ -161,6 +168,7 @@ const ValidationNotes = ({ isAdmin }) => {
             alert(e.response?.data?.message || "Erreur lors de la validation.");
         } finally { setSaving(false); }
     };
+    useEffect(() => { setAfficherToutes(!!isAdmin); }, [isAdmin]);
 
     const handleRejeter = async (id) => {
         if (!window.confirm("Rejeter (supprimer) cette saisie en attente ?")) return;
