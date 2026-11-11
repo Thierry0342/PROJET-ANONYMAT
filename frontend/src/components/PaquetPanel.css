@@ -1,0 +1,94 @@
+.paquet-card { margin-bottom: 16px; }
+.paquet-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.paquet-required { background: #fed7d7; color: #c53030; font-size: .7rem; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; font-weight: 700; }
+.paquet-hint, .paquet-sub { font-size: .85rem; color: #718096; }
+.paquet-start { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.paquet-start input { width: 170px; }
+.paquet-counter { font-size: 2rem; font-weight: 700; margin: 8px 0; }
+.paquet-bar { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; }
+.paquet-bar > div { height: 100%; background: #2c5282; transition: width .3s; }
+.paquet-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.paquet-liste { margin-top: 16px; }
+.paquet-liste table { width: 100%; border-collapse: collapse; }
+.paquet-liste th, .paquet-liste td { padding: 8px; border-bottom: 1px solid #edf2f7; text-align: left; font-size: .9rem; }
+.paquet-derniere { background: #ebf8ff; }
+.paquet-row-actions button { background: none; border: none; cursor: pointer; padding: 4px 6px; }
+.paquet-row-actions .danger { color: #e53e3e; }
+.paquet-locked-hint { color: #c05621; font-size: .85rem; margin-bottom: 10px; }
+/* ── Bouton flottant liste d'attente ── */
+.paquet-fab {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    color: #fff;
+    background: #2c5282;
+    border: none;
+    border-radius: 999px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    cursor: pointer;
+}
+.paquet-fab:hover { background: #2a4a7a; }
+.paquet-fab-badge {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 0.8rem;
+    color: #2c5282;
+    background: #fff;
+    border-radius: 999px;
+}
+.paquet-fab-badge.ok { background: #48bb78; color: #fff; }
+
+/* ── Vérification une par une ── */
+.paquet-review { max-width: 460px; width: 92%; position: relative; }
+.paquet-review-progress { font-size: 0.85rem; color: #4a5568; margin-bottom: 6px; }
+.paquet-review-card {
+    position: relative;
+    margin: 14px 0;
+    padding: 22px 16px 14px;
+    border: 2px solid #cbd5e0;
+    border-radius: 12px;
+    background: #f7fafc;
+}
+.paquet-review-card.verifiee { border-color: #48bb78; background: #f0fff4; }
+.paquet-review-tag {
+    position: absolute;
+    top: -10px;
+    left: 12px;
+    padding: 2px 10px;
+    font-size: 0.7rem;
+    color: #fff;
+    background: #ed8936;
+    border-radius: 999px;
+}
+.paquet-review-tag.ok { left: auto; right: 12px; background: #48bb78; }
+.paquet-review-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+}
+.paquet-review-row label { font-size: 0.8rem; color: #718096; }
+.paquet-review-big { font-size: 1.5rem; letter-spacing: 1px; }
+.paquet-review-name { text-align: right; }
+.paquet-review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.paquet-review-nav { display: flex; justify-content: space-between; margin-top: 12px; }
+.paquet-review-nav button {
+    background: none;
+    border: none;
+    color: #2b6cb0;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+.paquet-review-nav button:disabled { color: #a0aec0; cursor: default; }

@@ -3,29 +3,24 @@ import axios from 'axios';
 import { jwtDecode } from "jwt-decode";
 import Counter from './Counter';
 import {
-    FaCheckCircle,
-    FaExclamationTriangle,
-    FaPencilAlt,
-    FaTrash,
-    FaSave,
-    FaTimes,
     FaQuestionCircle,
     FaLock,
     FaInfoCircle,
     FaUsers
 } from 'react-icons/fa';
-import FizzyButton from './FizzyButton';
+import usePaquet from './usePaquet';
+import PaquetProgress, { PaquetListe } from './PaquetPanel';
 import './LierCode.css';
 import './NoterCopie.css';
 import Joyride, { STATUS } from 'react-joyride';
 import Toast from './Toast';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+const STATS_VIDES = { participants: 0, deja: 0, manquantes: 0, mesSaisies: 0 };
 
 function LierCode() {
     const [statsTotal, setStatsTotal]           = useState(0);
-    const [statsParMatiere, setStatsParMatiere] = useState(0);
-    const [statsUtilisateur, setStatsUtilisateur] = useState(0);
+    const [stats, setStats]                     = useState(STATS_VIDES);
     const [matieres, setMatieres]               = useState([]);
     const [examens, setExamens]                 = useState([]);
     const [selectedExamen, setSelectedExamen]   = useState('');
@@ -56,9 +51,19 @@ function LierCode() {
     const [loadingExam, setLoadingExam]             = useState(false);
     const [loadingMat, setLoadingMat]               = useState(false);
 
+    // ── Paquet / liste d'attente ─────────────────────────────────────────────
+    const paquetCtl = usePaquet('liaison');
+    const paquet = paquetCtl.paquet;
+
+    const promotionCtx  = assignment ? (assignment.promotion || '') : selectedPromotion;
+    const populationCtx = assignment ? (assignment.population || '') : '';
+    const contexteOk = !!paquet
+        && String(paquet.matiere_id) === String(selectedMatiere)
+        && paquet.type_examen === selectedExamen;
+    const paquetPret = contexteOk && !paquetCtl.complet;
+
     const rechercheEleveInputRef = useRef(null);
     const codeInputRef           = useRef(null);
-    const prevStatsUtilisateur   = useRef(0);
 
     const tourSteps = [
         { target: '.compteurs-grid',   content: "Bienvenue !",              placement: 'bottom' },
@@ -87,31 +92,32 @@ function LierCode() {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     }), []);
 
-    const fetchAllStats = useCallback(async (currentMatiereId, currentExamen) => {
+    // ── Compteurs : total global + contexte promotion/examen/matière/utilisateur ──
+    const fetchAllStats = useCallback(async () => {
         try {
-            let urlStatsUser = `${API_BASE_URL}/api/stats/liaisons-utilisateur`;
-            const params = [];
-            if (currentMatiereId) params.push(`matiere_id=${currentMatiereId}`);
-            if (currentExamen)    params.push(`type_examen=${encodeURIComponent(currentExamen)}`);
-            if (params.length > 0) urlStatsUser += `?${params.join('&')}`;
-
-            const [resTotal, resUser] = await Promise.all([
-                axios.get(`${API_BASE_URL}/api/stats/non-lies-total`, getAuthHeaders()),
-                axios.get(urlStatsUser, getAuthHeaders())
-            ]);
+            const resTotal = await axios.get(`${API_BASE_URL}/api/stats/non-lies-total`, getAuthHeaders());
             setStatsTotal(resTotal.data.totalRestant);
-            setStatsUtilisateur(resUser.data.liaisonsCreees);
 
-            if (currentMatiereId) {
-                let url = `${API_BASE_URL}/api/matieres/${currentMatiereId}/eleves-restants`;
-                if (currentExamen) url += `?type_examen=${encodeURIComponent(currentExamen)}`;
-                const resMatiere = await axios.get(url, getAuthHeaders());
-                setStatsParMatiere(resMatiere.data.restants);
-            } else {
-                setStatsParMatiere(0);
+            if (!selectedMatiere || !selectedExamen) {
+                setStats(STATS_VIDES);
+                return null;
             }
-        } catch (error) { console.error(error); }
-    }, [getAuthHeaders]);
+            const res = await axios.get(`${API_BASE_URL}/api/stats/saisie-contexte`, {
+                ...getAuthHeaders(),
+                params: {
+                    type: 'liaison',
+                    promotion: promotionCtx,
+                    typeExamen: selectedExamen,
+                    matiereId: selectedMatiere,
+                    population: populationCtx
+                }
+            });
+            setStats(res.data);
+            return res.data;
+        } catch (error) { console.error(error); return null; }
+    }, [selectedMatiere, selectedExamen, promotionCtx, populationCtx, getAuthHeaders]);
+
+    useEffect(() => { fetchAllStats(); }, [fetchAllStats]);
 
     // ── Chargement initial ────────────────────────────────────────────────────
     useEffect(() => {
@@ -152,16 +158,14 @@ function LierCode() {
                     setSelectedExamen(assignedExam);
                     if (matiereObj?.code_prefixe)
                         setCodePrefix(matiereObj.code_prefixe.trim().toUpperCase());
-                    fetchAllStats(assignedId, assignedExam);
                 } else {
                     // ── Mode libre : présélectionner la dernière promo ──
                     if (promoList.length > 0) setSelectedPromotion(promoList[0]);
-                    fetchAllStats(null, null);
                 }
             } catch (error) { console.error(error); }
         };
         fetchInitialData();
-    }, [fetchAllStats, getAuthHeaders]);
+    }, [getAuthHeaders]);
 
     // ── Charger les examens selon la promotion (mode libre) ───────────────────
     useEffect(() => {
@@ -222,15 +226,17 @@ function LierCode() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedExamen, selectedPromotion, assignment]);
 
+    // ── Restauration du contexte d'un paquet en cours (après rafraîchissement) ──
     useEffect(() => {
-        const isMilestone  = statsUtilisateur > 0 && statsUtilisateur % 100 === 0;
-        const hasIncreased = statsUtilisateur > prevStatsUtilisateur.current;
-        if (isMilestone && hasIncreased) {
-            setMilestoneCount(statsUtilisateur);
-            setIsMilestoneModalOpen(true);
-        }
-        prevStatsUtilisateur.current = statsUtilisateur;
-    }, [statsUtilisateur]);
+        const p = paquetCtl.paquet;
+        if (!p || assignment || matieres.length === 0) return;
+        if (selectedPromotion !== p.promotion) { setSelectedPromotion(p.promotion); return; }
+        if (selectedExamen !== p.type_examen) { setSelectedExamen(p.type_examen); return; }
+        if (String(selectedMatiere) !== String(p.matiere_id)) setSelectedMatiere(String(p.matiere_id));
+        const m = matieres.find(x => x.id === p.matiere_id);
+        const prefixe = m?.code_prefixe ? m.code_prefixe.trim().toUpperCase() : '';
+        if (codePrefix !== prefixe) setCodePrefix(prefixe);
+    }, [paquetCtl.paquet, assignment, matieres, selectedPromotion, selectedExamen, selectedMatiere, codePrefix]);
 
     const formatNomEleve = useCallback((eleve) => {
         if (!eleve) return '';
@@ -275,26 +281,26 @@ function LierCode() {
             ? matiereChoisie.code_prefixe.trim().toUpperCase()
             : '');
         setCodeSuffix(''); setRechercheEleve(''); setSelectedEleve(null);
-        fetchAllStats(matiereId || null, selectedExamen);
     };
 
+    // ── Ajout à la liste d'attente du paquet (pas de validation directe) ─────
     const handleSubmit = async (e) => {
         e.preventDefault();
         const fullCode = `${codePrefix}${codeSuffix}`;
-        if (!selectedEleve || !selectedMatiere || !selectedExamen || !codeSuffix.trim()) return;
+        if (!paquetPret || !selectedEleve || !selectedMatiere || !selectedExamen || !codeSuffix.trim()) return;
         setIsLoading(true); setMessage('');
+        const avant = stats.mesSaisies;
         try {
-            const response = await axios.post(`${API_BASE_URL}/api/copies-temporaires/liaison`, {
-                eleve_id:     selectedEleve.id,
-                matiere_id:   selectedMatiere,
-                code_anonyme: fullCode,
-                type_examen:  selectedExamen
-            }, getAuthHeaders());
-            setMessage(response.data.message);
+            await paquetCtl.ajouterLigne({ eleve_id: selectedEleve.id, code_anonyme: fullCode });
+            setMessage("Liaison ajoutée à votre liste d'attente.");
             setIsError(false);
             setCodeSuffix(''); setRechercheEleve(''); setSelectedEleve(null);
             rechercheEleveInputRef.current?.focus();
-            fetchAllStats(selectedMatiere, selectedExamen);
+            const apres = await fetchAllStats();
+            if (apres && apres.mesSaisies > avant && apres.mesSaisies % 100 === 0) {
+                setMilestoneCount(apres.mesSaisies);
+                setIsMilestoneModalOpen(true);
+            }
         } catch (error) {
             setMessage(error.response?.data?.message || 'Erreur');
             setIsError(true);
@@ -320,9 +326,17 @@ function LierCode() {
 
             <div className="compteurs-grid">
                 <div className="stat-box large"><span className="stat-label">Total restant</span><Counter value={statsTotal} places={[10000, 1000, 100, 10, 1]} fontSize={56} /></div>
-                <div className="stat-box"><span className="stat-label">Restant (Matière)</span><Counter value={statsParMatiere} places={[1000, 100, 10, 1]} fontSize={48} /></div>
-                <div className="stat-box clickable" onClick={handleOpenMesLiagesModal}><span className="stat-label">Vos liages</span><Counter value={statsUtilisateur} places={[1000, 100, 10, 1]} fontSize={48} /></div>
+                <div className="stat-box"><span className="stat-label">Restant (Matière)</span><Counter value={stats.manquantes} places={[1000, 100, 10, 1]} fontSize={48} /></div>
+                <div className="stat-box clickable" onClick={handleOpenMesLiagesModal}><span className="stat-label">Vos liages</span><Counter value={stats.mesSaisies} places={[1000, 100, 10, 1]} fontSize={48} /></div>
             </div>
+
+            <PaquetProgress
+                type="liaison"
+                paquetCtl={paquetCtl}
+                contexte={{ promotion: promotionCtx, typeExamen: selectedExamen, matiereId: selectedMatiere }}
+                peutDemarrer={!!selectedMatiere && !!selectedExamen && (!!assignment || !!selectedPromotion)}
+                onModifie={fetchAllStats}
+            />
 
             <div className="card lier-code-form">
                 <form onSubmit={handleSubmit}>
@@ -367,6 +381,7 @@ function LierCode() {
                                         setRechercheEleve('');
                                         setSelectedEleve(null);
                                     }}
+                                    disabled={!!paquet}
                                 >
                                     <option value="">-- Choisir --</option>
                                     {promotionsList.map(p => (
@@ -388,7 +403,7 @@ function LierCode() {
                                         setRechercheEleve('');
                                         setSelectedEleve(null);
                                     }}
-                                    disabled={!selectedPromotion || loadingExam}
+                                    disabled={!selectedPromotion || loadingExam || !!paquet}
                                     required
                                 >
                                     <option value="">-- Choisir --</option>
@@ -408,7 +423,7 @@ function LierCode() {
                                 <select
                                     value={selectedMatiere}
                                     onChange={handleMatiereChange}
-                                    disabled={!selectedExamen || loadingMat}
+                                    disabled={!selectedExamen || loadingMat || !!paquet}
                                     required
                                 >
                                     <option value="">-- Choisir --</option>
@@ -421,6 +436,16 @@ function LierCode() {
                                     <small className="selector-hint selector-hint--warn">Aucune matière pour cet examen / cette promotion</small>
                                 )}
                             </div>
+                        </div>
+                    )}
+
+                    {!paquetPret && (
+                        <div className="paquet-locked-hint">
+                            {!paquet
+                                ? "Démarrez un comptage de paquet pour pouvoir lier."
+                                : contexteOk
+                                    ? "Paquet complet : envoyez-le en validation pour continuer."
+                                    : "Votre paquet en cours concerne une autre matière / un autre examen."}
                         </div>
                     )}
 
@@ -437,6 +462,7 @@ function LierCode() {
                             onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
                             placeholder="Nom ou N° Incorp..."
                             autoComplete="off"
+                            disabled={!paquetPret}
                             required
                         />
                         {isSearchFocused && elevesTrouves.length > 0 && (
@@ -462,7 +488,7 @@ function LierCode() {
                                 onChange={e => setCodeSuffix(e.target.value.toUpperCase().replace(/[^0-9]/g, ''))}
                                 placeholder="Chiffres"
                                 required
-                                disabled={!selectedMatiere}
+                                disabled={!selectedMatiere || !paquetPret}
                                 autoComplete="off"
                             />
                         </div>
@@ -471,7 +497,7 @@ function LierCode() {
                     <button
                         className="btn btn-primary btn-block"
                         type="submit"
-                        disabled={isLoading || !selectedEleve || !codeSuffix}
+                        disabled={isLoading || !paquetPret || !selectedEleve || !codeSuffix}
                     >
                         {isLoading ? "CHARGEMENT..." : "LIER LE CODE"}
                     </button>
@@ -483,6 +509,20 @@ function LierCode() {
                     )}
                 </form>
             </div>
+
+            <PaquetListe type="liaison" paquetCtl={paquetCtl} onModifie={fetchAllStats} />
+
+            {/* ── Modal félicitations ── */}
+            {isMilestoneModalOpen && (
+                <div className="modal-overlay">
+                    <div className="modal-content">
+                        <h2>Félicitations !</h2>
+                        <p>Vous venez de franchir un nouveau cap ! Continuez comme ça !</p>
+                        <p><strong>{milestoneCount}</strong> liaisons au total.</p>
+                        <button className="btn btn-primary" onClick={() => setIsMilestoneModalOpen(false)}>Continuer</button>
+                    </div>
+                </div>
+            )}
 
             {/* ── Modal mes liages ── */}
             {isModalOpen && (

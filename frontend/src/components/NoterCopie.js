@@ -2,27 +2,24 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { jwtDecode } from "jwt-decode";
 import Counter from './Counter';
-import FizzyButton from './FizzyButton';
 import {
     FaCheckCircle,
-   
     FaTimesCircle,
     FaSpinner,
     FaBell,
-   
     FaQuestionCircle,
     FaInfoCircle,
     FaLock
 } from 'react-icons/fa';
 import Joyride, { STATUS } from 'react-joyride';
+import usePaquet from './usePaquet';
+import PaquetProgress, { PaquetListe } from './PaquetPanel';
 import './NoterCopie.css';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+const STATS_VIDES = { participants: 0, deja: 0, manquantes: 0, mesSaisies: 0 };
 
 function NoterCopie() {
-    const [statsMatiere, setStatsMatiere] = useState({ totalInscrits: 0, notesManquantes: 0 });
-    const [statsUtilisateur, setStatsUtilisateur] = useState(0);
-    const [statsUtilisateurSpecifique, setStatsUtilisateurSpecifique] = useState(0);
     const [matieres, setMatieres] = useState([]);
     const [examTypes, setExamTypes] = useState([]);
     const [selectedMatiereId, setSelectedMatiereId] = useState('');
@@ -49,9 +46,6 @@ function NoterCopie() {
     const [milestoneCount, setMilestoneCount] = useState(0);
     const [milestoneMessage, setMilestoneMessage] = useState({ title: '', body: '' });
     const [runTour, setRunTour] = useState(false);
-    const [isPacketMode, setIsPacketMode] = useState(false);
-    const [packetTotal, setPacketTotal] = useState(0);
-    const [packetCurrentCount, setPacketCurrentCount] = useState(0);
     const [assignment, setAssignment] = useState(null);
 
     // ── Sélecteurs cascadés (mode libre / admin) ──────────────────────────────
@@ -61,9 +55,20 @@ function NoterCopie() {
     const [filteredMatieres, setFilteredMatieres] = useState([]);
     const [isMatiereLoading, setIsMatiereLoading] = useState(false);
 
+    // ── Compteurs (promotion / examen / matière / utilisateur) + paquet ──────
+    const [stats, setStats] = useState(STATS_VIDES);
+    const paquetCtl = usePaquet('note');
+    const paquet = paquetCtl.paquet;
+
+    const promotionCtx = assignment ? (assignment.promotion || '') : selectedPromotion;
+    const populationCtx = assignment ? (assignment.population || '') : '';
+    const contexteOk = !!paquet
+        && String(paquet.matiere_id) === String(selectedMatiereId)
+        && paquet.type_examen === selectedTypeExamen;
+    const paquetPret = contexteOk && !paquetCtl.complet;
+
     const noteInputRef = useRef(null);
     const codeInputRef = useRef(null);
-    const prevStatsUtilisateur = useRef(statsUtilisateur);
     const submitButtonRef = useRef(null);
 
     const tourSteps = [
@@ -102,34 +107,26 @@ function NoterCopie() {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     }), []);
 
-    const fetchStats = useCallback(async (matiereId) => {
+    // ── Compteurs par promotion / examen / matière / utilisateur ─────────────
+    const fetchStats = useCallback(async () => {
+        if (!selectedMatiereId || !selectedTypeExamen) { setStats(STATS_VIDES); return null; }
         try {
-            const resUser = await axios.get(`${API_BASE_URL}/api/stats/notes-utilisateur`, getAuthHeaders());
-            setStatsUtilisateur(resUser.data.notesSaisies);
-            if (matiereId) {
-                const resMatiere = await axios.get(`${API_BASE_URL}/api/stats/notation/${matiereId}`, getAuthHeaders());
-                setStatsMatiere({ totalInscrits: resMatiere.data.totalEleves, notesManquantes: resMatiere.data.notesManquantes });
-            } else {
-                setStatsMatiere({ totalInscrits: 0, notesManquantes: 0 });
-            }
-        } catch (error) { console.error(error); }
-    }, [getAuthHeaders]);
+            const res = await axios.get(`${API_BASE_URL}/api/stats/saisie-contexte`, {
+                ...getAuthHeaders(),
+                params: {
+                    type: 'note',
+                    promotion: promotionCtx,
+                    typeExamen: selectedTypeExamen,
+                    matiereId: selectedMatiereId,
+                    population: populationCtx
+                }
+            });
+            setStats(res.data);
+            return res.data;
+        } catch (error) { console.error(error); return null; }
+    }, [selectedMatiereId, selectedTypeExamen, promotionCtx, populationCtx, getAuthHeaders]);
 
-    const fetchSpecificUserStats = useCallback(async () => {
-        if (selectedMatiereId && selectedTypeExamen) {
-            try {
-                const res = await axios.get(`${API_BASE_URL}/api/stats/notes-utilisateur-specifique`, {
-                    ...getAuthHeaders(),
-                    params: { matiereId: selectedMatiereId, typeExamen: selectedTypeExamen }
-                });
-                setStatsUtilisateurSpecifique(res.data.notesSaisies);
-            } catch (error) { setStatsUtilisateurSpecifique(0); }
-        } else {
-            setStatsUtilisateurSpecifique(0);
-        }
-    }, [selectedMatiereId, selectedTypeExamen, getAuthHeaders]);
-
-    useEffect(() => { fetchSpecificUserStats(); }, [fetchSpecificUserStats]);
+    useEffect(() => { fetchStats(); }, [fetchStats]);
 
     // ── Chargement initial ────────────────────────────────────────────────────
     useEffect(() => {
@@ -168,7 +165,6 @@ function NoterCopie() {
                     setSelectedMatiereId(assignedId);
                     setSelectedTypeExamen(assignedExam);
                     if (matiereObj) setSelectedMatierePrefix(matiereObj.code_prefixe.trim().toUpperCase());
-                    fetchStats(assignedId);
                 } else {
                     // ── Mode libre (admin) : présélectionner la dernière promo ──
                     if (promoList.length > 0) {
@@ -176,12 +172,11 @@ function NoterCopie() {
                     } else if (resExams.data.length > 0) {
                         setSelectedTypeExamen(resExams.data[0].nom_modele);
                     }
-                    fetchStats(null);
                 }
             } catch (error) { console.error(error); }
         };
         fetchInitialData();
-    }, [getAuthHeaders, fetchStats]);
+    }, [getAuthHeaders]);
 
     // ── Charger les examens selon la promotion (mode libre) ───────────────────
     useEffect(() => {
@@ -253,6 +248,18 @@ function NoterCopie() {
         fetchMatieresByExam();
     }, [selectedTypeExamen, selectedPromotion, assignment, getAuthHeaders]);
 
+    // ── Restauration du contexte d'un paquet en cours (après rafraîchissement) ──
+    useEffect(() => {
+        const p = paquetCtl.paquet;
+        if (!p || assignment || matieres.length === 0) return;
+        if (selectedPromotion !== p.promotion) { setSelectedPromotion(p.promotion); return; }
+        if (selectedTypeExamen !== p.type_examen) { setSelectedTypeExamen(p.type_examen); return; }
+        if (String(selectedMatiereId) !== String(p.matiere_id)) setSelectedMatiereId(String(p.matiere_id));
+        const m = matieres.find(x => x.id === p.matiere_id);
+        const prefixe = m?.code_prefixe ? m.code_prefixe.trim().toUpperCase() : '';
+        if (selectedMatierePrefix !== prefixe) setSelectedMatierePrefix(prefixe);
+    }, [paquetCtl.paquet, assignment, matieres, selectedPromotion, selectedTypeExamen, selectedMatiereId, selectedMatierePrefix]);
+
     const fetchReclamations = useCallback(async () => {
         if (!isAdmin) return;
         setIsLoadingReclamations(true);
@@ -264,22 +271,6 @@ function NoterCopie() {
     }, [isAdmin, getAuthHeaders]);
 
     useEffect(() => { fetchReclamations(); }, [fetchReclamations]);
-
-    useEffect(() => {
-        const isMilestone = statsUtilisateur > 0 && statsUtilisateur % 100 === 0;
-const hasIncreased = statsUtilisateur > prevStatsUtilisateur.current;
-if (isMilestone && hasIncreased) {
-    const totalNotes = statsMatiere.totalInscrits;
-    let message = {
-        title: 'Félicitations !',
-        body: `Vous venez de franchir un nouveau cap ! ${totalNotes > 0 ? `(${totalNotes} notes au total pour cette matière)` : ''} Continuez comme ça !`
-    };
-    setMilestoneMessage(message);
-    setMilestoneCount(statsUtilisateur);
-    setIsMilestoneModalOpen(true);
-}
-        prevStatsUtilisateur.current = statsUtilisateur;
-    }, [statsUtilisateur, statsMatiere.totalInscrits, statsMatiere.notesManquantes]);
 
     useEffect(() => {
         if (codeValidation.status === 'valid') noteInputRef.current?.focus();
@@ -296,25 +287,24 @@ if (isMilestone && hasIncreased) {
     }, [assignment]);
 
     // ── Changement de matière (mode libre) ───────────────────────────────────
- const handleMatiereChange = (e) => {
-    const matiereId = e.target.value;
-    const matiereList = assignment ? matieres : filteredMatieres;
-    let selectedMatiere = matiereId
-        ? matiereList.find(m => m.id.toString() === matiereId)
-        : undefined;
+    const handleMatiereChange = (e) => {
+        const matiereId = e.target.value;
+        const matiereList = assignment ? matieres : filteredMatieres;
+        let selectedMatiere = matiereId
+            ? matiereList.find(m => m.id.toString() === matiereId)
+            : undefined;
 
-    // Repli : la liste filtrée peut ne pas porter le préfixe
-    if (matiereId && !selectedMatiere?.code_prefixe) {
-        selectedMatiere = matieres.find(m => m.id.toString() === matiereId) || selectedMatiere;
-    }
+        // Repli : la liste filtrée peut ne pas porter le préfixe
+        if (matiereId && !selectedMatiere?.code_prefixe) {
+            selectedMatiere = matieres.find(m => m.id.toString() === matiereId) || selectedMatiere;
+        }
 
-    setSelectedMatiereId(matiereId);
-    setSelectedMatierePrefix(
-        selectedMatiere?.code_prefixe ? selectedMatiere.code_prefixe.trim().toUpperCase() : ''
-    );
-    resetFields(false);
-    fetchStats(matiereId || null);
-};
+        setSelectedMatiereId(matiereId);
+        setSelectedMatierePrefix(
+            selectedMatiere?.code_prefixe ? selectedMatiere.code_prefixe.trim().toUpperCase() : ''
+        );
+        resetFields(false);
+    };
 
     const handleCodeSuffixChange = (e) => {
         const suffix = e.target.value.toUpperCase().replace(/[^0-9]/g, '');
@@ -323,6 +313,7 @@ if (isMilestone && hasIncreased) {
     };
 
     const verifyCode = useCallback(async () => {
+        if (!paquetPret) return;
         if (!codeSuffix.trim() || !selectedMatierePrefix) return;
         if (codeValidation.status === 'checking' || codeValidation.status === 'valid') return;
         const fullCode = `${selectedMatierePrefix}${codeSuffix}`;
@@ -333,7 +324,7 @@ if (isMilestone && hasIncreased) {
         } catch (error) {
             setCodeValidation({ status: 'invalid', message: `Erreur : ${error.response?.data?.message || "Inconnu"}` });
         }
-    }, [codeSuffix, selectedMatierePrefix, getAuthHeaders, codeValidation.status]);
+    }, [paquetPret, codeSuffix, selectedMatierePrefix, getAuthHeaders, codeValidation.status]);
 
     const handleCodeKeyDown = (e) => { if (e.key === 'Enter') { e.preventDefault(); verifyCode(); } };
 
@@ -344,31 +335,27 @@ if (isMilestone && hasIncreased) {
         }
     };
 
+    // ── Ajout à la liste d'attente du paquet (pas de validation directe) ─────
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (codeValidation.status !== 'valid' || note === '') return;
+        if (!paquetPret || codeValidation.status !== 'valid' || note === '') return;
         setSubmitMessage(''); setIsSubmitError(false); setConflictData(null);
+        const avant = stats.mesSaisies;
         try {
             const fullCode = `${selectedMatierePrefix}${codeSuffix}`;
-          await axios.post(`${API_BASE_URL}/api/copies-temporaires/anonyme`, {
-    matiere_id: selectedMatiereId,
-    code_anonyme: fullCode,
-    note: note,
-    type_examen: selectedTypeExamen
-}, getAuthHeaders());
-            if (isPacketMode) {
-                const newCount = packetCurrentCount + 1;
-                setPacketCurrentCount(newCount);
-                if (newCount >= packetTotal) {
-                    alert(`Paquet terminé !`);
-                    setIsPacketMode(false); setPacketTotal(0); setPacketCurrentCount(0);
-                }
-            }
-            setNotification(`Note mise en attente de validation.`);
+            await paquetCtl.ajouterLigne({ code_anonyme: fullCode, note });
+            setNotification(`Note ajoutée à votre liste d'attente.`);
             setTimeout(() => setNotification(''), 4000);
             resetFields(false);
-            fetchStats(selectedMatiereId);
-            fetchSpecificUserStats();
+            const apres = await fetchStats();
+            if (apres && apres.mesSaisies > avant && apres.mesSaisies % 100 === 0) {
+                setMilestoneMessage({
+                    title: 'Félicitations !',
+                    body: `Vous venez de franchir un nouveau cap ! (${apres.participants} copies à noter pour cette matière) Continuez comme ça !`
+                });
+                setMilestoneCount(apres.mesSaisies);
+                setIsMilestoneModalOpen(true);
+            }
         } catch (error) {
             if (error.response?.status === 409) {
                 setConflictData({ code: `${selectedMatierePrefix}${codeSuffix}`, note: note, message: error.response.data.message });
@@ -437,11 +424,6 @@ if (isMilestone && hasIncreased) {
         } catch (error) { console.error(error); }
     };
 
-    const handleStartPacket = () => {
-        const total = window.prompt("Nombre de copies ?", "50");
-        if (total && !isNaN(total)) { setPacketTotal(parseInt(total)); setPacketCurrentCount(0); setIsPacketMode(true); }
-    };
-
     // ── Sélecteurs cascadés (mode libre / admin) ──────────────────────────────
     const renderFreeSelectors = () => (
         <>
@@ -457,6 +439,7 @@ if (isMilestone && hasIncreased) {
                         setSelectedMatierePrefix('');
                         resetFields(false);
                     }}
+                    disabled={!!paquet}
                 >
                     <option value="">-- Toutes les promotions --</option>
                     {promotionsList.map(p => <option key={p} value={p}>{p}</option>)}
@@ -475,7 +458,7 @@ if (isMilestone && hasIncreased) {
                         setSelectedMatierePrefix('');
                         resetFields(false);
                     }}
-                    disabled={!selectedPromotion}
+                    disabled={!selectedPromotion || !!paquet}
                     required
                 >
                     <option value="">-- Sélectionnez --</option>
@@ -497,7 +480,7 @@ if (isMilestone && hasIncreased) {
                     id="matiere-select"
                     value={selectedMatiereId}
                     onChange={handleMatiereChange}
-                    disabled={!selectedTypeExamen || isMatiereLoading}
+                    disabled={!selectedTypeExamen || isMatiereLoading || !!paquet}
                     required
                 >
                     <option value="">-- Sélectionnez --</option>
@@ -520,19 +503,19 @@ if (isMilestone && hasIncreased) {
             <Joyride callback={handleJoyrideCallback} continuous run={runTour} steps={tourSteps} styles={{ options: { zIndex: 10000, primaryColor: '#2c5282' } }} />
             <button className="help-button" onClick={() => setRunTour(true)}><FaQuestionCircle /></button>
             <div className="compteurs-grid">
-                <div className="stat-box large"><span className="stat-label">Notes Restantes</span><Counter value={statsMatiere.notesManquantes} places={[1000, 100, 10, 1]} fontSize={56} /></div>
-                <div className="stat-box"><span className="stat-label">Notes Déjà Saisies</span><Counter value={statsMatiere.totalInscrits - statsMatiere.notesManquantes} places={[1000, 100, 10, 1]} fontSize={48} /></div>
-                <div className="stat-box clickable vos-saisies-box" onClick={handleOpenMesSaisiesModal}><span className="stat-label">Vos Saisies (Examen)</span><Counter value={statsUtilisateurSpecifique} places={[1000, 100, 10, 1]} fontSize={48} /></div>
+                <div className="stat-box large"><span className="stat-label">Notes Restantes</span><Counter value={stats.manquantes} places={[1000, 100, 10, 1]} fontSize={56} /></div>
+                <div className="stat-box"><span className="stat-label">Notes Déjà Saisies</span><Counter value={stats.deja} places={[1000, 100, 10, 1]} fontSize={48} /></div>
+                <div className="stat-box clickable vos-saisies-box" onClick={handleOpenMesSaisiesModal}><span className="stat-label">Vos Saisies (Examen)</span><Counter value={stats.mesSaisies} places={[1000, 100, 10, 1]} fontSize={48} /></div>
                 {isAdmin && (<div className="notification-bell" onClick={() => setIsReclamationModalOpen(true)}><FaBell size={32} />{reclamations.length > 0 && (<span className="notification-badge">{reclamations.length}</span>)}</div>)}
             </div>
 
-            <div className="card packet-verifier-card">
-                {!isPacketMode ? (
-                    <button className="btn btn-secondary" onClick={handleStartPacket} disabled={!selectedMatiereId}>Démarrer comptage paquet</button>
-                ) : (
-                    <div className="packet-progress"><h3>Paquet en cours</h3><div className="packet-counter"><span>{packetCurrentCount}</span> / {packetTotal}</div><button className="btn btn-danger-outline" onClick={() => setIsPacketMode(false)}>Annuler</button></div>
-                )}
-            </div>
+            <PaquetProgress
+                type="note"
+                paquetCtl={paquetCtl}
+                contexte={{ promotion: promotionCtx, typeExamen: selectedTypeExamen, matiereId: selectedMatiereId }}
+                peutDemarrer={!!selectedMatiereId && !!selectedTypeExamen && (!!assignment || !!selectedPromotion)}
+                onModifie={fetchStats}
+            />
 
             <div className="card noter-copie-form">
                 <form onSubmit={handleSubmit}>
@@ -587,8 +570,18 @@ if (isMilestone && hasIncreased) {
                         </div>
                     )}
 
+                    {!paquetPret && (
+                        <div className="paquet-locked-hint">
+                            {!paquet
+                                ? "Démarrez un comptage de paquet pour pouvoir saisir."
+                                : contexteOk
+                                    ? "Paquet complet : envoyez-le en validation pour continuer."
+                                    : "Votre paquet en cours concerne une autre matière / un autre examen."}
+                        </div>
+                    )}
+
                     {/* ── Champs communs Code + Note ── */}
-                <div className="form-group">
+                    <div className="form-group">
                         <label>Code Anonyme</label>
                         <div className="code-input-wrapper">
                             <span className="code-prefix">{selectedMatierePrefix}</span>
@@ -600,15 +593,15 @@ if (isMilestone && hasIncreased) {
                                 onChange={handleCodeSuffixChange}
                                 onBlur={verifyCode}
                                 onKeyDown={handleCodeKeyDown}
-                                disabled={!selectedMatiereId}
+                                disabled={!selectedMatiereId || !paquetPret}
                                 autoComplete="off"
                                 required
                             />
                             {selectedMatiereId && !selectedMatierePrefix && (
-                        <small style={{ color: '#e53e3e' }}>
-                            Cette matière n'a pas de préfixe de code défini — contactez l'administrateur.
-                        </small>
-                    )}
+                                <small style={{ color: '#e53e3e' }}>
+                                    Cette matière n'a pas de préfixe de code défini — contactez l'administrateur.
+                                </small>
+                            )}
                             <div className="val-icon-container">
                                 {codeValidation.status === 'checking' ? <FaSpinner className="spinner" /> :
                                     codeValidation.status === 'valid' ? <FaCheckCircle className="valid" /> :
@@ -616,7 +609,6 @@ if (isMilestone && hasIncreased) {
                             </div>
                         </div>
                     </div>
-                    
 
                     <div className="form-group">
                         <label>Note / 20</label>
@@ -630,7 +622,7 @@ if (isMilestone && hasIncreased) {
                             value={note}
                             onChange={(e) => setNote(e.target.value)}
                             onKeyDown={handleNoteKeyDown}
-                            disabled={codeValidation.status !== 'valid'}
+                            disabled={!paquetPret || codeValidation.status !== 'valid'}
                             required
                         />
                     </div>
@@ -639,15 +631,15 @@ if (isMilestone && hasIncreased) {
                         ref={submitButtonRef}
                         className="btn btn-primary btn-block btn-submit-note"
                         type="submit"
-                        disabled={codeValidation.status !== 'valid' || note === '' || !!conflictData}
+                        disabled={!paquetPret || codeValidation.status !== 'valid' || note === '' || !!conflictData}
                     >
                         Enregistrer
                     </button>
                     {submitMessage && (
-    <div className={`message ${isSubmitError ? 'error' : 'success'}`}>
-        <span>{submitMessage}</span>
-    </div>
-)}
+                        <div className={`message ${isSubmitError ? 'error' : 'success'}`}>
+                            <span>{submitMessage}</span>
+                        </div>
+                    )}
 
                     {conflictData && (
                         <div className="message warning">
@@ -667,6 +659,8 @@ if (isMilestone && hasIncreased) {
                 </form>
             </div>
 
+            <PaquetListe type="note" paquetCtl={paquetCtl} onModifie={fetchStats} />
+
             {isModalOpen && (
                 <div className="modal-overlay">
                     <div className="modal-content">
@@ -683,60 +677,62 @@ if (isMilestone && hasIncreased) {
             )}
 
             {isMilestoneModalOpen && (
-    <div className="modal-overlay">
-        <div className="modal-content">
-            <h2>{milestoneMessage.title}</h2>
-            <p>{milestoneMessage.body}</p>
-            <p><strong>{milestoneCount}</strong> notes saisies au total.</p>
-            <button className="btn btn-primary" onClick={() => setIsMilestoneModalOpen(false)}>Continuer</button>
-        </div>
-    </div>
-)}{isReclamationModalOpen && (
-    <div className="modal-overlay">
-        <div className="modal-content large">
-            <h2>Réclamations</h2>
-            {isLoadingReclamations ? <p>Chargement...</p> : (
-                <>
-                    {reclamations.length === 0 && <p>Aucune réclamation en attente.</p>}
-                    {reclamations.map(r => (
-                        <div key={r.id} className="reclamation-row">
-                            <span>{r.nom_matiere} — {r.code_anonyme} — Note proposée : {r.note_proposee}</span>
-                            <button onClick={() => handleFetchDetails(r)}>Détails</button>
-                            <button onClick={() => handleResolveReclamation(r.id)}>Marquer résolu</button>
-                        </div>
-                    ))}
-                </>
-            )}
-
-            {selectedReclamation && selectedReclamationDetails && (
-                <div className="reclamation-details">
-                    <h3>Détails — {selectedReclamation.code_anonyme}</h3>
-                    {selectedReclamationDetails.isLoading ? <p>Chargement des détails...</p> :
-                     selectedReclamationDetails.error ? <p>{selectedReclamationDetails.error}</p> : (
-                        <>
-                            <p>Note originale : {selectedReclamationDetails.note_originale}</p>
-                            <p>Saisie par : {selectedReclamationDetails.nom_utilisateur}</p>
-                            <form onSubmit={handleCorrectionSubmit}>
-                                <label>Nouvelle note</label>
-                                <input
-                                    type="number" min="0" max="20" step="0.25"
-                                    value={nouvelleNoteCorrection}
-                                    onChange={e => setNouvelleNoteCorrection(e.target.value)}
-                                    required
-                                />
-                                <button type="submit" className="btn btn-primary">Corriger</button>
-                            </form>
-                        </>
-                    )}
+                <div className="modal-overlay">
+                    <div className="modal-content">
+                        <h2>{milestoneMessage.title}</h2>
+                        <p>{milestoneMessage.body}</p>
+                        <p><strong>{milestoneCount}</strong> notes saisies au total.</p>
+                        <button className="btn btn-primary" onClick={() => setIsMilestoneModalOpen(false)}>Continuer</button>
+                    </div>
                 </div>
             )}
 
-            <button onClick={() => { setIsReclamationModalOpen(false); setSelectedReclamation(null); setSelectedReclamationDetails(null); }}>
-                Fermer
-            </button>
-        </div>
-    </div>
-)}
+            {isReclamationModalOpen && (
+                <div className="modal-overlay">
+                    <div className="modal-content large">
+                        <h2>Réclamations</h2>
+                        {isLoadingReclamations ? <p>Chargement...</p> : (
+                            <>
+                                {reclamations.length === 0 && <p>Aucune réclamation en attente.</p>}
+                                {reclamations.map(r => (
+                                    <div key={r.id} className="reclamation-row">
+                                        <span>{r.nom_matiere} — {r.code_anonyme} — Note proposée : {r.note_proposee}</span>
+                                        <button onClick={() => handleFetchDetails(r)}>Détails</button>
+                                        <button onClick={() => handleResolveReclamation(r.id)}>Marquer résolu</button>
+                                    </div>
+                                ))}
+                            </>
+                        )}
+
+                        {selectedReclamation && selectedReclamationDetails && (
+                            <div className="reclamation-details">
+                                <h3>Détails — {selectedReclamation.code_anonyme}</h3>
+                                {selectedReclamationDetails.isLoading ? <p>Chargement des détails...</p> :
+                                    selectedReclamationDetails.error ? <p>{selectedReclamationDetails.error}</p> : (
+                                        <>
+                                            <p>Note originale : {selectedReclamationDetails.note_originale}</p>
+                                            <p>Saisie par : {selectedReclamationDetails.nom_utilisateur}</p>
+                                            <form onSubmit={handleCorrectionSubmit}>
+                                                <label>Nouvelle note</label>
+                                                <input
+                                                    type="number" min="0" max="20" step="0.25"
+                                                    value={nouvelleNoteCorrection}
+                                                    onChange={e => setNouvelleNoteCorrection(e.target.value)}
+                                                    required
+                                                />
+                                                <button type="submit" className="btn btn-primary">Corriger</button>
+                                            </form>
+                                        </>
+                                    )}
+                            </div>
+                        )}
+
+                        <button onClick={() => { setIsReclamationModalOpen(false); setSelectedReclamation(null); setSelectedReclamationDetails(null); }}>
+                            Fermer
+                        </button>
+                    </div>
+                </div>
+            )}
 
             <style jsx>{`
                 .free-selectors-box {

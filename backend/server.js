@@ -295,6 +295,46 @@ try {
     } catch (err) {
         console.error('❌ Erreur migration listes_selection_eleves:', err.message);
     }
+        // 12. Migration : paquets de saisie + liste d'attente
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS paquets_saisie (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                type_saisie VARCHAR(20) NOT NULL,
+                utilisateur_id INT NOT NULL,
+                promotion VARCHAR(50) NOT NULL DEFAULT '',
+                type_examen VARCHAR(100) NOT NULL,
+                matiere_id INT NOT NULL,
+                total_attendu INT NOT NULL,
+                statut VARCHAR(20) NOT NULL DEFAULT 'en_cours',
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                date_cloture TIMESTAMP NULL,
+                INDEX idx_paquet_user (utilisateur_id, type_saisie, statut),
+                INDEX idx_paquet_ctx (promotion, type_examen, matiere_id)
+            )
+        `);
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS liste_attente_saisies (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                paquet_id INT NOT NULL,
+                type_saisie VARCHAR(20) NOT NULL,
+                utilisateur_id INT NOT NULL,
+                promotion VARCHAR(50) NOT NULL DEFAULT '',
+                type_examen VARCHAR(100) NOT NULL,
+                matiere_id INT NOT NULL,
+                code_anonyme VARCHAR(50) NULL,
+                eleve_id INT NULL,
+                note DECIMAL(5,2) NULL,
+                date_saisie TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_la_paquet (paquet_id),
+                INDEX idx_la_ctx (promotion, type_examen, matiere_id, utilisateur_id),
+                INDEX idx_la_code (code_anonyme, matiere_id)
+            )
+        `);
+        console.log('✅ Migration OK : paquets_saisie + liste_attente_saisies prêtes');
+    } catch (err) {
+        console.error('❌ Erreur migration paquets/liste attente:', err.message);
+    }
 };
     
 runMigrations();
@@ -1506,22 +1546,40 @@ app.delete('/api/resultats/:copieId', authenticateToken, checkRole(['admin', 'co
     const connection = await db.getConnection();
     try {
         await connection.beginTransaction();
-        const [copies] = await connection.query("SELECT note FROM copies WHERE id = ?", [copieId]);
+        const [copies] = await connection.query(
+            "SELECT note, code_anonyme FROM copies WHERE id = ? FOR UPDATE", [copieId]);
         if (copies.length === 0) {
-             await connection.rollback();
-             return res.status(404).json({ message: "Résultat non trouvé." });
+            await connection.rollback();
+            return res.status(404).json({ message: "Résultat non trouvé." });
         }
-        const ancienne_note = copies[0].note;
+        const { note: ancienne_note, code_anonyme } = copies[0];
         const motif = `Suppression de la note ${ancienne_note}.`;
+
+        // Archiver l'action dans l'historique
         await connection.query(
             "INSERT INTO historique_modifications_notes (copie_id, ancienne_note, nouvelle_note, motif, modifie_par_utilisateur_id) VALUES (?, ?, NULL, ?, ?)",
             [copieId, ancienne_note, motif, utilisateurId]
         );
-        await connection.query("UPDATE copies SET note = NULL WHERE id = ?", [copieId]);
+
+        if (code_anonyme) {
+            // Copie anonyme : on garde la ligne (le code reste en base) mais on
+            // supprime la note ET la liaison avec l'élève → le code redevient libre
+            await connection.query(
+                "UPDATE copies SET note = NULL, eleve_id = NULL, cree_par_utilisateur_id = NULL WHERE id = ?",
+                [copieId]);
+            await connection.query(
+                "UPDATE codes_anonymes_disponibles SET est_utilise = 0 WHERE code = ?", [code_anonyme]);
+        } else {
+            // Saisie directe (sans code) : la ligne n'a plus aucune raison d'exister
+            await connection.query("DELETE FROM historique_modifications_notes WHERE copie_id = ?", [copieId]);
+            await connection.query("DELETE FROM copies WHERE id = ?", [copieId]);
+        }
+
         await connection.commit();
-        res.json({ message: "La note a été supprimée et l'action archivée." });
+        res.json({ message: "La note a été supprimée et la liaison avec l'élève a été retirée." });
     } catch (err) {
         await connection.rollback();
+        console.error("Erreur suppression résultat:", err);
         res.status(500).json({ message: "Erreur interne du serveur." });
     } finally {
         connection.release();
@@ -2213,7 +2271,7 @@ app.get('/api/eleves-par-groupe', authenticateToken, checkRole(['admin', 'operat
         const query = `
            SELECT e.id, e.nom, e.prenom, e.numero_incorporation, e.sexe, e.escadron, e.peloton, e.statut
             FROM eleves e
-            LEFT JOIN copies c ON e.id = c.eleve_id AND c.matiere_id = ? AND c.type_examen = ?
+          LEFT JOIN copies c ON e.id = c.eleve_id AND c.matiere_id = ? AND c.type_examen = ? AND c.note IS NOT NULL
             LEFT JOIN absences a ON e.id = a.eleve_id AND a.matiere_id = ?
             WHERE c.id IS NULL
               AND a.id IS NULL
@@ -3900,10 +3958,10 @@ app.post('/api/copies-temporaires/liaison', authenticateToken, checkRole(['admin
         }
 
         // 3. L'élève n'a pas déjà une copie validée pour cette matière/examen
-        const [dejaLie] = await db.query(
-            "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ?",
-            [eleve_id, matiere_id, type_examen]
-        );
+       const [dejaLie] = await db.query(
+    "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
+    [eleve_id, matiere_id, type_examen]
+);
         if (dejaLie.length > 0) {
             return res.status(409).json({ message: `Erreur : Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme}).` });
         }
@@ -4088,15 +4146,25 @@ app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin
         continue;
     }
     const [dejaLie] = await connection.query(
-        "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ?",
-        [temp.eleve_id, temp.matiere_id, temp.type_examen]
-    );
-    if (dejaLie.length > 0) {
-        await connection.rollback();
-        resultats.echecs.push({ id, message: `Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme}).` });
-        continue;
-    }
+    "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
+    [temp.eleve_id, temp.matiere_id, temp.type_examen]
+);
+if (dejaLie.length > 0) {
+    await connection.rollback();
+    resultats.echecs.push({ id, message: `Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme}).` });
+    continue;
+}
 
+
+// Supprimer les lignes vides résiduelles (note supprimée, sans code) de cet élève
+const [vides] = await connection.query(
+    "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NULL AND code_anonyme IS NULL",
+    [temp.eleve_id, temp.matiere_id, temp.type_examen]
+);
+for (const v of vides) {
+    await connection.query("DELETE FROM historique_modifications_notes WHERE copie_id = ?", [v.id]);
+    await connection.query("DELETE FROM copies WHERE id = ?", [v.id]);
+}
     await connection.query(
         "UPDATE copies SET eleve_id = ?, cree_par_utilisateur_id = ? WHERE code_anonyme = ?",
         [temp.eleve_id, temp.saisi_par_utilisateur_id, temp.code_anonyme]
@@ -5912,6 +5980,400 @@ app.delete('/api/listes-selection/:id', authenticateToken, async (req, res) => {
     } catch (err) {
         console.error("Erreur suppression liste sélection:", err);
         res.status(500).json({ message: "Erreur lors de la suppression de la liste." });
+    }
+});
+// ═══════════════════ PAQUETS DE SAISIE + LISTE D'ATTENTE ═══════════════════
+const ROLES_SAISIE = ['admin', 'operateur_note', 'operateur_code', 'controleur'];
+const peutSaisir = (user, type) => (type === 'liaison'
+    ? ['admin', 'operateur_code', 'controleur']
+    : ['admin', 'operateur_note', 'controleur']).includes(user.role);
+
+const chargerPaquet = async (id, utilisateurId) => {
+    const [[p]] = await db.query("SELECT * FROM paquets_saisie WHERE id = ? AND utilisateur_id = ?", [id, utilisateurId]);
+    return p || null;
+};
+
+const chargerLignes = async (conn, paquetId) => {
+    const [rows] = await conn.query(`
+        SELECT l.id, l.code_anonyme, l.eleve_id, l.note, l.date_saisie,
+               e.nom AS eleve_nom, e.prenom AS eleve_prenom, e.numero_incorporation, e.escadron, e.peloton
+        FROM liste_attente_saisies l
+        LEFT JOIN eleves e ON l.eleve_id = e.id
+        WHERE l.paquet_id = ?
+        ORDER BY l.id DESC
+    `, [paquetId]);
+    return rows;
+};
+
+// Contrôles (retournent null si OK, sinon { status, message })
+const controlerSaisieNote = async (conn, { code, matiereId, ignorerListe = false }) => {
+    const [codes] = await conn.query("SELECT id FROM codes_anonymes_disponibles WHERE code = ?", [code]);
+    if (codes.length === 0) return { status: 404, message: "Ce code anonyme n'existe pas dans la base de données générale." };
+
+    const [copies] = await conn.query("SELECT note FROM copies WHERE code_anonyme = ? AND matiere_id = ?", [code, matiereId]);
+    if (copies.length > 0 && copies[0].note !== null) return { status: 409, message: "Ce code a déjà une note validée." };
+
+    const [temp] = await conn.query(
+        "SELECT id FROM copies_temporaires WHERE code_anonyme = ? AND matiere_id = ? AND source = 'anonyme'", [code, matiereId]);
+    if (temp.length > 0) return { status: 409, message: "Ce code a déjà une note en attente de validation." };
+
+    if (!ignorerListe) {
+        const [la] = await conn.query(
+            "SELECT id FROM liste_attente_saisies WHERE type_saisie = 'note' AND code_anonyme = ? AND matiere_id = ?", [code, matiereId]);
+        if (la.length > 0) return { status: 409, message: "Ce code est déjà dans une liste d'attente (paquet en cours)." };
+    }
+    return null;
+};
+
+const controlerSaisieLiaison = async (conn, { eleveId, code, matiereId, typeExamen, ignorerListe = false }) => {
+    const [copies] = await conn.query("SELECT eleve_id, matiere_id, type_examen FROM copies WHERE code_anonyme = ?", [code]);
+    if (copies.length > 0) {
+        const copie = copies[0];
+        if (copie.eleve_id !== null) {
+            const [[e]] = await conn.query("SELECT nom, prenom, numero_incorporation FROM eleves WHERE id = ?", [copie.eleve_id]);
+            return { status: 409, message: e
+                ? `Erreur : Le code ${code} est déjà lié à l'élève ${e.nom} ${e.prenom} (N° ${e.numero_incorporation}).`
+                : "Cette copie est déjà liée à un autre élève." };
+        }
+        if (String(copie.matiere_id) !== String(matiereId)) return { status: 409, message: "Conflit : Ce code a été noté pour une autre matière." };
+        if (copie.type_examen && copie.type_examen !== typeExamen) {
+            return { status: 409, message: `Erreur : Ce code correspond à l'examen '${copie.type_examen}', mais vous avez sélectionné '${typeExamen}'.` };
+        }
+    } else {
+        const [noteEnAttente] = await conn.query(
+            "SELECT matiere_id, type_examen FROM copies_temporaires WHERE code_anonyme = ? AND source = 'anonyme'", [code]);
+        if (noteEnAttente.length === 0) return { status: 404, message: "Ce code n'existe pas ou n'a pas encore été noté." };
+        if (String(noteEnAttente[0].matiere_id) !== String(matiereId)) return { status: 409, message: "Conflit : Ce code a été noté pour une autre matière." };
+        if (noteEnAttente[0].type_examen !== typeExamen) {
+            return { status: 409, message: `Erreur : Ce code correspond à l'examen '${noteEnAttente[0].type_examen}', mais vous avez sélectionné '${typeExamen}'.` };
+        }
+    }
+
+    const [liaisonCode] = await conn.query("SELECT id FROM copies_temporaires WHERE source = 'liaison' AND code_anonyme = ?", [code]);
+    if (liaisonCode.length > 0) return { status: 409, message: `Le code ${code} a déjà une liaison en attente de validation.` };
+
+    const [liaisonEleve] = await conn.query(
+        "SELECT code_anonyme FROM copies_temporaires WHERE source = 'liaison' AND eleve_id = ? AND matiere_id = ? AND type_examen = ?",
+        [eleveId, matiereId, typeExamen]);
+    if (liaisonEleve.length > 0) return { status: 409, message: `Cet élève a déjà une liaison en attente pour cette matière (Code : ${liaisonEleve[0].code_anonyme}).` };
+
+    if (!ignorerListe) {
+        const [laCode] = await conn.query(
+            "SELECT id FROM liste_attente_saisies WHERE type_saisie = 'liaison' AND code_anonyme = ? AND matiere_id = ?", [code, matiereId]);
+        if (laCode.length > 0) return { status: 409, message: `Le code ${code} est déjà dans une liste d'attente (paquet en cours).` };
+        const [laEleve] = await conn.query(
+            "SELECT id FROM liste_attente_saisies WHERE type_saisie = 'liaison' AND eleve_id = ? AND matiere_id = ? AND type_examen = ?",
+            [eleveId, matiereId, typeExamen]);
+        if (laEleve.length > 0) return { status: 409, message: "Cet élève est déjà dans une liste d'attente pour cette matière." };
+    }
+
+    const [dejaLie] = await conn.query(
+        "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL", [eleveId, matiereId, typeExamen]);
+    if (dejaLie.length > 0) return { status: 409, message: `Erreur : Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme}).` };
+
+    return null;
+};
+
+// Paquet actif de l'utilisateur (avec ses lignes, la dernière saisie en premier)
+app.get('/api/paquets/actif', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const type = req.query.type === 'liaison' ? 'liaison' : 'note';
+        const [[paquet]] = await db.query(`
+            SELECT p.*, m.nom_matiere
+            FROM paquets_saisie p LEFT JOIN matieres m ON m.id = p.matiere_id
+            WHERE p.utilisateur_id = ? AND p.type_saisie = ? AND p.statut = 'en_cours'
+            ORDER BY p.id DESC LIMIT 1
+        `, [req.user.id, type]);
+        if (!paquet) return res.json(null);
+        const lignes = await chargerLignes(db, paquet.id);
+        res.json({ ...paquet, lignes });
+    } catch (err) {
+        console.error("Erreur GET /api/paquets/actif:", err);
+        res.status(500).json({ message: "Erreur lors de la récupération du paquet." });
+    }
+});
+
+// Démarrer un paquet
+app.post('/api/paquets', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const { type_saisie, promotion, type_examen, matiere_id, total } = req.body;
+        const type = type_saisie === 'liaison' ? 'liaison' : 'note';
+        if (!peutSaisir(req.user, type)) return res.status(403).json({ message: "Permissions insuffisantes." });
+
+        const totalNum = parseInt(total, 10);
+        if (!type_examen || !matiere_id || isNaN(totalNum) || totalNum < 1 || totalNum > 500) {
+            return res.status(400).json({ message: "Promotion, examen, matière et un nombre de copies entre 1 et 500 sont requis." });
+        }
+        const [existant] = await db.query(
+            "SELECT id FROM paquets_saisie WHERE utilisateur_id = ? AND type_saisie = ? AND statut = 'en_cours'", [req.user.id, type]);
+        if (existant.length > 0) {
+            return res.status(409).json({ message: "Vous avez déjà un paquet en cours. Terminez-le ou annulez-le d'abord." });
+        }
+        const [result] = await db.query(
+            "INSERT INTO paquets_saisie (type_saisie, utilisateur_id, promotion, type_examen, matiere_id, total_attendu) VALUES (?, ?, ?, ?, ?, ?)",
+            [type, req.user.id, (promotion || '').trim(), type_examen, matiere_id, totalNum]);
+        res.status(201).json({ id: result.insertId });
+    } catch (err) {
+        console.error("Erreur POST /api/paquets:", err);
+        res.status(500).json({ message: "Erreur lors de la création du paquet." });
+    }
+});
+
+// Ajouter une saisie dans la liste d'attente du paquet
+app.post('/api/paquets/:id/lignes', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const paquet = await chargerPaquet(req.params.id, req.user.id);
+        if (!paquet || paquet.statut !== 'en_cours') {
+            return res.status(404).json({ message: "Aucun paquet en cours. Démarrez un comptage de paquet." });
+        }
+        const [[{ nb }]] = await db.query("SELECT COUNT(*) AS nb FROM liste_attente_saisies WHERE paquet_id = ?", [paquet.id]);
+        if (nb >= paquet.total_attendu) {
+            return res.status(400).json({ message: `Le paquet est complet (${nb}/${paquet.total_attendu}). Envoyez-le en validation.` });
+        }
+
+        if (paquet.type_saisie === 'note') {
+            const { code_anonyme, note } = req.body;
+            if (!code_anonyme || note === undefined || note === '') {
+                return res.status(400).json({ message: "Code et note sont requis." });
+            }
+            const noteNum = parseFloat(note);
+            if (isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
+                return res.status(400).json({ message: "La note doit être un nombre entre 0 et 20." });
+            }
+            const erreur = await controlerSaisieNote(db, { code: code_anonyme, matiereId: paquet.matiere_id });
+            if (erreur) return res.status(erreur.status).json({ message: erreur.message });
+
+            await db.query(`
+                INSERT INTO liste_attente_saisies
+                (paquet_id, type_saisie, utilisateur_id, promotion, type_examen, matiere_id, code_anonyme, note)
+                VALUES (?, 'note', ?, ?, ?, ?, ?, ?)
+            `, [paquet.id, req.user.id, paquet.promotion, paquet.type_examen, paquet.matiere_id, code_anonyme, noteNum]);
+        } else {
+            const { code_anonyme, eleve_id } = req.body;
+            if (!code_anonyme || !eleve_id) return res.status(400).json({ message: "Élève et code sont requis." });
+            const erreur = await controlerSaisieLiaison(db, {
+                eleveId: eleve_id, code: code_anonyme, matiereId: paquet.matiere_id, typeExamen: paquet.type_examen
+            });
+            if (erreur) return res.status(erreur.status).json({ message: erreur.message });
+
+            await db.query(`
+                INSERT INTO liste_attente_saisies
+                (paquet_id, type_saisie, utilisateur_id, promotion, type_examen, matiere_id, code_anonyme, eleve_id)
+                VALUES (?, 'liaison', ?, ?, ?, ?, ?, ?)
+            `, [paquet.id, req.user.id, paquet.promotion, paquet.type_examen, paquet.matiere_id, code_anonyme, eleve_id]);
+        }
+        res.status(201).json({ message: "Ajouté à la liste d'attente." });
+    } catch (err) {
+        console.error("Erreur POST /api/paquets/:id/lignes:", err);
+        res.status(500).json({ message: "Erreur interne du serveur." });
+    }
+});
+
+// Modifier la note d'une ligne (notation uniquement)
+app.put('/api/paquets/:id/lignes/:ligneId', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const paquet = await chargerPaquet(req.params.id, req.user.id);
+        if (!paquet || paquet.statut !== 'en_cours') return res.status(404).json({ message: "Paquet introuvable." });
+        if (paquet.type_saisie !== 'note') {
+            return res.status(400).json({ message: "Une liaison ne se modifie pas : supprimez-la et refaites-la." });
+        }
+        const noteNum = parseFloat(req.body.note);
+        if (isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
+            return res.status(400).json({ message: "La note doit être un nombre entre 0 et 20." });
+        }
+        const [result] = await db.query(
+            "UPDATE liste_attente_saisies SET note = ? WHERE id = ? AND paquet_id = ?", [noteNum, req.params.ligneId, paquet.id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: "Saisie introuvable." });
+        res.json({ message: "Saisie modifiée." });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Erreur lors de la modification." });
+    }
+});
+
+// Retirer une ligne
+app.delete('/api/paquets/:id/lignes/:ligneId', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const paquet = await chargerPaquet(req.params.id, req.user.id);
+        if (!paquet || paquet.statut !== 'en_cours') return res.status(404).json({ message: "Paquet introuvable." });
+        const [result] = await db.query(
+            "DELETE FROM liste_attente_saisies WHERE id = ? AND paquet_id = ?", [req.params.ligneId, paquet.id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: "Saisie introuvable." });
+        res.json({ message: "Saisie retirée de la liste d'attente." });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Erreur lors de la suppression." });
+    }
+});
+
+// Envoyer le paquet en validation (liste d'attente -> copies_temporaires)
+app.post('/api/paquets/:id/transferer', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    const connection = await db.getConnection();
+    try {
+        const paquet = await chargerPaquet(req.params.id, req.user.id);
+        if (!paquet || paquet.statut !== 'en_cours') return res.status(404).json({ message: "Paquet introuvable." });
+
+        const [lignes] = await connection.query(
+            "SELECT * FROM liste_attente_saisies WHERE paquet_id = ? ORDER BY id ASC", [paquet.id]);
+        if (lignes.length === 0) return res.status(400).json({ message: "La liste d'attente est vide." });
+
+        const resultats = { transferes: 0, echecs: [] };
+
+        for (const l of lignes) {
+            try {
+                await connection.beginTransaction();
+                const erreur = paquet.type_saisie === 'liaison'
+                    ? await controlerSaisieLiaison(connection, {
+                        eleveId: l.eleve_id, code: l.code_anonyme, matiereId: l.matiere_id, typeExamen: l.type_examen, ignorerListe: true })
+                    : await controlerSaisieNote(connection, { code: l.code_anonyme, matiereId: l.matiere_id, ignorerListe: true });
+
+                if (erreur) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id: l.id, code: l.code_anonyme, message: erreur.message });
+                    continue;
+                }
+
+                if (paquet.type_saisie === 'liaison') {
+                    await connection.query(`
+                        INSERT INTO copies_temporaires
+                        (source, eleve_id, code_anonyme, matiere_id, type_examen, saisi_par_utilisateur_id, saisi_par_nom)
+                        VALUES ('liaison', ?, ?, ?, ?, ?, ?)
+                    `, [l.eleve_id, l.code_anonyme, l.matiere_id, l.type_examen, req.user.id, req.user.nom_utilisateur]);
+                } else {
+                    await connection.query(`
+                        INSERT INTO copies_temporaires
+                        (source, code_anonyme, matiere_id, type_examen, note, saisi_par_utilisateur_id, saisi_par_nom)
+                        VALUES ('anonyme', ?, ?, ?, ?, ?, ?)
+                    `, [l.code_anonyme, l.matiere_id, l.type_examen, l.note, req.user.id, req.user.nom_utilisateur]);
+                }
+                await connection.query("DELETE FROM liste_attente_saisies WHERE id = ?", [l.id]);
+                await connection.commit();
+                resultats.transferes++;
+            } catch (e) {
+                await connection.rollback();
+                console.error("Erreur transfert ligne paquet:", e);
+                resultats.echecs.push({ id: l.id, code: l.code_anonyme, message: "Erreur interne." });
+            }
+        }
+
+        // Le paquet n'est clôturé que si tout est passé ; sinon les lignes en échec restent à corriger
+        if (resultats.echecs.length === 0) {
+            await db.query("UPDATE paquets_saisie SET statut = 'transfere', date_cloture = NOW() WHERE id = ?", [paquet.id]);
+        }
+        await logActivity(req.user.id, req.user.nom_utilisateur, 'ENVOI_PAQUET_VALIDATION',
+            `A envoyé ${resultats.transferes} saisie(s) (${paquet.type_saisie}) du paquet #${paquet.id} en validation (échecs : ${resultats.echecs.length}).`);
+        res.json(resultats);
+    } catch (err) {
+        console.error("Erreur POST /api/paquets/:id/transferer:", err);
+        res.status(500).json({ message: "Erreur lors de l'envoi du paquet." });
+    } finally {
+        connection.release();
+    }
+});
+
+// Annuler le paquet (supprime sa liste d'attente)
+app.delete('/api/paquets/:id', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const paquet = await chargerPaquet(req.params.id, req.user.id);
+        if (!paquet || paquet.statut !== 'en_cours') return res.status(404).json({ message: "Paquet introuvable." });
+        await db.query("DELETE FROM liste_attente_saisies WHERE paquet_id = ?", [paquet.id]);
+        await db.query("UPDATE paquets_saisie SET statut = 'annule', date_cloture = NOW() WHERE id = ?", [paquet.id]);
+        res.json({ message: "Paquet annulé." });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Erreur lors de l'annulation du paquet." });
+    }
+});
+
+// ═══════ Compteurs par promotion / examen / matière / utilisateur ═══════
+app.get('/api/stats/saisie-contexte', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const { type, promotion, typeExamen, matiereId, population } = req.query;
+        const estLiaison = type === 'liaison';
+        const typeSaisie = estLiaison ? 'liaison' : 'note';
+        const uid = req.user.id;
+        if (!typeExamen || !matiereId) return res.status(400).json({ message: "Examen et matière requis." });
+
+        const promo = promotion && promotion !== 'all' ? promotion : null;
+        const pop = ['actif', 'conseil'].includes(population) ? population : null;
+        const statutSql = (a) => pop === 'actif'
+            ? `(${a}.statut = 'actif' OR ${a}.statut IS NULL OR ${a}.statut = 'approuve')`
+            : `${a}.statut IN ('redoublant', 'ajourne_3m', 'ajourne_6m')`;
+
+        // 1. Élèves concernés et absents
+        let eleveSql = ''; const eleveP = [];
+        if (promo) { eleveSql += ' AND e.promotion = ?'; eleveP.push(promo); }
+        if (pop) eleveSql += ` AND ${statutSql('e')}`;
+
+        const [[{ total: totalEleves }]] = await db.query(`SELECT COUNT(*) AS total FROM eleves e WHERE 1=1${eleveSql}`, eleveP);
+        const [[{ total: absents }]] = await db.query(`
+            SELECT COUNT(DISTINCT a.eleve_id) AS total
+            FROM absences a JOIN eleves e ON a.eleve_id = e.id
+            WHERE a.matiere_id = ? AND (a.type_examen = ? OR a.type_examen IS NULL)${eleveSql}
+        `, [matiereId, typeExamen, ...eleveP]);
+        const participants = Math.max(0, totalEleves - absents);
+
+        // Filtre promotion/population pour copies & copies_temporaires
+        // (copie anonyme non liée => promotion/population déduites du code anonyme)
+        const ctx = (a) => {
+            let sql = ''; const p = [];
+            if (promo) { sql += ` AND (e.promotion = ? OR (${a}.eleve_id IS NULL AND cad.promotion = ?))`; p.push(promo, promo); }
+            if (pop) {
+                sql += ` AND ((${a}.eleve_id IS NOT NULL AND ${statutSql('e')}) OR (${a}.eleve_id IS NULL AND cad.population = ?))`;
+                p.push(pop);
+            }
+            return { sql, p };
+        };
+
+        // 2. Validé (table copies)
+        const c = ctx('c');
+        const colUser = estLiaison ? 'cree_par_utilisateur_id' : 'note_saisie_par_utilisateur_id';
+        const [[cop]] = await db.query(`
+            SELECT COUNT(*) AS total, COALESCE(SUM(c.${colUser} = ?), 0) AS miennes
+            FROM copies c
+            LEFT JOIN eleves e ON c.eleve_id = e.id
+            LEFT JOIN codes_anonymes_disponibles cad ON cad.code = c.code_anonyme
+            WHERE c.matiere_id = ? AND c.type_examen = ?
+              AND ${estLiaison ? 'c.eleve_id IS NOT NULL' : 'c.note IS NOT NULL'}${c.sql}
+        `, [uid, matiereId, typeExamen, ...c.p]);
+
+        // 3. En attente de validation (copies_temporaires)
+        const t = ctx('ct');
+        const sources = estLiaison ? "('liaison','directe')" : "('anonyme','directe')";
+        const miennesTmp = estLiaison
+            ? "ct.source = 'liaison' AND ct.saisi_par_utilisateur_id = ?"
+            : "ct.saisi_par_utilisateur_id = ?";
+        const [[tmp]] = await db.query(`
+            SELECT COUNT(*) AS total, COALESCE(SUM(${miennesTmp}), 0) AS miennes
+            FROM copies_temporaires ct
+            LEFT JOIN eleves e ON ct.eleve_id = e.id
+            LEFT JOIN codes_anonymes_disponibles cad ON cad.code = ct.code_anonyme
+            WHERE ct.matiere_id = ? AND ct.type_examen = ? AND ct.est_absence = 0
+              AND ct.source IN ${sources}${t.sql}
+        `, [uid, matiereId, typeExamen, ...t.p]);
+
+        // 4. Liste d'attente (paquets en cours)
+        let laSql = ''; const laP = [uid, typeSaisie, matiereId, typeExamen];
+        if (promo) { laSql = ' AND promotion = ?'; laP.push(promo); }
+        const [[la]] = await db.query(`
+            SELECT COUNT(*) AS total, COALESCE(SUM(utilisateur_id = ?), 0) AS miennes
+            FROM liste_attente_saisies
+            WHERE type_saisie = ? AND matiere_id = ? AND type_examen = ?${laSql}
+        `, laP);
+
+        const valides = Number(cop.total), attente = Number(tmp.total), liste = Number(la.total);
+        const deja = valides + attente + liste;
+
+        res.json({
+            participants, totalEleves, absents,
+            valides, enAttenteValidation: attente, enListeAttente: liste,
+            deja,
+            manquantes: Math.max(0, participants - deja),
+            mesSaisies: Number(cop.miennes) + Number(tmp.miennes) + Number(la.miennes)
+        });
+    } catch (err) {
+        console.error("Erreur /api/stats/saisie-contexte:", err);
+        res.status(500).json({ message: "Erreur lors du calcul des compteurs." });
     }
 });
 
