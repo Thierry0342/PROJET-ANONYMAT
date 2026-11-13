@@ -3921,58 +3921,83 @@ app.post('/api/copies-temporaires/liaison', authenticateToken, checkRole(['admin
     }
 });
 // ═══════ Liste des saisies en attente ═══════
-app.get('/api/copies-temporaires', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code', 'controleur']), async (req, res) => {
+// Diagnostic : que contient la table et que voit l'utilisateur ?
+app.get('/api/copies-temporaires/diagnostic', authenticateToken, async (req, res) => {
     try {
-        const { mine } = req.query;
-        let query = `
-            SELECT
-                ct.id, ct.source, ct.eleve_id, ct.code_anonyme, ct.matiere_id, ct.type_examen,
-                ct.note, ct.est_absence, ct.motif_absence, ct.details_parcours, ct.parcours_version,
-                ct.saisi_par_utilisateur_id, ct.saisi_par_nom, ct.date_saisie,
-                m.nom_matiere,
-                e.nom  AS eleve_nom,
-                e.prenom AS eleve_prenom,
-                e.numero_incorporation,
-                e.escadron,
-                e.peloton
-            FROM copies_temporaires ct
-            LEFT JOIN matieres m ON ct.matiere_id = m.id
-            LEFT JOIN eleves e ON ct.eleve_id = e.id
-            WHERE 1=1
-        `;
-        const params = [];
+        const [[{ total }]] = await db.query("SELECT COUNT(*) AS total FROM copies_temporaires");
+        const [[{ miennes }]] = await db.query(
+            "SELECT COUNT(*) AS miennes FROM copies_temporaires WHERE saisi_par_utilisateur_id = ?", [req.user.id]);
+        res.json({ role: req.user.role, userId: req.user.id, totalTable: total, miennes });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
 
-        if (estOperateur(req.user) || mine === '1') {
-            query += " AND ct.saisi_par_utilisateur_id = ?";
+app.get('/api/copies-temporaires', authenticateToken,
+    checkRole(['admin', 'operateur_note', 'operateur_code', 'controleur']), async (req, res) => {
+    try {
+        const soloMine = req.query.mine === '1';
+
+        // 1. Les saisies brutes, sans aucune jointure
+        let sql = "SELECT * FROM copies_temporaires";
+        const params = [];
+        if (estOperateur(req.user) || soloMine) {
+            sql += " WHERE saisi_par_utilisateur_id = ?";
             params.push(req.user.id);
         }
-        query += " ORDER BY ct.date_saisie DESC";
+        sql += " ORDER BY date_saisie DESC";
+        const [rows] = await db.query(sql, params);
+        if (rows.length === 0) return res.json([]);
 
-        const [rows] = await db.query(query, params);
+        // 2. Matières
+        const matiereIds = [...new Set(rows.map(r => r.matiere_id).filter(Boolean))];
+        const matieres = new Map();
+        if (matiereIds.length) {
+            const [ms] = await db.query("SELECT id, nom_matiere FROM matieres WHERE id IN (?)", [matiereIds]);
+            ms.forEach(m => matieres.set(m.id, m.nom_matiere));
+        }
 
-        // Identification de l'élève via le code anonyme (fait en JS : évite tout conflit de collation SQL)
-        const codes = [...new Set(rows.filter(r => !r.eleve_id && r.code_anonyme).map(r => r.code_anonyme))];
+        // 3. Élèves directs
+        const eleveIds = [...new Set(rows.map(r => r.eleve_id).filter(Boolean))];
+        const eleves = new Map();
+        if (eleveIds.length) {
+            const [es] = await db.query(
+                "SELECT id, nom, prenom, numero_incorporation, escadron, peloton FROM eleves WHERE id IN (?)", [eleveIds]);
+            es.forEach(e => eleves.set(e.id, e));
+        }
+
+        // 4. Élèves identifiés via le code anonyme (échec toléré : n'empêche jamais l'affichage)
         const parCode = new Map();
-        if (codes.length > 0) {
-            const [liees] = await db.query(`
-                SELECT c.code_anonyme, c.matiere_id,
-                       e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton
-                FROM copies c
-                JOIN eleves e ON c.eleve_id = e.id
-                WHERE c.code_anonyme IN (?)
-            `, [codes]);
-            liees.forEach(l => parCode.set(`${l.code_anonyme}|${l.matiere_id}`, l));
+        try {
+            const codes = [...new Set(rows.filter(r => !r.eleve_id && r.code_anonyme).map(r => r.code_anonyme))];
+            if (codes.length) {
+                const [liees] = await db.query(`
+                    SELECT c.code_anonyme, c.matiere_id, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton
+                    FROM copies c JOIN eleves e ON c.eleve_id = e.id
+                    WHERE c.code_anonyme IN (?)`, [codes]);
+                liees.forEach(l => parCode.set(`${l.code_anonyme}|${l.matiere_id}`, l));
+            }
+        } catch (e) {
+            console.error("Identification par code ignorée:", e.message);
         }
 
         const resultat = rows.map(r => {
-            const l = (!r.eleve_id && r.code_anonyme) ? parCode.get(`${r.code_anonyme}|${r.matiere_id}`) : null;
+            const e = r.eleve_id ? eleves.get(r.eleve_id) : null;
+            const l = (!e && r.code_anonyme) ? parCode.get(`${r.code_anonyme}|${r.matiere_id}`) : null;
+            const src = e || l || {};
             return {
-                ...r,
-                eleve_nom: r.eleve_nom ?? l?.nom ?? null,
-                eleve_prenom: r.eleve_prenom ?? l?.prenom ?? null,
-                numero_incorporation: r.numero_incorporation ?? l?.numero_incorporation ?? null,
-                escadron: r.escadron ?? l?.escadron ?? null,
-                peloton: r.peloton ?? l?.peloton ?? null,
+                id: r.id, source: r.source, eleve_id: r.eleve_id, code_anonyme: r.code_anonyme,
+                matiere_id: r.matiere_id, type_examen: r.type_examen, note: r.note,
+                est_absence: r.est_absence, motif_absence: r.motif_absence,
+                details_parcours: r.details_parcours, parcours_version: r.parcours_version,
+                saisi_par_utilisateur_id: r.saisi_par_utilisateur_id, saisi_par_nom: r.saisi_par_nom,
+                date_saisie: r.date_saisie,
+                nom_matiere: matieres.get(r.matiere_id) || `Matière #${r.matiere_id}`,
+                eleve_nom: src.nom ?? null,
+                eleve_prenom: src.prenom ?? null,
+                numero_incorporation: src.numero_incorporation ?? null,
+                escadron: src.escadron ?? null,
+                peloton: src.peloton ?? null,
                 identifie_par_code: !!l
             };
         });
@@ -3980,7 +4005,7 @@ app.get('/api/copies-temporaires', authenticateToken, checkRole(['admin', 'opera
         res.json(resultat);
     } catch (err) {
         console.error("Erreur GET /api/copies-temporaires:", err);
-        res.status(500).json({ message: "Erreur lors de la récupération des saisies en attente." });
+        res.status(500).json({ message: "Erreur serveur : " + err.message });
     }
 });
 // ═══════ Validation (staging -> table réelle) ═══════

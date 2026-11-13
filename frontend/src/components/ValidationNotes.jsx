@@ -10,23 +10,28 @@ const ONGLETS = [
     { id: 'liaison',  label: 'Liaisons' }
 ];
 
+const FILTRES_VIDES = { matiere: '', escadron: '' };
+
 // Normalise pour une recherche insensible à la casse et aux accents
 const norm = (v) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-const ValidationNotes = ({ isAdmin }) => {
+// NB : la prop isAdmin n'est plus utilisée. C'est le serveur qui décide de ce que chacun voit
+// (opérateur = ses saisies, admin / contrôleur = toutes les saisies).
+const ValidationNotes = () => {
     const [saisies, setSaisies] = useState([]);
     const [selection, setSelection] = useState(new Set());
-    const [afficherToutes, setAfficherToutes] = useState(isAdmin);
+    const [soloMine, setSoloMine] = useState(false); // décoché = tout ce que le rôle autorise
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [resultat, setResultat] = useState(null);
+    const [erreur, setErreur] = useState(null);
+    const [diag, setDiag] = useState(null);
 
     // ── Onglets + recherche (une recherche par onglet) ──
     const [onglet, setOnglet] = useState('toutes');
     const [recherches, setRecherches] = useState({ toutes: '', directe: '', anonyme: '', liaison: '' });
 
     // ── Filtres matière / escadron (un jeu de filtres par onglet) ──
-    const FILTRES_VIDES = { matiere: '', escadron: '' };
     const [filtres, setFiltres] = useState({
         toutes: FILTRES_VIDES, directe: FILTRES_VIDES, anonyme: FILTRES_VIDES, liaison: FILTRES_VIDES
     });
@@ -37,28 +42,39 @@ const ValidationNotes = ({ isAdmin }) => {
     const [editAbsence, setEditAbsence] = useState(false);
     const [editMotif, setEditMotif] = useState('');
     const [savingEdit, setSavingEdit] = useState(false);
-    const [erreur, setErreur] = useState(null);
 
-    const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
+    const getCfg = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
 
     const fetchSaisies = useCallback(async () => {
         setLoading(true);
+        setErreur(null);
+        const cfg = getCfg();
         try {
-            const mine = isAdmin && afficherToutes ? '' : '1';
-            const res = await axios.get(`/api/copies-temporaires${mine ? `?mine=${mine}` : ''}`, { headers });
+            const res = await axios.get('/api/copies-temporaires', {
+                ...cfg,
+                params: soloMine ? { mine: 1 } : {}
+            });
+            if (!Array.isArray(res.data)) {
+                throw new Error("Réponse inattendue du serveur (ce n'est pas une liste). Le backend est-il redémarré ?");
+            }
             setSaisies(res.data);
             setSelection(new Set());
             setEditionId(null);
-                } catch (e) {
-            setErreur(e.response?.data?.message || "Impossible de charger les saisies en attente.");
+        } catch (e) {
             setSaisies([]);
+            setErreur(
+                (e.response ? `Erreur ${e.response.status} : ` : '') +
+                (e.response?.data?.message || e.message || "Impossible de charger les saisies.")
+            );
+        }
+        try {
+            const d = await axios.get('/api/copies-temporaires/diagnostic', cfg);
+            setDiag(d.data);
+        } catch {
+            setDiag(null);
         }
         setLoading(false);
-        {erreur && (
-    <div className="card" style={{ marginBottom: '16px', color: '#dc3545', fontWeight: 600 }}>{erreur}</div>
-)}
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [afficherToutes]);
+    }, [soloMine]);
 
     useEffect(() => { fetchSaisies(); }, [fetchSaisies]);
 
@@ -161,19 +177,18 @@ const ValidationNotes = ({ isAdmin }) => {
         if (idsAValider.length === 0) return;
         setSaving(true); setResultat(null);
         try {
-            const res = await axios.post('/api/copies-temporaires/valider', { ids: idsAValider }, { headers });
+            const res = await axios.post('/api/copies-temporaires/valider', { ids: idsAValider }, getCfg());
             setResultat(res.data);
             fetchSaisies();
         } catch (e) {
             alert(e.response?.data?.message || "Erreur lors de la validation.");
         } finally { setSaving(false); }
     };
-    useEffect(() => { setAfficherToutes(!!isAdmin); }, [isAdmin]);
 
     const handleRejeter = async (id) => {
         if (!window.confirm("Rejeter (supprimer) cette saisie en attente ?")) return;
         try {
-            await axios.delete(`/api/copies-temporaires/${id}`, { headers });
+            await axios.delete(`/api/copies-temporaires/${id}`, getCfg());
             fetchSaisies();
         } catch (e) { alert(e.response?.data?.message || "Erreur lors du rejet."); }
     };
@@ -192,7 +207,7 @@ const ValidationNotes = ({ isAdmin }) => {
                 note: editNote,
                 est_absence: editAbsence,
                 motif_absence: editMotif
-            }, { headers });
+            }, getCfg());
             setEditionId(null);
             fetchSaisies();
         } catch (e) {
@@ -230,15 +245,26 @@ const ValidationNotes = ({ isAdmin }) => {
         <div className="dashboard-redesign-container">
             <div className="top-nav-bar">
                 <h1>Validation des Notes</h1>
-                {isAdmin && (
-                    <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 600 }}>
-                        <input type="checkbox" checked={afficherToutes}
-                               onChange={e => setAfficherToutes(e.target.checked)} />
-                        Voir les saisies de tout le monde
-                    </label>
-                )}
+                <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 600 }}>
+                    <input type="checkbox" checked={soloMine}
+                           onChange={e => setSoloMine(e.target.checked)} />
+                    Seulement mes saisies
+                </label>
                 <button className="btn-export pdf-btn" onClick={fetchSaisies}><FiRefreshCw /> Actualiser</button>
             </div>
+
+            {erreur && (
+                <div className="card" style={{ marginBottom: '16px', color: '#dc3545', fontWeight: 600 }}>
+                    {erreur}
+                </div>
+            )}
+
+            {diag && (
+                <div style={{ marginBottom: '12px', fontSize: '0.85rem', color: '#4a5568' }}>
+                    Rôle : <strong>{diag.role || '(vide)'}</strong> · en base : <strong>{diag.totalTable}</strong> ·
+                    les miennes : <strong>{diag.miennes}</strong> · reçues : <strong>{saisies.length}</strong>
+                </div>
+            )}
 
             {resultat && (
                 <div className="card" style={{ marginBottom: '16px' }}>
