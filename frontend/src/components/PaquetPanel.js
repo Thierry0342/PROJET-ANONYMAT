@@ -262,6 +262,11 @@ export function PaquetListe({ type, paquetCtl, onModifie }) {
                                         <span>{new Date(l.date_saisie).toLocaleTimeString()}</span>
                                     </div>
                                 </div>
+                                {l.renvoi_motif && (
+                                    <div className="message warning">
+                                        <span><strong>À revérifier :</strong> {l.renvoi_motif}</span>
+                                    </div>
+                                )}
 
                                 {erreur && <div className="message error"><span>{erreur}</span></div>}
 

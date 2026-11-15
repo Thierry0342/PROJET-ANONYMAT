@@ -335,6 +335,30 @@ try {
     } catch (err) {
         console.error('❌ Erreur migration paquets/liste attente:', err.message);
     }
+    // 13. Statut de validation (opérateur -> contrôleur) + motif de renvoi
+try {
+    const hasStatut = await columnExists('copies_temporaires', 'statut_validation');
+    if (!hasStatut) {
+        await db.query(`
+            ALTER TABLE copies_temporaires
+            ADD COLUMN statut_validation VARCHAR(20) NOT NULL DEFAULT 'en_attente',
+            ADD COLUMN renvoi_motif VARCHAR(255) NULL
+        `);
+        console.log('✅ Migration OK : copies_temporaires.statut_validation créé');
+    }
+} catch (err) {
+    console.error('❌ Erreur migration statut_validation:', err.message);
+}
+// 14. Motif de renvoi sur la liste d'attente
+try {
+    const hasMotifLA = await columnExists('liste_attente_saisies', 'renvoi_motif');
+    if (!hasMotifLA) {
+        await db.query(`ALTER TABLE liste_attente_saisies ADD COLUMN renvoi_motif VARCHAR(255) NULL`);
+        console.log('✅ Migration OK : liste_attente_saisies.renvoi_motif créé');
+    }
+} catch (err) {
+    console.error('❌ Erreur migration renvoi_motif liste attente:', err.message);
+}
 };
     
 runMigrations();
@@ -3792,6 +3816,9 @@ app.put('/api/copies-temporaires/:id', authenticateToken,
         if (estOperateur(req.user) && temp.saisi_par_utilisateur_id !== req.user.id) {
     return res.status(403).json({ message: "Vous ne pouvez modifier que vos propres saisies." });
 }
+if (estOperateur(req.user) && temp.statut_validation === 'verifie') {
+    return res.status(400).json({ message: "Cette saisie est déjà transmise au contrôleur." });
+}
 
         await db.query(`
             UPDATE copies_temporaires
@@ -4019,8 +4046,9 @@ app.get('/api/copies-temporaires', authenticateToken,
         const eleveIds = [...new Set(rows.map(r => r.eleve_id).filter(Boolean))];
         const eleves = new Map();
         if (eleveIds.length) {
-            const [es] = await db.query(
-                "SELECT id, nom, prenom, numero_incorporation, escadron, peloton FROM eleves WHERE id IN (?)", [eleveIds]);
+            // 3. Élèves directs
+const [es] = await db.query(
+    "SELECT id, nom, prenom, numero_incorporation, escadron, peloton, promotion FROM eleves WHERE id IN (?)", [eleveIds]);
             es.forEach(e => eleves.set(e.id, e));
         }
 
@@ -4030,15 +4058,26 @@ app.get('/api/copies-temporaires', authenticateToken,
             const codes = [...new Set(rows.filter(r => !r.eleve_id && r.code_anonyme).map(r => r.code_anonyme))];
             if (codes.length) {
                 const [liees] = await db.query(`
-                    SELECT c.code_anonyme, c.matiere_id, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton
-                    FROM copies c JOIN eleves e ON c.eleve_id = e.id
-                    WHERE c.code_anonyme IN (?)`, [codes]);
+    SELECT c.code_anonyme, c.matiere_id, e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton, e.promotion
+    FROM copies c JOIN eleves e ON c.eleve_id = e.id
+    WHERE c.code_anonyme IN (?)`, [codes]);
                 liees.forEach(l => parCode.set(`${l.code_anonyme}|${l.matiere_id}`, l));
             }
         } catch (e) {
             console.error("Identification par code ignorée:", e.message);
         }
-
+// 5. Promotion des codes non liés (déduite de la table des codes)
+        const promoParCode = new Map();
+        try {
+            const codesLibres = [...new Set(rows.filter(r => !r.eleve_id && r.code_anonyme).map(r => r.code_anonyme))];
+            if (codesLibres.length) {
+                const [ps] = await db.query(
+                    "SELECT code, promotion FROM codes_anonymes_disponibles WHERE code IN (?)", [codesLibres]);
+                ps.forEach(p => promoParCode.set(p.code, p.promotion));
+            }
+        } catch (e) {
+            console.error("Promotion par code ignorée:", e.message);
+        }
         const resultat = rows.map(r => {
             const e = r.eleve_id ? eleves.get(r.eleve_id) : null;
             const l = (!e && r.code_anonyme) ? parCode.get(`${r.code_anonyme}|${r.matiere_id}`) : null;
@@ -4056,7 +4095,10 @@ app.get('/api/copies-temporaires', authenticateToken,
                 numero_incorporation: src.numero_incorporation ?? null,
                 escadron: src.escadron ?? null,
                 peloton: src.peloton ?? null,
-                identifie_par_code: !!l
+                promotion: src.promotion ?? promoParCode.get(r.code_anonyme) ?? null,
+                identifie_par_code: !!l,
+                statut_validation: r.statut_validation || 'en_attente',
+                renvoi_motif: r.renvoi_motif || null
             };
         });
 
@@ -4094,11 +4136,35 @@ app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin
             }
 
             
-            if (estOperateur(req.user) && temp.saisi_par_utilisateur_id !== req.user.id) {
-    await connection.rollback();
-    resultats.echecs.push({ id, message: "Vous ne pouvez valider que vos propres saisies." });
-    continue;
-}
+          const operateur = estOperateur(req.user);
+
+            if (operateur && temp.saisi_par_utilisateur_id !== req.user.id) {
+                await connection.rollback();
+                resultats.echecs.push({ id, message: "Vous ne pouvez valider que vos propres saisies." });
+                continue;
+            }
+
+            // ── Étape 1 : l'opérateur vérifie et transmet au contrôleur (rien n'est écrit dans copies) ──
+            if (operateur) {
+                if (temp.statut_validation === 'verifie') {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: "Déjà transmise au contrôleur." });
+                    continue;
+                }
+                await connection.query(
+                    "UPDATE copies_temporaires SET statut_validation = 'verifie', renvoi_motif = NULL WHERE id = ?", [id]);
+                await connection.commit();
+                resultats.valides.push(id);
+                continue;
+            }
+
+            // ── Étape 2 : contrôleur / admin ──
+            // (une saisie faite par le contrôleur lui-même peut être validée directement)
+            if (temp.statut_validation !== 'verifie' && temp.saisi_par_utilisateur_id !== req.user.id) {
+                await connection.rollback();
+                resultats.echecs.push({ id, message: "Pas encore vérifiée par l'opérateur." });
+                continue;
+            }
 
             if (temp.source === 'anonyme') {
                 const [existante] = await connection.query(
@@ -4232,23 +4298,24 @@ for (const v of vides) {
     if (resultats.valides.length > 0) {
         await logActivity(
             req.user.id, req.user.nom_utilisateur, 'VALIDATION_NOTES_TEMPORAIRES',
-            `A validé ${resultats.valides.length} saisie(s) temporaire(s) (échecs : ${resultats.echecs.length}).`
+            `A ${estOperateur(req.user) ? 'transmis au contrôleur' : 'validé'} ${resultats.valides.length} saisie(s) temporaire(s) (échecs : ${resultats.echecs.length}).`
         );
     }
 
-    res.json(resultats);
+    res.json({ ...resultats, etape: estOperateur(req.user) ? 'transmission' : 'validation' });
 });
 
 // ═══════ Rejet d'une saisie en attente ═══════
 app.delete('/api/copies-temporaires/:id', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const { id } = req.params;
-        const [[temp]] = await db.query("SELECT saisi_par_utilisateur_id FROM copies_temporaires WHERE id = ?", [id]);
-        if (!temp) return res.status(404).json({ message: "Saisie introuvable." });
-
-       
-        if (estOperateur(req.user) && temp.saisi_par_utilisateur_id !== req.user.id) {
+       const [[temp]] = await db.query("SELECT saisi_par_utilisateur_id, statut_validation FROM copies_temporaires WHERE id = ?", [id]);
+if (!temp) return res.status(404).json({ message: "Saisie introuvable." });
+if (estOperateur(req.user) && temp.saisi_par_utilisateur_id !== req.user.id) {
     return res.status(403).json({ message: "Vous ne pouvez rejeter que vos propres saisies." });
+}
+if (estOperateur(req.user) && temp.statut_validation === 'verifie') {
+    return res.status(400).json({ message: "Cette saisie est déjà transmise au contrôleur." });
 }
 
         await db.query("DELETE FROM copies_temporaires WHERE id = ?", [id]);
@@ -5995,7 +6062,7 @@ const chargerPaquet = async (id, utilisateurId) => {
 
 const chargerLignes = async (conn, paquetId) => {
     const [rows] = await conn.query(`
-        SELECT l.id, l.code_anonyme, l.eleve_id, l.note, l.date_saisie,
+        SELECT l.id, l.code_anonyme, l.eleve_id, l.note, l.date_saisie,l.renvoi_motif,
                e.nom AS eleve_nom, e.prenom AS eleve_prenom, e.numero_incorporation, e.escadron, e.peloton
         FROM liste_attente_saisies l
         LEFT JOIN eleves e ON l.eleve_id = e.id
@@ -6233,19 +6300,19 @@ app.post('/api/paquets/:id/transferer', authenticateToken, checkRole(ROLES_SAISI
                     continue;
                 }
 
-                if (paquet.type_saisie === 'liaison') {
-                    await connection.query(`
-                        INSERT INTO copies_temporaires
-                        (source, eleve_id, code_anonyme, matiere_id, type_examen, saisi_par_utilisateur_id, saisi_par_nom)
-                        VALUES ('liaison', ?, ?, ?, ?, ?, ?)
-                    `, [l.eleve_id, l.code_anonyme, l.matiere_id, l.type_examen, req.user.id, req.user.nom_utilisateur]);
-                } else {
-                    await connection.query(`
-                        INSERT INTO copies_temporaires
-                        (source, code_anonyme, matiere_id, type_examen, note, saisi_par_utilisateur_id, saisi_par_nom)
-                        VALUES ('anonyme', ?, ?, ?, ?, ?, ?)
-                    `, [l.code_anonyme, l.matiere_id, l.type_examen, l.note, req.user.id, req.user.nom_utilisateur]);
-                }
+               if (paquet.type_saisie === 'liaison') {
+                        await connection.query(`
+                            INSERT INTO copies_temporaires
+                            (source, eleve_id, code_anonyme, matiere_id, type_examen, saisi_par_utilisateur_id, saisi_par_nom, renvoi_motif)
+                            VALUES ('liaison', ?, ?, ?, ?, ?, ?, ?)
+                        `, [l.eleve_id, l.code_anonyme, l.matiere_id, l.type_examen, req.user.id, req.user.nom_utilisateur, l.renvoi_motif || null]);
+                    } else {
+                        await connection.query(`
+                            INSERT INTO copies_temporaires
+                            (source, code_anonyme, matiere_id, type_examen, note, saisi_par_utilisateur_id, saisi_par_nom, renvoi_motif)
+                            VALUES ('anonyme', ?, ?, ?, ?, ?, ?, ?)
+                        `, [l.code_anonyme, l.matiere_id, l.type_examen, l.note, req.user.id, req.user.nom_utilisateur, l.renvoi_motif || null]);
+                    }
                 await connection.query("DELETE FROM liste_attente_saisies WHERE id = ?", [l.id]);
                 await connection.commit();
                 resultats.transferes++;
@@ -6376,7 +6443,201 @@ app.get('/api/stats/saisie-contexte', authenticateToken, checkRole(ROLES_SAISIE)
         res.status(500).json({ message: "Erreur lors du calcul des compteurs." });
     }
 });
+// ═══════ Saisies déjà validées (table copies) ═══════
+app.get('/api/copies/validees', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
+    try {
+        const { matiereId, typeExamen, q, promotion } = req.query;
+        let sql = `
+            SELECT c.id AS copie_id, c.code_anonyme, c.note, c.type_examen, c.matiere_id,
+                m.nom_matiere, c.eleve_id,
+                e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton,
+                COALESCE(e.promotion, cad.promotion) AS promotion,
+                c.note_saisie_a, u.nom_utilisateur AS saisi_par
+            FROM copies c
+            JOIN matieres m ON c.matiere_id = m.id
+            LEFT JOIN eleves e ON c.eleve_id = e.id
+            LEFT JOIN codes_anonymes_disponibles cad ON cad.code = c.code_anonyme
+            LEFT JOIN utilisateurs u ON c.note_saisie_par_utilisateur_id = u.id
+            WHERE c.note IS NOT NULL
+        `;
+        const params = [];
 
+        // Un opérateur ne voit que ses propres saisies
+        if (estOperateur(req.user)) {
+            sql += " AND (c.note_saisie_par_utilisateur_id = ? OR c.cree_par_utilisateur_id = ?)";
+            params.push(req.user.id, req.user.id);
+        }
+        if (matiereId) { sql += " AND c.matiere_id = ?"; params.push(matiereId); }
+        if (typeExamen) { sql += " AND c.type_examen = ?"; params.push(typeExamen); }
+        if (promotion && promotion !== 'all') {
+            sql += " AND COALESCE(e.promotion, cad.promotion) = ?";
+            params.push(promotion);
+        }
+        if (q && q.trim()) {
+            const like = `%${q.trim()}%`;
+            sql += ` AND (c.code_anonyme LIKE ? OR e.nom LIKE ? OR e.prenom LIKE ?
+                          OR e.numero_incorporation LIKE ? OR CONCAT(e.nom, ' ', e.prenom) LIKE ?
+                          OR CONCAT(e.prenom, ' ', e.nom) LIKE ?)`;
+            params.push(like, like, like, like, like, like);
+        }
+        sql += " ORDER BY c.note_saisie_a DESC, c.id DESC LIMIT 300";
+
+        const [rows] = await db.query(sql, params);
+        res.json(rows);
+    } catch (err) {
+        console.error("Erreur GET /api/copies/validees:", err);
+        res.status(500).json({ message: "Erreur lors de la récupération des saisies validées." });
+    }
+});
+// ═══════ Renvoyer une saisie validée vers la liste d'attente de l'opérateur ═══════
+// cible : 'note' (code + note) | 'liaison' (code + élève) | 'les_deux'
+app.post('/api/copies/:copieId/renvoyer-verification', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
+    const { copieId } = req.params;
+    const { cible, motif } = req.body;
+
+    if (!['note', 'liaison', 'les_deux'].includes(cible)) {
+        return res.status(400).json({ message: "Cible invalide." });
+    }
+    if (!motif || !motif.trim()) {
+        return res.status(400).json({ message: "Le motif du renvoi est obligatoire." });
+    }
+    const motifTxt = motif.trim().substring(0, 255);
+
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const [[copie]] = await connection.query("SELECT * FROM copies WHERE id = ? FOR UPDATE", [copieId]);
+        if (!copie || copie.note === null) {
+            await connection.rollback();
+            return res.status(404).json({ message: "Saisie validée introuvable." });
+        }
+
+        const veutNote = cible !== 'liaison';
+        const veutLiaison = cible !== 'note';
+        const estAnonyme = !!copie.code_anonyme;
+
+        if (veutLiaison && (!estAnonyme || !copie.eleve_id)) {
+            await connection.rollback();
+            return res.status(400).json({ message: "Cette saisie n'a pas de liaison code + élève à renvoyer." });
+        }
+
+        const nomDe = async (uid) => {
+            const [[u]] = await connection.query("SELECT nom_utilisateur FROM utilisateurs WHERE id = ?", [uid]);
+            return u ? u.nom_utilisateur : null;
+        };
+
+        // Promotion de la copie (élève, sinon table des codes)
+        let promotion = '';
+        if (copie.eleve_id) {
+            const [[e]] = await connection.query("SELECT promotion FROM eleves WHERE id = ?", [copie.eleve_id]);
+            promotion = e?.promotion || '';
+        }
+        if (!promotion && estAnonyme) {
+            const [[c]] = await connection.query("SELECT promotion FROM codes_anonymes_disponibles WHERE code = ?", [copie.code_anonyme]);
+            promotion = c?.promotion || '';
+        }
+
+        // Ajoute une ligne dans la liste d'attente (paquet) de l'opérateur, crée le paquet si besoin
+        const versListeAttente = async (type, uid) => {
+            const [[paquet]] = await connection.query(
+                "SELECT * FROM paquets_saisie WHERE utilisateur_id = ? AND type_saisie = ? AND statut = 'en_cours' ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                [uid, type]);
+
+            let paquetId;
+            if (!paquet) {
+                const [r] = await connection.query(
+                    "INSERT INTO paquets_saisie (type_saisie, utilisateur_id, promotion, type_examen, matiere_id, total_attendu) VALUES (?, ?, ?, ?, ?, 1)",
+                    [type, uid, promotion, copie.type_examen, copie.matiere_id]);
+                paquetId = r.insertId;
+            } else {
+                const memeContexte = String(paquet.matiere_id) === String(copie.matiere_id)
+                    && paquet.type_examen === copie.type_examen;
+                if (!memeContexte) {
+                    const nom = await nomDe(uid);
+                    return { erreur: `${nom || "L'opérateur"} a un paquet en cours sur une autre matière / un autre examen. Il doit d'abord l'envoyer ou l'annuler.` };
+                }
+                paquetId = paquet.id;
+                await connection.query("UPDATE paquets_saisie SET total_attendu = total_attendu + 1 WHERE id = ?", [paquetId]);
+            }
+
+            await connection.query(`
+                INSERT INTO liste_attente_saisies
+                (paquet_id, type_saisie, utilisateur_id, promotion, type_examen, matiere_id, code_anonyme, eleve_id, note, renvoi_motif)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [paquetId, type, uid, promotion, copie.type_examen, copie.matiere_id,
+                copie.code_anonyme, type === 'liaison' ? copie.eleve_id : null,
+                type === 'note' ? copie.note : null, motifTxt]);
+            return { ok: true };
+        };
+
+        const noteSauvee = copie.note;
+        const eleveSauve = copie.eleve_id;
+
+        // 1) Retirer de la table validée (avant les contrôles)
+        if (veutNote) {
+            await connection.query(
+                "INSERT INTO historique_modifications_notes (copie_id, ancienne_note, nouvelle_note, motif, modifie_par_utilisateur_id) VALUES (?, ?, NULL, ?, ?)",
+                [copie.id, noteSauvee, `Renvoyée en vérification : ${motifTxt}`, req.user.id]);
+            await connection.query("UPDATE copies SET note = NULL WHERE id = ?", [copie.id]);
+        }
+        if (veutLiaison) {
+            await connection.query("UPDATE copies SET eleve_id = NULL, cree_par_utilisateur_id = NULL WHERE id = ?", [copie.id]);
+            await connection.query("UPDATE codes_anonymes_disponibles SET est_utilise = 0 WHERE code = ?", [copie.code_anonyme]);
+        }
+
+        // 2) Note
+        if (veutNote) {
+            const uid = copie.note_saisie_par_utilisateur_id || req.user.id;
+
+            if (estAnonyme) {
+                const erreur = await controlerSaisieNote(connection, { code: copie.code_anonyme, matiereId: copie.matiere_id });
+                if (erreur) { await connection.rollback(); return res.status(erreur.status).json({ message: erreur.message }); }
+                const r = await versListeAttente('note', uid);
+                if (r.erreur) { await connection.rollback(); return res.status(409).json({ message: r.erreur }); }
+            } else {
+                // Saisie directe (sans code) : pas de paquet possible -> page de validation
+                const nom = await nomDe(uid);
+                const [dejaTemp] = await connection.query(
+                    "SELECT id FROM copies_temporaires WHERE source = 'directe' AND eleve_id = ? AND matiere_id = ? AND type_examen = ? AND est_absence = 0",
+                    [copie.eleve_id, copie.matiere_id, copie.type_examen]);
+                if (dejaTemp.length > 0) {
+                    await connection.rollback();
+                    return res.status(409).json({ message: "Une saisie de cet élève est déjà en attente de validation." });
+                }
+                await connection.query(`
+                    INSERT INTO copies_temporaires
+                    (source, eleve_id, matiere_id, type_examen, note, details_parcours, parcours_version, saisi_par_utilisateur_id, saisi_par_nom, renvoi_motif)
+                    VALUES ('directe', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `, [copie.eleve_id, copie.matiere_id, copie.type_examen, noteSauvee,
+                    copie.details_parcours ? JSON.stringify(copie.details_parcours) : null,
+                    copie.parcours_version || null, uid, nom, motifTxt]);
+            }
+        }
+
+        // 3) Liaison
+        if (veutLiaison) {
+            const uid = copie.cree_par_utilisateur_id || req.user.id;
+            const erreur = await controlerSaisieLiaison(connection, {
+                eleveId: eleveSauve, code: copie.code_anonyme, matiereId: copie.matiere_id, typeExamen: copie.type_examen
+            });
+            if (erreur) { await connection.rollback(); return res.status(erreur.status).json({ message: erreur.message }); }
+            const r = await versListeAttente('liaison', uid);
+            if (r.erreur) { await connection.rollback(); return res.status(409).json({ message: r.erreur }); }
+        }
+
+        await connection.commit();
+        await logActivity(req.user.id, req.user.nom_utilisateur, 'RENVOI_VERIFICATION',
+            `A renvoyé en vérification (${cible}) la saisie ID ${copie.id} : ${motifTxt}`);
+        res.json({ message: "Saisie renvoyée dans la liste d'attente de l'opérateur pour vérification." });
+    } catch (err) {
+        await connection.rollback();
+        console.error("Erreur renvoyer-verification:", err);
+        res.status(500).json({ message: "Erreur lors du renvoi en vérification." });
+    } finally {
+        connection.release();
+    }
+});
 const HOST = '0.0.0.0';
 app.listen(port, HOST, () => {
     console.log(`Serveur backend démarré sur le port ${port} et accessible sur le réseau.`);
