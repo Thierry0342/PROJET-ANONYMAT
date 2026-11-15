@@ -75,10 +75,10 @@ const getNavItemsForUser = (user) => {
         operActions.push({ label: "Importer Notes", to: "/importer-notes", icon: <FiUploadCloud /> });
     }
     // Validation des Notes : UNIQUEMENT le controleur
-    if (user.role === 'controleur') {
-       operActions.push({ label: "Validation des Notes", to: "/validation-notes", icon: <FiCheckCircle /> });
-    }
-
+    // Validation des Notes : opérateurs (vérification) + contrôleur (validation finale)
+if (['controleur', 'operateur_note', 'operateur_code'].includes(user.role)) {
+   operActions.push({ label: "Validation des Notes", to: "/validation-notes", icon: <FiCheckCircle /> });
+}
     if (operActions.length > 0) {
         navItems.push({
             label: "Opérations",
@@ -195,7 +195,7 @@ const AppContent = () => {
                             <Route path="*" element={<Navigate to="/dashboard" />} />
                             <Route
                                 path="/validation-notes"
-                                element={user.role === 'controleur' ? <ValidationNotes isAdmin={false} /> : <Navigate to="/" />}
+                                element={['controleur', 'operateur_note', 'operateur_code'].includes(user.role) ? <ValidationNotes isAdmin={false} /> : <Navigate to="/" />}
                             />
                         </Routes>
                     </main>
