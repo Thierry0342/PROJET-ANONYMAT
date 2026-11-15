@@ -12,16 +12,22 @@ const ONGLETS = [
     { id: 'validees', label: 'Validées' }
 ];
 
+// Opérateur : un seul onglet = les saisies renvoyées en vérification par le contrôleur
+const ONGLETS_OPERATEUR = [
+    { id: 'reverif', label: 'Revérification' }
+];
+
 const FILTRES_VIDES = { examen: '', matiere: '', escadron: '' };
 const TOUS_FILTRES_VIDES = {
-    toutes: FILTRES_VIDES, directe: FILTRES_VIDES, anonyme: FILTRES_VIDES, liaison: FILTRES_VIDES, validees: FILTRES_VIDES
+    toutes: FILTRES_VIDES, directe: FILTRES_VIDES, anonyme: FILTRES_VIDES,
+    liaison: FILTRES_VIDES, validees: FILTRES_VIDES, reverif: FILTRES_VIDES
 };
 
 const STATUTS = [
-    { id: 'tous',      label: 'Tous les statuts' },
-    { id: 'a_verifier', label: 'À vérifier (opérateur)' },
-    { id: 'verifie',   label: 'Vérifiées (à valider)' },
-    { id: 'renvoye',   label: 'Renvoyées en vérification' }
+    { id: 'tous',       label: 'Tous les statuts' },
+    { id: 'a_verifier', label: 'Chez l\'opérateur (renvoyées)' },
+    { id: 'verifie',    label: 'À valider (contrôleur)' },
+    { id: 'renvoye',    label: 'Renvoyées en vérification' }
 ];
 
 // Normalise pour une recherche insensible à la casse et aux accents
@@ -356,10 +362,24 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
 };
 
 // ═══════════════════ Page principale ═══════════════════
-// NB : c'est le serveur qui décide de ce que chacun voit
-// (opérateur = ses saisies, admin / contrôleur = toutes les saisies).
-// Workflow : l'opérateur vérifie et transmet -> le contrôleur valide définitivement.
+// Workflow :
+//  - L'opérateur saisit (Noter / Lier / Saisie directe) puis envoie son paquet en validation :
+//    les lignes arrivent DIRECTEMENT chez le contrôleur (statut « verifie »).
+//  - Le contrôleur valide (écriture dans « copies ») ou RENVOIE en vérification avec un motif.
+//  - Une saisie renvoyée revient chez l'opérateur : c'est la seule chose qu'il voit ici
+//    (onglet « Revérification »). Il la corrige puis la retransmet au contrôleur.
 const ValidationNotes = () => {
+    // ── Rôle (lu en premier : sert à initialiser les états) ──
+    const { role, userId } = (() => {
+        try {
+            const d = jwtDecode(localStorage.getItem('token'));
+            return { role: d.role, userId: d.id };
+        } catch { return { role: null, userId: null }; }
+    })();
+    const isOperateur = ['operateur_note', 'operateur_code'].includes(role);
+    const canAgirValidees = ['admin', 'controleur'].includes(role);   // renvoyer / délier / supprimer
+    const canModifierValidees = role === 'admin';                     // plus de modification pour le contrôleur
+
     const [saisies, setSaisies] = useState([]);
     const [selection, setSelection] = useState(new Set());
     const [soloMine, setSoloMine] = useState(false);
@@ -372,8 +392,8 @@ const ValidationNotes = () => {
     const [promotions, setPromotions] = useState([]);
     const [promotion, setPromotion] = useState('');
 
-    const [onglet, setOnglet] = useState('toutes');
-    const [recherches, setRecherches] = useState({ toutes: '', directe: '', anonyme: '', liaison: '', validees: '' });
+    const [onglet, setOnglet] = useState(isOperateur ? 'reverif' : 'toutes');
+    const [recherches, setRecherches] = useState({ toutes: '', directe: '', anonyme: '', liaison: '', validees: '', reverif: '' });
     const [filtres, setFiltres] = useState(TOUS_FILTRES_VIDES);
 
     const [editionId, setEditionId] = useState(null);
@@ -383,16 +403,6 @@ const ValidationNotes = () => {
     const [savingEdit, setSavingEdit] = useState(false);
 
     const getCfg = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
-
-    const { role, userId } = (() => {
-        try {
-            const d = jwtDecode(localStorage.getItem('token'));
-            return { role: d.role, userId: d.id };
-        } catch { return { role: null, userId: null }; }
-    })();
-    const isOperateur = ['operateur_note', 'operateur_code'].includes(role);
-    const canAgirValidees = ['admin', 'controleur'].includes(role);   // renvoyer / délier / supprimer
-    const canModifierValidees = role === 'admin';                     // plus de modification pour le contrôleur
 
     // Filtre statut : le contrôleur / admin voit d'abord ce qui l'attend (saisies vérifiées)
     const [statutFiltre, setStatutFiltre] = useState(isOperateur ? 'tous' : 'verifie');
@@ -419,14 +429,17 @@ const ValidationNotes = () => {
                 (e.response?.data?.message || e.message || "Impossible de charger les saisies.")
             );
         }
-        try {
-            const d = await axios.get('/api/copies-temporaires/diagnostic', cfg);
-            setDiag(d.data);
-        } catch {
-            setDiag(null);
+        // Diagnostic : réservé au contrôleur / admin
+        if (!isOperateur) {
+            try {
+                const d = await axios.get('/api/copies-temporaires/diagnostic', cfg);
+                setDiag(d.data);
+            } catch {
+                setDiag(null);
+            }
         }
         setLoading(false);
-    }, [soloMine]);
+    }, [soloMine, isOperateur]);
 
     useEffect(() => { fetchSaisies(); }, [fetchSaisies]);
 
@@ -479,11 +492,12 @@ const ValidationNotes = () => {
         toutes:  saisiesPromo.length,
         directe: saisiesPromo.filter(s => s.source === 'directe').length,
         anonyme: saisiesPromo.filter(s => s.source === 'anonyme').length,
-        liaison: saisiesPromo.filter(s => s.source === 'liaison').length
+        liaison: saisiesPromo.filter(s => s.source === 'liaison').length,
+        reverif: saisiesPromo.length
     }), [saisiesPromo]);
 
     const saisiesOnglet = useMemo(
-        () => saisiesPromo.filter(s => onglet === 'toutes' || s.source === onglet),
+        () => saisiesPromo.filter(s => onglet === 'toutes' || onglet === 'reverif' || s.source === onglet),
         [saisiesPromo, onglet]
     );
 
@@ -644,7 +658,7 @@ const ValidationNotes = () => {
         if (estVerifie(s)) {
             return (
                 <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '0.75rem', background: '#c6f6d5', color: '#276749', whiteSpace: 'nowrap' }}>
-                    {isOperateur ? 'Transmise au contrôleur' : 'Vérifiée — à valider'}
+                    {isOperateur ? 'Transmise au contrôleur' : 'À valider'}
                 </span>
             );
         }
@@ -652,19 +666,20 @@ const ValidationNotes = () => {
             return (
                 <span title={s.renvoi_motif}
                       style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '0.75rem', background: '#fed7d7', color: '#9b2c2c', whiteSpace: 'nowrap' }}>
-                    À revérifier : {s.renvoi_motif}
+                    {isOperateur ? 'À revérifier' : 'Renvoyée à l\'opérateur'} : {s.renvoi_motif}
                 </span>
             );
         }
+        // Un opérateur ne voit jamais « En attente opérateur » : ce statut n'existe plus pour lui
         return (
             <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '0.75rem', background: '#edf2f7', color: '#4a5568', whiteSpace: 'nowrap' }}>
-                {isOperateur ? 'À vérifier' : 'En attente opérateur'}
+                {isOperateur ? 'À vérifier' : 'Chez l\'opérateur'}
             </span>
         );
     };
 
     // Colonnes visibles selon l'onglet
-    const showType  = onglet === 'toutes';
+    const showType  = onglet === 'toutes' || onglet === 'reverif';
     const showCode  = onglet !== 'directe';
     const showNote  = onglet !== 'liaison';
     const nbColonnes = 1 + (showType ? 1 : 0) + (showCode ? 1 : 0) + 1 + 1 + 1 + (showNote ? 1 : 0) + 1 + 1 + 1 + 1;
@@ -673,8 +688,11 @@ const ValidationNotes = () => {
         toutes:  "Rechercher (élève, N°, code, matière, opérateur...)",
         directe: "Rechercher un élève, N° d'incorporation, matière...",
         anonyme: "Rechercher un code anonyme, matière, opérateur...",
-        liaison: "Rechercher un code, un élève, N° d'incorporation..."
+        liaison: "Rechercher un code, un élève, N° d'incorporation...",
+        reverif: "Rechercher une saisie renvoyée (élève, code, matière, motif...)"
     }[onglet];
+
+    const listeOnglets = isOperateur ? ONGLETS_OPERATEUR : ONGLETS;
 
     return (
         <div className="dashboard-redesign-container">
@@ -687,16 +705,20 @@ const ValidationNotes = () => {
                     {promotions.map(p => <option key={p} value={p}>Promotion {p}</option>)}
                 </select>
 
-                <select value={statutFiltre} onChange={e => changerStatut(e.target.value)}
-                        style={{ ...selectStyle, minWidth: '200px' }}>
-                    {STATUTS.map(st => <option key={st.id} value={st.id}>{st.label}</option>)}
-                </select>
+                {!isOperateur && (
+                    <select value={statutFiltre} onChange={e => changerStatut(e.target.value)}
+                            style={{ ...selectStyle, minWidth: '200px' }}>
+                        {STATUTS.map(st => <option key={st.id} value={st.id}>{st.label}</option>)}
+                    </select>
+                )}
 
-                <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 600 }}>
-                    <input type="checkbox" checked={soloMine}
-                           onChange={e => setSoloMine(e.target.checked)} />
-                    Seulement mes saisies
-                </label>
+                {!isOperateur && (
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 600 }}>
+                        <input type="checkbox" checked={soloMine}
+                               onChange={e => setSoloMine(e.target.checked)} />
+                        Seulement mes saisies
+                    </label>
+                )}
                 <button className="btn-export pdf-btn" onClick={fetchSaisies}><FiRefreshCw /> Actualiser</button>
             </div>
 
@@ -706,7 +728,7 @@ const ValidationNotes = () => {
                 </div>
             )}
 
-            {diag && (
+            {diag && !isOperateur && (
                 <div style={{ marginBottom: '12px', fontSize: '0.85rem', color: '#4a5568' }}>
                     Rôle : <strong>{diag.role || '(vide)'}</strong> · en base : <strong>{diag.totalTable}</strong> ·
                     les miennes : <strong>{diag.miennes}</strong> · affichées : <strong>{saisiesPromo.length}</strong>
@@ -717,7 +739,7 @@ const ValidationNotes = () => {
                 <div className="card" style={{ marginBottom: '16px' }}>
                     <p style={{ color: '#15803d', fontWeight: 700 }}>
                         {resultat.etape === 'transmission'
-                            ? `${resultat.valides.length} saisie(s) envoyée(s) au contrôleur.`
+                            ? `${resultat.valides.length} saisie(s) renvoyée(s) au contrôleur.`
                             : `${resultat.valides.length} saisie(s) validée(s).`}
                     </p>
                     {resultat.echecs.length > 0 && (
@@ -731,7 +753,7 @@ const ValidationNotes = () => {
             <div className="card">
                 {/* ── Onglets ── */}
                 <div style={{ display: 'flex', gap: '6px', borderBottom: '2px solid #e2e8f0', marginBottom: '14px', flexWrap: 'wrap' }}>
-                    {ONGLETS.map(o => {
+                    {listeOnglets.map(o => {
                         const actif = onglet === o.id;
                         return (
                             <button
@@ -765,7 +787,7 @@ const ValidationNotes = () => {
                     })}
                 </div>
 
-                {onglet === 'validees' ? (
+                {onglet === 'validees' && !isOperateur ? (
                     <ValideesPanel
                         canModifier={canModifierValidees}
                         canAgir={canAgirValidees}
@@ -843,7 +865,7 @@ const ValidationNotes = () => {
                                 {saving
                                     ? (isOperateur ? 'Envoi...' : 'Validation...')
                                     : (isOperateur
-                                        ? `Envoyer au contrôleur (${idsAValider.length})`
+                                        ? `Renvoyer au contrôleur (${idsAValider.length})`
                                         : `Valider la sélection (${idsAValider.length})`)}
                             </button>
                         </div>
@@ -947,7 +969,9 @@ const ValidationNotes = () => {
                                             <tr><td colSpan={nbColonnes} style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
                                                 {filtresActifs
                                                     ? 'Aucun résultat pour cette recherche / ces filtres.'
-                                                    : 'Aucune saisie en attente dans cet onglet.'}
+                                                    : (isOperateur
+                                                        ? 'Aucune saisie renvoyée en vérification.'
+                                                        : 'Aucune saisie en attente dans cet onglet.')}
                                             </td></tr>
                                         )}
                                     </tbody>

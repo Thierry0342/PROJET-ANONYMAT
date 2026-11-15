@@ -4026,10 +4026,13 @@ app.get('/api/copies-temporaires', authenticateToken,
         // 1. Les saisies brutes, sans aucune jointure
         let sql = "SELECT * FROM copies_temporaires";
         const params = [];
-        if (estOperateur(req.user) || soloMine) {
-            sql += " WHERE saisi_par_utilisateur_id = ?";
-            params.push(req.user.id);
-        }
+        if (estOperateur(req.user)) {
+                sql += " WHERE saisi_par_utilisateur_id = ? AND statut_validation = 'en_attente' AND renvoi_motif IS NOT NULL";
+                params.push(req.user.id);
+            } else if (soloMine) {
+                sql += " WHERE saisi_par_utilisateur_id = ?";
+                params.push(req.user.id);
+            }
         sql += " ORDER BY date_saisie DESC";
         const [rows] = await db.query(sql, params);
         if (rows.length === 0) return res.json([]);
@@ -6301,18 +6304,18 @@ app.post('/api/paquets/:id/transferer', authenticateToken, checkRole(ROLES_SAISI
                 }
 
                if (paquet.type_saisie === 'liaison') {
-                        await connection.query(`
-                            INSERT INTO copies_temporaires
-                            (source, eleve_id, code_anonyme, matiere_id, type_examen, saisi_par_utilisateur_id, saisi_par_nom, renvoi_motif)
-                            VALUES ('liaison', ?, ?, ?, ?, ?, ?, ?)
-                        `, [l.eleve_id, l.code_anonyme, l.matiere_id, l.type_examen, req.user.id, req.user.nom_utilisateur, l.renvoi_motif || null]);
-                    } else {
-                        await connection.query(`
-                            INSERT INTO copies_temporaires
-                            (source, code_anonyme, matiere_id, type_examen, note, saisi_par_utilisateur_id, saisi_par_nom, renvoi_motif)
-                            VALUES ('anonyme', ?, ?, ?, ?, ?, ?, ?)
-                        `, [l.code_anonyme, l.matiere_id, l.type_examen, l.note, req.user.id, req.user.nom_utilisateur, l.renvoi_motif || null]);
-                    }
+                    await connection.query(`
+                        INSERT INTO copies_temporaires
+                        (source, eleve_id, code_anonyme, matiere_id, type_examen, saisi_par_utilisateur_id, saisi_par_nom, statut_validation)
+                        VALUES ('liaison', ?, ?, ?, ?, ?, ?, 'verifie')
+                    `, [l.eleve_id, l.code_anonyme, l.matiere_id, l.type_examen, req.user.id, req.user.nom_utilisateur]);
+                } else {
+                    await connection.query(`
+                        INSERT INTO copies_temporaires
+                        (source, code_anonyme, matiere_id, type_examen, note, saisi_par_utilisateur_id, saisi_par_nom, statut_validation)
+                        VALUES ('anonyme', ?, ?, ?, ?, ?, ?, 'verifie')
+                    `, [l.code_anonyme, l.matiere_id, l.type_examen, l.note, req.user.id, req.user.nom_utilisateur]);
+                }
                 await connection.query("DELETE FROM liste_attente_saisies WHERE id = ?", [l.id]);
                 await connection.commit();
                 resultats.transferes++;
