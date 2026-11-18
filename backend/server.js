@@ -1050,7 +1050,7 @@ app.post(apiPaths.matieres.base, authenticateToken, checkRole(['admin', 'control
     }
 });
 
-app.get('/api/codes/verifier/:code', authenticateToken, checkRole(['admin', 'operateur_note', 'controleur']), async (req, res) => {
+app.get('/api/codes/verifier/:code', authenticateToken, checkRole(['admin', 'operateur_note', 'operateur_code', 'controleur']), async (req, res) => {
     try {
         const { code } = req.params;
         const [rows] = await db.query("SELECT id FROM codes_anonymes_disponibles WHERE code = ?", [code]);
@@ -1980,7 +1980,7 @@ app.get('/api/codes/sans-note/:matiereId', authenticateToken, checkRole(['admin'
             SELECT cad.code
             FROM codes_anonymes_disponibles cad
             LEFT JOIN copies c ON cad.code = c.code_anonyme AND c.matiere_id = ?
-            WHERE cad.code LIKE ? AND c.id IS NULL
+            WHERE cad.code LIKE ? AND (c.id IS NULL OR c.note IS NULL)
             ORDER BY cad.code;
         `;
 
@@ -3896,18 +3896,8 @@ app.post('/api/copies-temporaires/anonyme', authenticateToken, checkRole(['admin
     }
 
     try {
-        const [codesDispo] = await db.query("SELECT id FROM codes_anonymes_disponibles WHERE code = ?", [code_anonyme]);
-        if (codesDispo.length === 0) {
-            return res.status(404).json({ message: "Ce code anonyme n'existe pas dans la base de données générale." });
-        }
-        const [existingCopies] = await db.query("SELECT note FROM copies WHERE code_anonyme = ? AND matiere_id = ?", [code_anonyme, matiere_id]);
-        if (existingCopies.length > 0 && existingCopies[0].note !== null) {
-            return res.status(409).json({ message: "Ce code a déjà une note validée." });
-        }
-        const [enAttente] = await db.query("SELECT id FROM copies_temporaires WHERE code_anonyme = ? AND matiere_id = ?", [code_anonyme, matiere_id]);
-        if (enAttente.length > 0) {
-            return res.status(409).json({ message: "Ce code a déjà une note en attente de validation." });
-        }
+       const erreur = await controlerSaisieNote(db, { code: code_anonyme, matiereId: matiere_id, typeExamen: type_examen });
+        if (erreur) return res.status(erreur.status).json({ message: erreur.message });
 
         await db.query(`
             INSERT INTO copies_temporaires
@@ -3932,66 +3922,10 @@ app.post('/api/copies-temporaires/liaison', authenticateToken, checkRole(['admin
     }
 
     try {
-        // 1. Le code doit avoir une note validée OU une note anonyme en attente
-        const [copies] = await db.query(
-            "SELECT eleve_id, matiere_id, type_examen FROM copies WHERE code_anonyme = ?", [code_anonyme]
-        );
-
-        if (copies.length > 0) {
-            const copie = copies[0];
-            if (copie.eleve_id !== null) {
-                const [[e]] = await db.query("SELECT nom, prenom, numero_incorporation FROM eleves WHERE id = ?", [copie.eleve_id]);
-                return res.status(409).json({
-                    message: e
-                        ? `Erreur : Le code ${code_anonyme} est déjà lié à l'élève ${e.nom} ${e.prenom} (N° ${e.numero_incorporation}).`
-                        : "Cette copie est déjà liée à un autre élève."
-                });
-            }
-            if (String(copie.matiere_id) !== String(matiere_id)) {
-                return res.status(409).json({ message: "Conflit : Ce code a été noté pour une autre matière." });
-            }
-            if (copie.type_examen && copie.type_examen !== type_examen) {
-                return res.status(409).json({ message: `Erreur : Ce code correspond à l'examen '${copie.type_examen}', mais vous avez sélectionné '${type_examen}'.` });
-            }
-        } else {
-            const [noteEnAttente] = await db.query(
-                "SELECT matiere_id, type_examen FROM copies_temporaires WHERE code_anonyme = ? AND source = 'anonyme'",
-                [code_anonyme]
-            );
-            if (noteEnAttente.length === 0) {
-                return res.status(404).json({ message: "Ce code n'existe pas ou n'a pas encore été noté." });
-            }
-            if (String(noteEnAttente[0].matiere_id) !== String(matiere_id)) {
-                return res.status(409).json({ message: "Conflit : Ce code a été noté pour une autre matière." });
-            }
-            if (noteEnAttente[0].type_examen !== type_examen) {
-                return res.status(409).json({ message: `Erreur : Ce code correspond à l'examen '${noteEnAttente[0].type_examen}', mais vous avez sélectionné '${type_examen}'.` });
-            }
-        }
-
-        // 2. Pas déjà une liaison en attente pour ce code ou pour cet élève
-        const [liaisonCode] = await db.query(
-            "SELECT id FROM copies_temporaires WHERE source = 'liaison' AND code_anonyme = ?", [code_anonyme]
-        );
-        if (liaisonCode.length > 0) {
-            return res.status(409).json({ message: `Le code ${code_anonyme} a déjà une liaison en attente de validation.` });
-        }
-        const [liaisonEleve] = await db.query(
-            "SELECT id, code_anonyme FROM copies_temporaires WHERE source = 'liaison' AND eleve_id = ? AND matiere_id = ? AND type_examen = ?",
-            [eleve_id, matiere_id, type_examen]
-        );
-        if (liaisonEleve.length > 0) {
-            return res.status(409).json({ message: `Cet élève a déjà une liaison en attente pour cette matière (Code : ${liaisonEleve[0].code_anonyme}).` });
-        }
-
-        // 3. L'élève n'a pas déjà une copie validée pour cette matière/examen
-       const [dejaLie] = await db.query(
-    "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
-    [eleve_id, matiere_id, type_examen]
-);
-        if (dejaLie.length > 0) {
-            return res.status(409).json({ message: `Erreur : Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme}).` });
-        }
+               const erreur = await controlerSaisieLiaison(db, {
+            eleveId: eleve_id, code: code_anonyme, matiereId: matiere_id, typeExamen: type_examen
+        });
+        if (erreur) return res.status(erreur.status).json({ message: erreur.message });
 
         await db.query(`
             INSERT INTO copies_temporaires
@@ -4121,7 +4055,7 @@ app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin
     const resultats = { valides: [], echecs: [] };
 
     const [ordre] = await db.query(
-    "SELECT id FROM copies_temporaires WHERE id IN (?) ORDER BY FIELD(source, 'anonyme', 'directe', 'liaison'), id",
+    "SELECT id FROM copies_temporaires WHERE id IN (?) ORDER BY FIELD(source, 'liaison', 'directe', 'anonyme'), id",
     [ids]
     );
     const idsOrdonnes = ordre.map(r => r.id);
@@ -4169,78 +4103,96 @@ app.post('/api/copies-temporaires/valider', authenticateToken, checkRole(['admin
                 continue;
             }
 
-            if (temp.source === 'anonyme') {
-                const [existante] = await connection.query(
-                    "SELECT id, note FROM copies WHERE code_anonyme = ? AND matiere_id = ?",
+          if (temp.source === 'anonyme') {
+                // ── Étape 2 : la note s'écrit sur la ligne créée par la liaison ──
+                const [copies] = await connection.query(
+                    "SELECT id, eleve_id, note, type_examen FROM copies WHERE code_anonyme = ? AND matiere_id = ? FOR UPDATE",
                     [temp.code_anonyme, temp.matiere_id]
                 );
-                if (existante.length > 0 && existante[0].note !== null) {
+                if (copies.length === 0 || copies[0].eleve_id === null) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: `Le code ${temp.code_anonyme} n'est pas encore lié à un élève. Validez d'abord la liaison correspondante.` });
+                    continue;
+                }
+                if (copies[0].note !== null) {
                     await connection.rollback();
                     resultats.echecs.push({ id, message: `Le code ${temp.code_anonyme} a déjà une note enregistrée.` });
                     continue;
                 }
-                await connection.query(`
-                    INSERT INTO copies (matiere_id, code_anonyme, note, type_examen, note_saisie_par_utilisateur_id, eleve_id)
-                    VALUES (?, ?, ?, ?, ?, NULL)
-                    ON DUPLICATE KEY UPDATE
-                        note = VALUES(note),
-                        type_examen = VALUES(type_examen),
-                        note_saisie_par_utilisateur_id = VALUES(note_saisie_par_utilisateur_id)
-                `, [temp.matiere_id, temp.code_anonyme, temp.note, temp.type_examen, temp.saisi_par_utilisateur_id]);
+                if (copies[0].type_examen && copies[0].type_examen !== temp.type_examen) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: `Ce code est lié pour l'examen '${copies[0].type_examen}'.` });
+                    continue;
+                }
+                await connection.query(
+                    "UPDATE copies SET note = ?, type_examen = ?, note_saisie_par_utilisateur_id = ?, note_saisie_a = NOW() WHERE id = ?",
+                    [temp.note, temp.type_examen, temp.saisi_par_utilisateur_id, copies[0].id]
+                );
 
             } else if (temp.source === 'liaison') {
-            const [copies] = await connection.query(
-           "SELECT eleve_id, matiere_id, type_examen FROM copies WHERE code_anonyme = ? FOR UPDATE",
-            [temp.code_anonyme]
-         );
-    if (copies.length === 0) {
-        await connection.rollback();
-        resultats.echecs.push({ id, message: `Le code ${temp.code_anonyme} n'a pas encore de note validée. Validez d'abord la note correspondante.` });
-        continue;
-    }
-    const copie = copies[0];
-    if (copie.eleve_id !== null) {
-        await connection.rollback();
-        resultats.echecs.push({ id, message: `Le code ${temp.code_anonyme} est déjà lié à un élève.` });
-        continue;
-    }
-    if (String(copie.matiere_id) !== String(temp.matiere_id)) {
-        await connection.rollback();
-        resultats.echecs.push({ id, message: "Conflit : ce code a été noté pour une autre matière." });
-        continue;
-    }
-    if (copie.type_examen && copie.type_examen !== temp.type_examen) {
-        await connection.rollback();
-        resultats.echecs.push({ id, message: `Ce code correspond à l'examen '${copie.type_examen}'.` });
-        continue;
-    }
-    const [dejaLie] = await connection.query(
-    "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL",
-    [temp.eleve_id, temp.matiere_id, temp.type_examen]
-);
-if (dejaLie.length > 0) {
-    await connection.rollback();
-    resultats.echecs.push({ id, message: `Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme}).` });
-    continue;
-}
+                // ── Étape 1 : le code doit exister ; on crée la ligne code + élève (note vide) ──
+                const erreurCode = await controlerCodeExiste(connection, temp.code_anonyme, temp.matiere_id);
+                if (erreurCode) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: erreurCode.message });
+                    continue;
+                }
+                const [copies] = await connection.query(
+                    "SELECT id, eleve_id, matiere_id, type_examen FROM copies WHERE code_anonyme = ? FOR UPDATE",
+                    [temp.code_anonyme]
+                );
+                const copie = copies[0] || null;
+                if (copie) {
+                    if (copie.eleve_id !== null) {
+                        await connection.rollback();
+                        resultats.echecs.push({ id, message: `Le code ${temp.code_anonyme} est déjà lié à un élève.` });
+                        continue;
+                    }
+                    if (String(copie.matiere_id) !== String(temp.matiere_id)) {
+                        await connection.rollback();
+                        resultats.echecs.push({ id, message: "Conflit : ce code appartient à une autre matière." });
+                        continue;
+                    }
+                    if (copie.type_examen && copie.type_examen !== temp.type_examen) {
+                        await connection.rollback();
+                        resultats.echecs.push({ id, message: `Ce code correspond à l'examen '${copie.type_examen}'.` });
+                        continue;
+                    }
+                }
+                const [dejaLie] = await connection.query(
+                    "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND (note IS NOT NULL OR code_anonyme IS NOT NULL)",
+                    [temp.eleve_id, temp.matiere_id, temp.type_examen]
+                );
+                if (dejaLie.length > 0) {
+                    await connection.rollback();
+                    resultats.echecs.push({ id, message: `Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme || 'saisie directe'}).` });
+                    continue;
+                }
 
+                // Supprimer les lignes vides résiduelles (note supprimée, sans code) de cet élève
+                const [vides] = await connection.query(
+                    "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NULL AND code_anonyme IS NULL",
+                    [temp.eleve_id, temp.matiere_id, temp.type_examen]
+                );
+                for (const v of vides) {
+                    await connection.query("DELETE FROM historique_modifications_notes WHERE copie_id = ?", [v.id]);
+                    await connection.query("DELETE FROM copies WHERE id = ?", [v.id]);
+                }
 
-// Supprimer les lignes vides résiduelles (note supprimée, sans code) de cet élève
-const [vides] = await connection.query(
-    "SELECT id FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NULL AND code_anonyme IS NULL",
-    [temp.eleve_id, temp.matiere_id, temp.type_examen]
-);
-for (const v of vides) {
-    await connection.query("DELETE FROM historique_modifications_notes WHERE copie_id = ?", [v.id]);
-    await connection.query("DELETE FROM copies WHERE id = ?", [v.id]);
-}
-    await connection.query(
-        "UPDATE copies SET eleve_id = ?, cree_par_utilisateur_id = ? WHERE code_anonyme = ?",
-        [temp.eleve_id, temp.saisi_par_utilisateur_id, temp.code_anonyme]
-    );
-    await connection.query("UPDATE codes_anonymes_disponibles SET est_utilise = 1 WHERE code = ?", [temp.code_anonyme]);
+                if (copie) {
+                    await connection.query(
+                        "UPDATE copies SET eleve_id = ?, cree_par_utilisateur_id = ?, type_examen = COALESCE(type_examen, ?) WHERE id = ?",
+                        [temp.eleve_id, temp.saisi_par_utilisateur_id, temp.type_examen, copie.id]
+                    );
+                } else {
+                    await connection.query(
+                        "INSERT INTO copies (matiere_id, code_anonyme, type_examen, eleve_id, cree_par_utilisateur_id, note) VALUES (?, ?, ?, ?, ?, NULL)",
+                        [temp.matiere_id, temp.code_anonyme, temp.type_examen, temp.eleve_id, temp.saisi_par_utilisateur_id]
+                    );
+                }
+                await connection.query("UPDATE codes_anonymes_disponibles SET est_utilise = 1 WHERE code = ?", [temp.code_anonyme]);
 
-} else if (temp.est_absence) {
+            } else if (temp.est_absence) {
                 const [dejaAbsent] = await connection.query(
                     "SELECT id FROM absences WHERE eleve_id = ? AND matiere_id = ?",
                     [temp.eleve_id, temp.matiere_id]
@@ -4770,17 +4722,14 @@ app.get('/api/codes/statut-liaison', authenticateToken, checkRole(['admin', 'con
 
         const [rows] = await db.query(query, params);
 
-        const codes = rows.map(r => {
-            let statut = 'sans_note';
-            if (r.note !== null && r.eleve_id === null) statut = 'note_non_lie';
-            else if (r.note !== null && r.eleve_id !== null) statut = 'lie';
+             const codes = rows.map(r => {
+            let statut = 'sans_liaison';                                   // rien encore
+            if (r.eleve_id !== null && r.note === null) statut = 'lie_sans_note';   // liaison faite, note à saisir
+            else if (r.eleve_id === null && r.note !== null) statut = 'note_non_lie'; // ancien flux
+            else if (r.eleve_id !== null && r.note !== null) statut = 'complet';
             return {
-                code: r.code,
-                promotion: r.promotion,
-                population: r.population,
-                statut,
-                note: r.note,
-                type_examen: r.type_examen,
+                code: r.code, promotion: r.promotion, population: r.population,
+                statut, note: r.note, type_examen: r.type_examen,
                 note_en_attente: r.note_en_attente > 0,
                 liaison_en_attente: r.liaison_en_attente > 0
             };
@@ -4788,9 +4737,10 @@ app.get('/api/codes/statut-liaison', authenticateToken, checkRole(['admin', 'con
 
         const compteurs = {
             total: codes.length,
-            sans_note: codes.filter(c => c.statut === 'sans_note').length,
+            sans_liaison: codes.filter(c => c.statut === 'sans_liaison').length,
+            lie_sans_note: codes.filter(c => c.statut === 'lie_sans_note').length,
             note_non_lie: codes.filter(c => c.statut === 'note_non_lie').length,
-            lie: codes.filter(c => c.statut === 'lie').length
+            complet: codes.filter(c => c.statut === 'complet').length
         };
 
         res.json({ matiere: matiere.nom_matiere, compteurs, codes });
@@ -6074,14 +6024,31 @@ const chargerLignes = async (conn, paquetId) => {
     `, [paquetId]);
     return rows;
 };
-
-// Contrôles (retournent null si OK, sinon { status, message })
-const controlerSaisieNote = async (conn, { code, matiereId, ignorerListe = false }) => {
+const controlerCodeExiste = async (conn, code, matiereId) => {
     const [codes] = await conn.query("SELECT id FROM codes_anonymes_disponibles WHERE code = ?", [code]);
-    if (codes.length === 0) return { status: 404, message: "Ce code anonyme n'existe pas dans la base de données générale." };
+    if (codes.length === 0) {
+        return { status: 404, message: `Le code ${code} n'existe pas dans la base de données.` };
+    }
+    if (matiereId) {
+        const [[m]] = await conn.query("SELECT code_prefixe FROM matieres WHERE id = ?", [matiereId]);
+        const prefixe = m && m.code_prefixe ? String(m.code_prefixe).trim() : '';
+        if (prefixe && !String(code).startsWith(prefixe)) {
+            return { status: 409, message: `Le code ${code} ne correspond pas à la matière sélectionnée.` };
+        }
+    }
+    return null;
+};
 
-    const [copies] = await conn.query("SELECT note FROM copies WHERE code_anonyme = ? AND matiere_id = ?", [code, matiereId]);
-    if (copies.length > 0 && copies[0].note !== null) return { status: 409, message: "Ce code a déjà une note validée." };
+// Étape 2 : code + note  → le code doit déjà être lié à un élève
+const controlerSaisieNote = async (conn, { code, matiereId, typeExamen = null, ignorerListe = false, ignorerLiaison = false }) => {
+    const erreurCode = await controlerCodeExiste(conn, code, matiereId);
+    if (erreurCode) return erreurCode;
+
+    const [copies] = await conn.query(
+        "SELECT eleve_id, note, type_examen FROM copies WHERE code_anonyme = ? AND matiere_id = ?", [code, matiereId]);
+    if (copies.length > 0 && copies[0].note !== null) {
+        return { status: 409, message: "Ce code a déjà une note validée." };
+    }
 
     const [temp] = await conn.query(
         "SELECT id FROM copies_temporaires WHERE code_anonyme = ? AND matiere_id = ? AND source = 'anonyme'", [code, matiereId]);
@@ -6092,10 +6059,34 @@ const controlerSaisieNote = async (conn, { code, matiereId, ignorerListe = false
             "SELECT id FROM liste_attente_saisies WHERE type_saisie = 'note' AND code_anonyme = ? AND matiere_id = ?", [code, matiereId]);
         if (la.length > 0) return { status: 409, message: "Ce code est déjà dans une liste d'attente (paquet en cours)." };
     }
+
+    if (!ignorerLiaison) {
+        let liee = false;
+        let typeLiaison = null;
+        if (copies.length > 0 && copies[0].eleve_id !== null) {
+            liee = true;
+            typeLiaison = copies[0].type_examen;
+        } else {
+            const [liaisonTemp] = await conn.query(
+                "SELECT type_examen FROM copies_temporaires WHERE source = 'liaison' AND code_anonyme = ? AND matiere_id = ?",
+                [code, matiereId]);
+            if (liaisonTemp.length > 0) { liee = true; typeLiaison = liaisonTemp[0].type_examen; }
+        }
+        if (!liee) {
+            return { status: 409, message: `Le code ${code} n'est lié à aucun élève : faites d'abord la liaison (élève + code).` };
+        }
+        if (typeExamen && typeLiaison && typeLiaison !== typeExamen) {
+            return { status: 409, message: `Erreur : Ce code est lié pour l'examen '${typeLiaison}', mais vous avez sélectionné '${typeExamen}'.` };
+        }
+    }
     return null;
 };
 
+// Étape 1 : élève + code  → le code doit exister, plus besoin qu'il ait déjà une note
 const controlerSaisieLiaison = async (conn, { eleveId, code, matiereId, typeExamen, ignorerListe = false }) => {
+    const erreurCode = await controlerCodeExiste(conn, code, matiereId);
+    if (erreurCode) return erreurCode;
+
     const [copies] = await conn.query("SELECT eleve_id, matiere_id, type_examen FROM copies WHERE code_anonyme = ?", [code]);
     if (copies.length > 0) {
         const copie = copies[0];
@@ -6105,17 +6096,19 @@ const controlerSaisieLiaison = async (conn, { eleveId, code, matiereId, typeExam
                 ? `Erreur : Le code ${code} est déjà lié à l'élève ${e.nom} ${e.prenom} (N° ${e.numero_incorporation}).`
                 : "Cette copie est déjà liée à un autre élève." };
         }
-        if (String(copie.matiere_id) !== String(matiereId)) return { status: 409, message: "Conflit : Ce code a été noté pour une autre matière." };
+        if (String(copie.matiere_id) !== String(matiereId)) return { status: 409, message: "Conflit : Ce code appartient à une autre matière." };
         if (copie.type_examen && copie.type_examen !== typeExamen) {
             return { status: 409, message: `Erreur : Ce code correspond à l'examen '${copie.type_examen}', mais vous avez sélectionné '${typeExamen}'.` };
         }
     } else {
+        // Reliquat de l'ancien flux : note anonyme en attente pour ce code
         const [noteEnAttente] = await conn.query(
             "SELECT matiere_id, type_examen FROM copies_temporaires WHERE code_anonyme = ? AND source = 'anonyme'", [code]);
-        if (noteEnAttente.length === 0) return { status: 404, message: "Ce code n'existe pas ou n'a pas encore été noté." };
-        if (String(noteEnAttente[0].matiere_id) !== String(matiereId)) return { status: 409, message: "Conflit : Ce code a été noté pour une autre matière." };
-        if (noteEnAttente[0].type_examen !== typeExamen) {
-            return { status: 409, message: `Erreur : Ce code correspond à l'examen '${noteEnAttente[0].type_examen}', mais vous avez sélectionné '${typeExamen}'.` };
+        if (noteEnAttente.length > 0) {
+            if (String(noteEnAttente[0].matiere_id) !== String(matiereId)) return { status: 409, message: "Conflit : Ce code a été noté pour une autre matière." };
+            if (noteEnAttente[0].type_examen !== typeExamen) {
+                return { status: 409, message: `Erreur : Ce code correspond à l'examen '${noteEnAttente[0].type_examen}', mais vous avez sélectionné '${typeExamen}'.` };
+            }
         }
     }
 
@@ -6137,13 +6130,14 @@ const controlerSaisieLiaison = async (conn, { eleveId, code, matiereId, typeExam
         if (laEleve.length > 0) return { status: 409, message: "Cet élève est déjà dans une liste d'attente pour cette matière." };
     }
 
+    // L'élève a déjà une copie (avec note OU déjà liée à un code) pour cette matière/examen
     const [dejaLie] = await conn.query(
-        "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND note IS NOT NULL", [eleveId, matiereId, typeExamen]);
-    if (dejaLie.length > 0) return { status: 409, message: `Erreur : Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme}).` };
+        "SELECT code_anonyme FROM copies WHERE eleve_id = ? AND matiere_id = ? AND type_examen = ? AND (note IS NOT NULL OR code_anonyme IS NOT NULL)",
+        [eleveId, matiereId, typeExamen]);
+    if (dejaLie.length > 0) return { status: 409, message: `Erreur : Cet élève possède déjà une copie pour cette matière (Code : ${dejaLie[0].code_anonyme || 'saisie directe'}).` };
 
     return null;
 };
-
 // Paquet actif de l'utilisateur (avec ses lignes, la dernière saisie en premier)
 app.get('/api/paquets/actif', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
     try {
@@ -6210,7 +6204,7 @@ app.post('/api/paquets/:id/lignes', authenticateToken, checkRole(ROLES_SAISIE), 
             if (isNaN(noteNum) || noteNum < 0 || noteNum > 20) {
                 return res.status(400).json({ message: "La note doit être un nombre entre 0 et 20." });
             }
-            const erreur = await controlerSaisieNote(db, { code: code_anonyme, matiereId: paquet.matiere_id });
+           const erreur = await controlerSaisieNote(db, { code: code_anonyme, matiereId: paquet.matiere_id, typeExamen: paquet.type_examen });
             if (erreur) return res.status(erreur.status).json({ message: erreur.message });
 
             await db.query(`
@@ -6295,7 +6289,7 @@ app.post('/api/paquets/:id/transferer', authenticateToken, checkRole(ROLES_SAISI
                 const erreur = paquet.type_saisie === 'liaison'
                     ? await controlerSaisieLiaison(connection, {
                         eleveId: l.eleve_id, code: l.code_anonyme, matiereId: l.matiere_id, typeExamen: l.type_examen, ignorerListe: true })
-                    : await controlerSaisieNote(connection, { code: l.code_anonyme, matiereId: l.matiere_id, ignorerListe: true });
+                   : await controlerSaisieNote(connection, { code: l.code_anonyme, matiereId: l.matiere_id, typeExamen: l.type_examen, ignorerListe: true });
 
                 if (erreur) {
                     await connection.rollback();
@@ -6594,7 +6588,10 @@ app.post('/api/copies/:copieId/renvoyer-verification', authenticateToken, checkR
             const uid = copie.note_saisie_par_utilisateur_id || req.user.id;
 
             if (estAnonyme) {
-                const erreur = await controlerSaisieNote(connection, { code: copie.code_anonyme, matiereId: copie.matiere_id });
+              const erreur = await controlerSaisieNote(connection, {
+    code: copie.code_anonyme, matiereId: copie.matiere_id,
+    typeExamen: copie.type_examen, ignorerLiaison: veutLiaison
+});
                 if (erreur) { await connection.rollback(); return res.status(erreur.status).json({ message: erreur.message }); }
                 const r = await versListeAttente('note', uid);
                 if (r.erreur) { await connection.rollback(); return res.status(409).json({ message: r.erreur }); }

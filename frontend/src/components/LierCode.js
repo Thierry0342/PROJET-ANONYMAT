@@ -2,12 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { jwtDecode } from "jwt-decode";
 import Counter from './Counter';
-import {
-    FaQuestionCircle,
-    FaLock,
-    FaInfoCircle,
-    FaUsers
-} from 'react-icons/fa';
+import { FaQuestionCircle, FaLock, FaInfoCircle, FaUsers, FaCheckCircle, FaTimesCircle, FaSpinner } from 'react-icons/fa';
 import usePaquet from './usePaquet';
 import PaquetProgress, { PaquetListe } from './PaquetPanel';
 import './LierCode.css';
@@ -17,6 +12,7 @@ import Toast from './Toast';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 const STATS_VIDES = { participants: 0, deja: 0, manquantes: 0, mesSaisies: 0 };
+const VALIDATION_IDLE = { status: 'idle', message: '' };
 
 function LierCode() {
     const [statsTotal, setStatsTotal]           = useState(0);
@@ -30,6 +26,7 @@ function LierCode() {
     const [selectedEleve, setSelectedEleve]     = useState(null);
     const [codePrefix, setCodePrefix]           = useState('');
     const [codeSuffix, setCodeSuffix]           = useState('');
+    const [codeValidation, setCodeValidation]   = useState(VALIDATION_IDLE);
     const [message, setMessage]                 = useState('');
     const [isError, setIsError]                 = useState(false);
     const [isLoading, setIsLoading]             = useState(false);
@@ -118,6 +115,11 @@ function LierCode() {
     }, [selectedMatiere, selectedExamen, promotionCtx, populationCtx, getAuthHeaders]);
 
     useEffect(() => { fetchAllStats(); }, [fetchAllStats]);
+
+    // ── Réinitialiser la validation du code si la matière / le préfixe change ──
+    useEffect(() => {
+        setCodeValidation(VALIDATION_IDLE);
+    }, [selectedMatiere, codePrefix]);
 
     // ── Chargement initial ────────────────────────────────────────────────────
     useEffect(() => {
@@ -281,11 +283,30 @@ function LierCode() {
             ? matiereChoisie.code_prefixe.trim().toUpperCase()
             : '');
         setCodeSuffix(''); setRechercheEleve(''); setSelectedEleve(null);
+        setCodeValidation(VALIDATION_IDLE);
     };
+
+    // ── Vérifie que le code existe dans la base avant de lier ────────────────
+    const verifyCode = useCallback(async () => {
+        if (!paquetPret || !codeSuffix.trim() || !codePrefix) return;
+        if (codeValidation.status === 'checking' || codeValidation.status === 'valid') return;
+        const fullCode = `${codePrefix}${codeSuffix}`;
+        setCodeValidation({ status: 'checking', message: 'Vérification...' });
+        try {
+            await axios.get(`${API_BASE_URL}/api/codes/verifier/${fullCode}`, getAuthHeaders());
+            setCodeValidation({ status: 'valid', message: '' });
+        } catch (error) {
+            setCodeValidation({
+                status: 'invalid',
+                message: error.response?.data?.message || "Ce code n'existe pas dans la base."
+            });
+        }
+    }, [paquetPret, codeSuffix, codePrefix, codeValidation.status, getAuthHeaders]);
 
     // ── Ajout à la liste d'attente du paquet (pas de validation directe) ─────
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (codeValidation.status !== 'valid') return;
         const fullCode = `${codePrefix}${codeSuffix}`;
         if (!paquetPret || !selectedEleve || !selectedMatiere || !selectedExamen || !codeSuffix.trim()) return;
         setIsLoading(true); setMessage('');
@@ -295,6 +316,7 @@ function LierCode() {
             setMessage("Liaison ajoutée à votre liste d'attente.");
             setIsError(false);
             setCodeSuffix(''); setRechercheEleve(''); setSelectedEleve(null);
+            setCodeValidation(VALIDATION_IDLE);
             rechercheEleveInputRef.current?.focus();
             const apres = await fetchAllStats();
             if (apres && apres.mesSaisies > avant && apres.mesSaisies % 100 === 0) {
@@ -380,6 +402,7 @@ function LierCode() {
                                         setCodeSuffix('');
                                         setRechercheEleve('');
                                         setSelectedEleve(null);
+                                        setCodeValidation(VALIDATION_IDLE);
                                     }}
                                     disabled={!!paquet}
                                 >
@@ -402,6 +425,7 @@ function LierCode() {
                                         setCodeSuffix('');
                                         setRechercheEleve('');
                                         setSelectedEleve(null);
+                                        setCodeValidation(VALIDATION_IDLE);
                                     }}
                                     disabled={!selectedPromotion || loadingExam || !!paquet}
                                     required
@@ -476,7 +500,7 @@ function LierCode() {
                         )}
                     </div>
 
-                    {/* ── Code anonyme ── */}
+                    {/* ── Code anonyme (vérifié avant de lier) ── */}
                     <div className="form-group">
                         <label>Code Anonyme</label>
                         <div className="code-input-wrapper">
@@ -485,19 +509,39 @@ function LierCode() {
                                 ref={codeInputRef}
                                 type="text"
                                 value={codeSuffix}
-                                onChange={e => setCodeSuffix(e.target.value.toUpperCase().replace(/[^0-9]/g, ''))}
+                                onChange={e => {
+                                    setCodeSuffix(e.target.value.toUpperCase().replace(/[^0-9]/g, ''));
+                                    if (codeValidation.status !== 'idle') setCodeValidation(VALIDATION_IDLE);
+                                }}
+                                onBlur={verifyCode}
+                                onKeyDown={e => {
+                                    // Code déjà valide : Entrée envoie le formulaire.
+                                    // Sinon : Entrée déclenche la vérification.
+                                    if (e.key === 'Enter' && codeValidation.status !== 'valid') {
+                                        e.preventDefault();
+                                        verifyCode();
+                                    }
+                                }}
                                 placeholder="Chiffres"
                                 required
                                 disabled={!selectedMatiere || !paquetPret}
                                 autoComplete="off"
                             />
+                            <div className="val-icon-container">
+                                {codeValidation.status === 'checking' ? <FaSpinner className="spinner" /> :
+                                 codeValidation.status === 'valid'    ? <FaCheckCircle className="valid" /> :
+                                 codeValidation.status === 'invalid'  ? <FaTimesCircle className="invalid" /> : null}
+                            </div>
                         </div>
+                        {codeValidation.status === 'invalid' && (
+                            <small style={{ color: '#e53e3e' }}>{codeValidation.message}</small>
+                        )}
                     </div>
 
                     <button
                         className="btn btn-primary btn-block"
                         type="submit"
-                        disabled={isLoading || !paquetPret || !selectedEleve || !codeSuffix}
+                        disabled={isLoading || !paquetPret || !selectedEleve || !codeSuffix || codeValidation.status !== 'valid'}
                     >
                         {isLoading ? "CHARGEMENT..." : "LIER LE CODE"}
                     </button>
@@ -583,6 +627,13 @@ function LierCode() {
                 .search-results { position: absolute; background: white; border: 1px solid #e2e8f0; width: 100%; z-index: 100; max-height: 200px; overflow-y: auto; border-radius: 0 0 8px 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
                 .search-result-item { padding: 12px; cursor: pointer; border-bottom: 1px solid #f7fafc; font-size: 0.9rem; }
                 .search-result-item:hover { background: #edf2f7; color: #2b6cb0; }
+
+                /* ── Icône de validation du code ── */
+                .val-icon-container { display: flex; align-items: center; margin-left: 8px; min-width: 18px; }
+                .val-icon-container .valid   { color: #38a169; }
+                .val-icon-container .invalid { color: #e53e3e; }
+                .val-icon-container .spinner { color: #718096; animation: lier-spin 1s linear infinite; }
+                @keyframes lier-spin { to { transform: rotate(360deg); } }
             `}</style>
         </div>
     );
