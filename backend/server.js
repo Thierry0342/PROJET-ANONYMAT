@@ -4722,25 +4722,36 @@ app.get('/api/codes/statut-liaison', authenticateToken, checkRole(['admin', 'con
 
         const [rows] = await db.query(query, params);
 
-             const codes = rows.map(r => {
-            let statut = 'sans_liaison';                                   // rien encore
-            if (r.eleve_id !== null && r.note === null) statut = 'lie_sans_note';   // liaison faite, note à saisir
-            else if (r.eleve_id === null && r.note !== null) statut = 'note_non_lie'; // ancien flux
+         const codes = rows.map(r => {
+            let statut = 'sans_liaison';
+            if (r.eleve_id !== null && r.note === null) statut = 'lie_sans_note';
+            else if (r.eleve_id === null && r.note !== null) statut = 'note_non_lie';
             else if (r.eleve_id !== null && r.note !== null) statut = 'complet';
+
+            // Compatibilité avec l'ancien écran
+            const statutCompat = (statut === 'sans_liaison' || statut === 'lie_sans_note') ? 'sans_note'
+                            : statut === 'complet' ? 'lie'
+                            : statut;
             return {
                 code: r.code, promotion: r.promotion, population: r.population,
-                statut, note: r.note, type_examen: r.type_examen,
+                statut: statutCompat, statut_detail: statut,
+                note: r.note, type_examen: r.type_examen,
                 note_en_attente: r.note_en_attente > 0,
                 liaison_en_attente: r.liaison_en_attente > 0
             };
         });
 
+        const n = (s) => codes.filter(c => c.statut_detail === s).length;
         const compteurs = {
             total: codes.length,
-            sans_liaison: codes.filter(c => c.statut === 'sans_liaison').length,
-            lie_sans_note: codes.filter(c => c.statut === 'lie_sans_note').length,
-            note_non_lie: codes.filter(c => c.statut === 'note_non_lie').length,
-            complet: codes.filter(c => c.statut === 'complet').length
+            // anciens noms
+            sans_note: n('sans_liaison') + n('lie_sans_note'),
+            lie: n('complet'),
+            note_non_lie: n('note_non_lie'),
+            // nouveaux noms
+            sans_liaison: n('sans_liaison'),
+            lie_sans_note: n('lie_sans_note'),
+            complet: n('complet')
         };
 
         res.json({ matiere: matiere.nom_matiere, compteurs, codes });
