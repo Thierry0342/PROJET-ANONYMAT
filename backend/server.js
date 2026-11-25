@@ -6494,7 +6494,7 @@ app.get('/api/copies/validees', authenticateToken, checkRole(ROLES_SAISIE), asyn
                           OR CONCAT(e.prenom, ' ', e.nom) LIKE ?)`;
             params.push(like, like, like, like, like, like);
         }
-        sql += " ORDER BY (c.note_saisie_a IS NULL) ASC, c.note_saisie_a DESC, c.id DESC LIMIT 1000";
+        sql += " ORDER BY (c.note_saisie_a IS NULL) ASC, c.note_saisie_a DESC, c.id DESC LIMIT 31600";
 
         const [rows] = await db.query(sql, params);
         res.json(rows);
