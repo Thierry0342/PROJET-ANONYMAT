@@ -34,20 +34,24 @@ const PreviewModal = ({ codes, onConfirm, onCancel, matiereNom, examenNom, promo
 };
 
 // ═══════════════════════════════════════════════════════════════════
-// Suivi des codes : sans note / noté mais pas lié à un élève / déjà liés
+// État des codes, selon le flux de travail :
+//   1) liaison  : élève + code
+//   2) notation : code + note
 // ═══════════════════════════════════════════════════════════════════
 const ONGLETS_STATUT = [
-    { id: 'sans_note',    label: 'Sans note',                   couleur: '#e53e3e' },
-    { id: 'note_non_lie', label: 'Noté, pas lié à un élève',    couleur: '#dd6b20' },
-    { id: 'lie',          label: 'Déjà liés',                   couleur: '#38a169' }
+    { id: 'sans_liaison',  label: 'Non utilisés (sans élève)', couleur: '#e53e3e' },
+    { id: 'lie_sans_note', label: 'Liés à un élève, sans note', couleur: '#dd6b20' },
+    { id: 'complet',       label: 'Liés + noté',                couleur: '#38a169' },
+    { id: 'note_non_lie',  label: 'Noté sans élève (ancien flux)', couleur: '#718096' }
 ];
 
 const StatutCodesModal = ({ matiereId, matiereNom, promotion, population, populationLabel, onClose }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [erreur, setErreur] = useState('');
-    const [onglet, setOnglet] = useState('sans_note');
+    const [onglet, setOnglet] = useState('sans_liaison');
     const [recherche, setRecherche] = useState('');
+    const [seulementLibres, setSeulementLibres] = useState(false);
 
     const charger = useCallback(async () => {
         setLoading(true); setErreur('');
@@ -68,24 +72,59 @@ const StatutCodesModal = ({ matiereId, matiereNom, promotion, population, popula
 
     useEffect(() => { charger(); }, [charger]);
 
+    // L'onglet « ancien flux » n'apparaît que s'il contient des codes
+    const onglets = useMemo(
+        () => ONGLETS_STATUT.filter(o => o.id !== 'note_non_lie' || (data?.compteurs?.note_non_lie || 0) > 0),
+        [data]
+    );
+
+    // Un code « vraiment libre » = pas de liaison ni de note en attente de validation
+    const estEnAttente = (c) => c.liaison_en_attente || c.note_en_attente;
+
     const codesAffiches = useMemo(() => {
         if (!data) return [];
         const terme = recherche.trim().toLowerCase();
         return data.codes
-            .filter(c => c.statut === onglet)
-            .filter(c => !terme || c.code.toLowerCase().includes(terme));
-    }, [data, onglet, recherche]);
+            .filter(c => c.statut_detail === onglet)
+            .filter(c => !(onglet === 'sans_liaison' && seulementLibres && estEnAttente(c)))
+            .filter(c => {
+                if (!terme) return true;
+                const texte = [c.code, c.eleve_nom, c.eleve_prenom, c.numero_incorporation]
+                    .filter(Boolean).join(' ').toLowerCase();
+                return terme.split(/\s+/).every(mot => texte.includes(mot));
+            });
+    }, [data, onglet, recherche, seulementLibres]);
+
+    const showEleve = onglet === 'lie_sans_note' || onglet === 'complet';
+    const showExamen = onglet !== 'sans_liaison';
+    const showNote = onglet === 'complet' || onglet === 'note_non_lie';
+    const nbColonnes = 3 + (showEleve ? 1 : 0) + (showExamen ? 1 : 0) + (showNote ? 1 : 0);
+
+    const remarque = (c) => {
+        if (onglet === 'sans_liaison') {
+            if (c.liaison_en_attente) return 'Liaison en attente de validation';
+            if (c.note_en_attente) return 'Note en attente (sans liaison)';
+            return '';
+        }
+        if (onglet === 'lie_sans_note' && c.note_en_attente) return 'Note en attente de validation';
+        if (onglet === 'note_non_lie' && c.liaison_en_attente) return 'Liaison en attente de validation';
+        return '';
+    };
 
     const imprimer = () => {
         const titre = ONGLETS_STATUT.find(o => o.id === onglet)?.label;
+        const cases = codesAffiches.map(c => {
+            const nom = c.eleve_nom ? `<div style="font-size:10px;font-family:sans-serif;font-weight:normal">${(c.eleve_nom || '').toUpperCase()} ${c.eleve_prenom || ''}</div>` : '';
+            return `<div class="c">${c.code}${nom}</div>`;
+        }).join('');
         const w = window.open('', '_blank');
-        w.document.write(`<html><head><title>${titre}</title><style>body{font-family:sans-serif;margin:15px}h3,p{text-align:center;margin:5px}.g{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:15px}.c{border:1px solid black;padding:8px 4px;text-align:center;font-family:monospace;font-weight:bold}</style></head><body><h3>${matiereNom} — ${titre}</h3><p>Promo ${promotion} | ${populationLabel} | ${codesAffiches.length} code(s)</p><div class="g">${codesAffiches.map(c => `<div class="c">${c.code}</div>`).join('')}</div></body></html>`);
+        w.document.write(`<html><head><title>${titre}</title><style>body{font-family:sans-serif;margin:15px}h3,p{text-align:center;margin:5px}.g{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:15px}.c{border:1px solid black;padding:8px 4px;text-align:center;font-family:monospace;font-weight:bold}</style></head><body><h3>${matiereNom} — ${titre}</h3><p>Promo ${promotion} | ${populationLabel} | ${codesAffiches.length} code(s)</p><div class="g">${cases}</div></body></html>`);
         w.document.close(); w.print();
     };
 
     return (
         <div className="modal-backdrop">
-            <div className="modal-content" style={{ maxWidth: '900px', width: '95%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="modal-content" style={{ maxWidth: '1000px', width: '95%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                     <div>
                         <h2 style={{ margin: 0 }}>État des codes — {matiereNom}</h2>
@@ -98,7 +137,7 @@ const StatutCodesModal = ({ matiereId, matiereNom, promotion, population, popula
                     <>
                         {/* Onglets */}
                         <div style={{ display: 'flex', gap: '8px', margin: '16px 0 10px', flexWrap: 'wrap' }}>
-                            {ONGLETS_STATUT.map(o => {
+                            {onglets.map(o => {
                                 const actif = onglet === o.id;
                                 return (
                                     <button
@@ -115,24 +154,32 @@ const StatutCodesModal = ({ matiereId, matiereNom, promotion, population, popula
                                             cursor: 'pointer'
                                         }}
                                     >
-                                        {o.label} ({data.compteurs[o.id]})
+                                        {o.label} ({data.compteurs[o.id] ?? 0})
                                     </button>
                                 );
                             })}
                         </div>
 
                         {/* Recherche + impression */}
-                        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', alignItems: 'center' }}>
-                            <div style={{ position: 'relative', flex: 1 }}>
+                        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <div style={{ position: 'relative', flex: 1, minWidth: '220px' }}>
                                 <FiSearch style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#718096' }} />
                                 <input
                                     type="text"
                                     value={recherche}
                                     onChange={e => setRecherche(e.target.value)}
-                                    placeholder="Rechercher un code..."
+                                    placeholder={showEleve ? 'Rechercher un code, un nom, un N°...' : 'Rechercher un code...'}
                                     style={{ width: '100%', padding: '9px 10px 9px 32px', border: '1px solid #cbd5e0', borderRadius: '8px', boxSizing: 'border-box' }}
                                 />
                             </div>
+                            {onglet === 'sans_liaison' && (
+                                <label style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.85rem', fontWeight: 600 }}
+                                       title="Masque les codes dont la liaison ou la note attend déjà une validation">
+                                    <input type="checkbox" checked={seulementLibres}
+                                           onChange={e => setSeulementLibres(e.target.checked)} />
+                                    Seulement les codes totalement libres
+                                </label>
+                            )}
                             <button className="btn-secondary" onClick={imprimer} disabled={codesAffiches.length === 0}>
                                 <FiPrinter /> Imprimer la liste
                             </button>
@@ -143,9 +190,10 @@ const StatutCodesModal = ({ matiereId, matiereNom, promotion, population, popula
                                 <thead style={{ position: 'sticky', top: 0, background: '#f7fafc' }}>
                                     <tr>
                                         <th style={{ textAlign: 'left', padding: '8px' }}>Code</th>
+                                        {showEleve && <th style={{ textAlign: 'left', padding: '8px' }}>Élève</th>}
+                                        {showExamen && <th style={{ textAlign: 'left', padding: '8px' }}>Examen</th>}
+                                        {showNote && <th style={{ textAlign: 'left', padding: '8px' }}>Note</th>}
                                         <th style={{ textAlign: 'left', padding: '8px' }}>Population</th>
-                                        {onglet !== 'sans_note' && <th style={{ textAlign: 'left', padding: '8px' }}>Examen</th>}
-                                        {onglet !== 'sans_note' && <th style={{ textAlign: 'left', padding: '8px' }}>Note</th>}
                                         <th style={{ textAlign: 'left', padding: '8px' }}>Remarque</th>
                                     </tr>
                                 </thead>
@@ -153,18 +201,25 @@ const StatutCodesModal = ({ matiereId, matiereNom, promotion, population, popula
                                     {codesAffiches.map(c => (
                                         <tr key={c.code} style={{ borderTop: '1px solid #edf2f7' }}>
                                             <td style={{ padding: '8px', fontFamily: 'monospace', fontWeight: 700 }}>{c.code}</td>
+                                            {showEleve && (
+                                                <td style={{ padding: '8px' }}>
+                                                    {c.eleve_nom ? (
+                                                        <>
+                                                            {c.eleve_nom.toUpperCase()} {c.eleve_prenom || ''}
+                                                            <small style={{ display: 'block', color: '#666' }}>N° {c.numero_incorporation || '-'}</small>
+                                                        </>
+                                                    ) : <span style={{ color: '#999' }}>—</span>}
+                                                </td>
+                                            )}
+                                            {showExamen && <td style={{ padding: '8px' }}>{c.type_examen || '-'}</td>}
+                                            {showNote && <td style={{ padding: '8px' }}>{c.note != null ? `${c.note} / 20` : '-'}</td>}
                                             <td style={{ padding: '8px' }}>{c.population || '-'}</td>
-                                            {onglet !== 'sans_note' && <td style={{ padding: '8px' }}>{c.type_examen || '-'}</td>}
-                                            {onglet !== 'sans_note' && <td style={{ padding: '8px' }}>{c.note} / 20</td>}
-                                            <td style={{ padding: '8px', fontSize: '0.85rem', color: '#dd6b20' }}>
-                                                {onglet === 'sans_note' && c.note_en_attente && 'Note en attente de validation'}
-                                                {onglet === 'note_non_lie' && c.liaison_en_attente && 'Liaison en attente de validation'}
-                                            </td>
+                                            <td style={{ padding: '8px', fontSize: '0.85rem', color: '#dd6b20' }}>{remarque(c)}</td>
                                         </tr>
                                     ))}
                                     {codesAffiches.length === 0 && (
-                                        <tr><td colSpan="5" style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
-                                            {recherche.trim() ? 'Aucun code trouvé.' : 'Aucun code dans cette catégorie.'}
+                                        <tr><td colSpan={nbColonnes} style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
+                                            {recherche.trim() || seulementLibres ? 'Aucun code trouvé.' : 'Aucun code dans cette catégorie.'}
                                         </td></tr>
                                     )}
                                 </tbody>
@@ -367,7 +422,7 @@ const CreerCodesMatiere = () => {
                         className="btn-secondary"
                         disabled={!selectedMatiere}
                         onClick={() => setIsStatutOpen(true)}
-                        title="Voir les codes sans note, et ceux notés mais pas encore liés à un élève"
+                        title="Voir les codes non utilisés, liés sans note, et déjà notés"
                     >
                         <FiEye /> Voir l'état des codes
                     </button>
