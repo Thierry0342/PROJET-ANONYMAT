@@ -37,13 +37,15 @@ const selectStyle = { padding: '9px 10px', border: '1px solid #cbd5e0', borderRa
 
 // ═══════════════════ Onglet « Validées » ═══════════════════
 const TYPES_VALIDEES = [
-    { id: 'tous',    label: 'Toutes' },
-    { id: 'anonyme', label: 'Code + note (non liées)' },
-    { id: 'lie',     label: 'Code + élève (liées)' },
-    { id: 'directe', label: 'Saisie directe' }
+    { id: 'tous',          label: 'Toutes' },
+    { id: 'anonyme',       label: 'Code + note (non liées)' },
+    { id: 'lie',           label: 'Code + élève (liées)' },
+    { id: 'lie_sans_note', label: 'Code + élève sans note' },
+    { id: 'directe',       label: 'Saisie directe' }
 ];
 
 const typeDe = (r) => (!r.code_anonyme ? 'directe' : r.eleve_id ? 'lie' : 'anonyme');
+const sansNote = (r) => r.note === null || r.note === undefined;
 
 const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
     const [rows, setRows] = useState([]);
@@ -105,7 +107,8 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                     matiereId: matiereId || undefined,
                     typeExamen: examen || undefined,
                     promotion: promotion || undefined,
-                    q: qEnvoye || undefined
+                    q: qEnvoye || undefined,
+                    type: typeFiltre === 'lie_sans_note' ? 'lie_sans_note' : undefined
                 }
             });
             setRows(res.data);
@@ -114,12 +117,16 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
             setRows([]);
             setErreur(e.response?.data?.message || "Impossible de charger les saisies validées.");
         } finally { setLoading(false); }
-    }, [matiereId, examen, qEnvoye, promotion]);
+    }, [matiereId, examen, qEnvoye, promotion, typeFiltre]);
 
     useEffect(() => { charger(); }, [charger]);
 
     const affichees = useMemo(
-        () => rows.filter(r => typeFiltre === 'tous' || typeDe(r) === typeFiltre),
+        () => rows.filter(r => {
+            if (typeFiltre === 'tous') return true;
+            if (typeFiltre === 'lie_sans_note') return typeDe(r) === 'lie' && sansNote(r);
+            return typeDe(r) === typeFiltre;
+        }),
         [rows, typeFiltre]
     );
 
@@ -150,14 +157,17 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
     };
 
     const delier = async (r) => {
-        if (!window.confirm(`Retirer seulement la liaison entre le code ${r.code_anonyme} et l'élève ? La note est conservée.`)) return;
+        const msg = sansNote(r)
+            ? `Retirer la liaison entre le code ${r.code_anonyme} et l'élève ?`
+            : `Retirer seulement la liaison entre le code ${r.code_anonyme} et l'élève ? La note est conservée.`;
+        if (!window.confirm(msg)) return;
         try {
             await axios.delete(`/api/copies/delier/${r.copie_id}`, cfg());
             charger();
         } catch (e) { alert(e.response?.data?.message || 'Erreur lors de la déliaison.'); }
     };
 
-    const ouvrirRenvoi = (r) => setRenvoi({ r, cible: 'note', motif: '' });
+    const ouvrirRenvoi = (r) => setRenvoi({ r, cible: sansNote(r) ? 'liaison' : 'note', motif: '' });
 
     const confirmerRenvoi = async () => {
         if (!renvoi.motif.trim()) { alert('Le motif du renvoi est obligatoire.'); return; }
@@ -212,7 +222,7 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                 </select>
 
                 <span style={{ fontSize: '0.85rem', color: '#4a5568' }}>
-                    {affichees.length} résultat(s){rows.length >= 300 ? ' (300 max, affinez la recherche)' : ''}
+                    {affichees.length} résultat(s){rows.length >= 1000 ? ' (1000 max, affinez la recherche)' : ''}
                 </span>
             </div>
 
@@ -261,7 +271,9 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                                                            onChange={e => setEditMotif(e.target.value)}
                                                            style={{ width: '150px' }} />
                                                 </div>
-                                            ) : `${parseFloat(r.note).toFixed(2)} / 20`}
+                                            ) : sansNote(r)
+                                                ? <em style={{ color: '#718096' }}>— pas de note —</em>
+                                                : `${parseFloat(r.note).toFixed(2)} / 20`}
                                         </td>
                                         <td>{r.saisi_par || '—'}</td>
                                         <td>{r.note_saisie_a ? new Date(r.note_saisie_a).toLocaleString('fr-FR') : '—'}</td>
@@ -276,18 +288,21 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                                                     </>
                                                 ) : (
                                                     <>
-                                                        {canModifier && (
+                                                        {canModifier && !sansNote(r) && (
                                                             <button className="btn-icon" title="Modifier la note"
                                                                     onClick={() => ouvrirEdition(r)}><FiEdit2 /></button>
                                                         )}
                                                         <button className="btn-icon" title="Renvoyer à l'opérateur pour vérification"
                                                                 onClick={() => ouvrirRenvoi(r)}><FiSend /></button>
                                                         {typeDe(r) === 'lie' && (
-                                                            <button className="btn-icon" title="Retirer la liaison (garde la note)"
+                                                            <button className="btn-icon"
+                                                                    title={sansNote(r) ? 'Retirer la liaison' : 'Retirer la liaison (garde la note)'}
                                                                     onClick={() => delier(r)}><FiLink2 /></button>
                                                         )}
-                                                        <button className="btn-icon delete" title="Supprimer la note"
-                                                                onClick={() => supprimer(r)}><FiXCircle /></button>
+                                                        {!sansNote(r) && (
+                                                            <button className="btn-icon delete" title="Supprimer la note"
+                                                                    onClick={() => supprimer(r)}><FiXCircle /></button>
+                                                        )}
                                                     </>
                                                 )}
                                             </td>
@@ -315,15 +330,18 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                         <p style={{ fontSize: '0.9rem', color: '#4a5568' }}>
                             {renvoi.r.code_anonyme ? <>Code <strong>{renvoi.r.code_anonyme}</strong></> : 'Saisie directe'}
                             {renvoi.r.nom ? <> — {renvoi.r.nom.toUpperCase()} {renvoi.r.prenom || ''}</> : null}
-                            {' '}· {renvoi.r.nom_matiere} · note {parseFloat(renvoi.r.note).toFixed(2)}
+                            {' '}· {renvoi.r.nom_matiere}
+                            {!sansNote(renvoi.r) && <> · note {parseFloat(renvoi.r.note).toFixed(2)}</>}
                         </p>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
-                            <label>
-                                <input type="radio" checked={renvoi.cible === 'note'}
-                                       onChange={() => setRenvoi({ ...renvoi, cible: 'note' })} />
-                                {' '}{renvoi.r.code_anonyme ? 'Code + note' : 'La note'}
-                            </label>
+                            {!sansNote(renvoi.r) && (
+                                <label>
+                                    <input type="radio" checked={renvoi.cible === 'note'}
+                                           onChange={() => setRenvoi({ ...renvoi, cible: 'note' })} />
+                                    {' '}{renvoi.r.code_anonyme ? 'Code + note' : 'La note'}
+                                </label>
+                            )}
                             {typeDe(renvoi.r) === 'lie' && (
                                 <>
                                     <label>
@@ -331,11 +349,13 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                                                onChange={() => setRenvoi({ ...renvoi, cible: 'liaison' })} />
                                         {' '}Code + nom (liaison)
                                     </label>
-                                    <label>
-                                        <input type="radio" checked={renvoi.cible === 'les_deux'}
-                                               onChange={() => setRenvoi({ ...renvoi, cible: 'les_deux' })} />
-                                        {' '}Les deux
-                                    </label>
+                                    {!sansNote(renvoi.r) && (
+                                        <label>
+                                            <input type="radio" checked={renvoi.cible === 'les_deux'}
+                                                   onChange={() => setRenvoi({ ...renvoi, cible: 'les_deux' })} />
+                                            {' '}Les deux
+                                        </label>
+                                    )}
                                 </>
                             )}
                         </div>

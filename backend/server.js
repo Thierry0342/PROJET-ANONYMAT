@@ -6454,19 +6454,22 @@ app.get('/api/stats/saisie-contexte', authenticateToken, checkRole(ROLES_SAISIE)
 // ═══════ Saisies déjà validées (table copies) ═══════
 app.get('/api/copies/validees', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
     try {
-        const { matiereId, typeExamen, q, promotion } = req.query;
+        const { matiereId, typeExamen, q, promotion, type } = req.query;
         let sql = `
             SELECT c.id AS copie_id, c.code_anonyme, c.note, c.type_examen, c.matiere_id,
                 m.nom_matiere, c.eleve_id,
                 e.nom, e.prenom, e.numero_incorporation, e.escadron, e.peloton,
                 COALESCE(e.promotion, cad.promotion) AS promotion,
-                c.note_saisie_a, u.nom_utilisateur AS saisi_par
+                c.note_saisie_a,
+                COALESCE(u.nom_utilisateur, u2.nom_utilisateur) AS saisi_par
             FROM copies c
             JOIN matieres m ON c.matiere_id = m.id
             LEFT JOIN eleves e ON c.eleve_id = e.id
             LEFT JOIN codes_anonymes_disponibles cad ON cad.code = c.code_anonyme
-            LEFT JOIN utilisateurs u ON c.note_saisie_par_utilisateur_id = u.id
-            WHERE c.note IS NOT NULL
+            LEFT JOIN utilisateurs u  ON c.note_saisie_par_utilisateur_id = u.id
+            LEFT JOIN utilisateurs u2 ON c.cree_par_utilisateur_id = u2.id
+            WHERE (c.note IS NOT NULL
+                   OR (c.code_anonyme IS NOT NULL AND c.eleve_id IS NOT NULL))
         `;
         const params = [];
 
@@ -6474,6 +6477,9 @@ app.get('/api/copies/validees', authenticateToken, checkRole(ROLES_SAISIE), asyn
         if (estOperateur(req.user)) {
             sql += " AND (c.note_saisie_par_utilisateur_id = ? OR c.cree_par_utilisateur_id = ?)";
             params.push(req.user.id, req.user.id);
+        }
+        if (type === 'lie_sans_note') {
+            sql += " AND c.note IS NULL AND c.code_anonyme IS NOT NULL AND c.eleve_id IS NOT NULL";
         }
         if (matiereId) { sql += " AND c.matiere_id = ?"; params.push(matiereId); }
         if (typeExamen) { sql += " AND c.type_examen = ?"; params.push(typeExamen); }
@@ -6488,7 +6494,7 @@ app.get('/api/copies/validees', authenticateToken, checkRole(ROLES_SAISIE), asyn
                           OR CONCAT(e.prenom, ' ', e.nom) LIKE ?)`;
             params.push(like, like, like, like, like, like);
         }
-        sql += " ORDER BY c.note_saisie_a DESC, c.id DESC LIMIT 300";
+        sql += " ORDER BY (c.note_saisie_a IS NULL) ASC, c.note_saisie_a DESC, c.id DESC LIMIT 1000";
 
         const [rows] = await db.query(sql, params);
         res.json(rows);
@@ -6516,10 +6522,15 @@ app.post('/api/copies/:copieId/renvoyer-verification', authenticateToken, checkR
         await connection.beginTransaction();
 
         const [[copie]] = await connection.query("SELECT * FROM copies WHERE id = ? FOR UPDATE", [copieId]);
-        if (!copie || copie.note === null) {
-            await connection.rollback();
-            return res.status(404).json({ message: "Saisie validée introuvable." });
-        }
+const estLiaisonSansNote = copie && copie.note === null && copie.code_anonyme && copie.eleve_id;
+if (!copie || (copie.note === null && !estLiaisonSansNote)) {
+    await connection.rollback();
+    return res.status(404).json({ message: "Saisie validée introuvable." });
+}
+if (copie.note === null && cible !== 'liaison') {
+    await connection.rollback();
+    return res.status(400).json({ message: "Cette saisie n'a pas de note : seule la liaison peut être renvoyée." });
+}
 
         const veutNote = cible !== 'liaison';
         const veutLiaison = cible !== 'note';
