@@ -64,6 +64,8 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
     const [editMotif, setEditMotif] = useState('');
     const [busy, setBusy] = useState(false);
     const [renvoi, setRenvoi] = useState(null); // { r, cible, motif }
+    const [page, setPage] = useState(1);
+    const [taillePage, setTaillePage] = useState(50);
 
     const cfg = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
 
@@ -129,6 +131,28 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
         }),
         [rows, typeFiltre]
     );
+
+    // ── Pagination (côté client : toutes les lignes sont chargées) ──
+    const totalPages = Math.max(1, Math.ceil(affichees.length / taillePage));
+    const pageCourante = Math.min(page, totalPages);
+    const debut = (pageCourante - 1) * taillePage;
+    const lignesPage = useMemo(
+        () => affichees.slice(debut, debut + taillePage),
+        [affichees, debut, taillePage]
+    );
+
+    // Retour à la page 1 quand les données ou les filtres changent
+    useEffect(() => { setPage(1); }, [rows, typeFiltre, taillePage]);
+
+    // Liste de pages à afficher : 1 … 4 5 [6] 7 8 … 20
+    const pagesVisibles = useMemo(() => {
+        const liste = [];
+        for (let i = 1; i <= totalPages; i++) {
+            if (i === 1 || i === totalPages || Math.abs(i - pageCourante) <= 2) liste.push(i);
+            else if (liste[liste.length - 1] !== '…') liste.push('…');
+        }
+        return liste;
+    }, [totalPages, pageCourante]);
 
     const ouvrirEdition = (r) => { setEditId(r.copie_id); setEditNote(String(r.note)); setEditMotif(''); };
 
@@ -222,7 +246,7 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                 </select>
 
                 <span style={{ fontSize: '0.85rem', color: '#4a5568' }}>
-                    {affichees.length} résultat(s){rows.length >= 1000 ? ' (1000 max, affinez la recherche)' : ''}
+                    {affichees.length} résultat(s)
                 </span>
             </div>
 
@@ -244,7 +268,7 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                             </tr>
                         </thead>
                         <tbody>
-                            {affichees.map(r => {
+                            {lignesPage.map(r => {
                                 const enEdition = editId === r.copie_id;
                                 return (
                                     <tr key={r.copie_id}>
@@ -317,6 +341,48 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                             )}
                         </tbody>
                     </table>
+                </div>
+            )}
+
+            {/* ── Pagination ── */}
+            {!loading && affichees.length > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginTop: '12px' }}>
+                    <span style={{ fontSize: '0.85rem', color: '#4a5568' }}>
+                        {debut + 1}–{Math.min(debut + taillePage, affichees.length)} sur {affichees.length}
+                    </span>
+
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button type="button" disabled={pageCourante === 1} onClick={() => setPage(pageCourante - 1)}
+                                style={{ padding: '6px 10px', border: '1px solid #cbd5e0', borderRadius: '6px', background: '#fff', cursor: pageCourante === 1 ? 'not-allowed' : 'pointer', opacity: pageCourante === 1 ? 0.5 : 1 }}>
+                            ‹ Précédent
+                        </button>
+                        {pagesVisibles.map((p, i) => p === '…' ? (
+                            <span key={`e${i}`} style={{ padding: '0 4px', color: '#718096' }}>…</span>
+                        ) : (
+                            <button key={p} type="button" onClick={() => setPage(p)}
+                                    style={{
+                                        minWidth: '34px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer',
+                                        border: '1px solid ' + (p === pageCourante ? '#2c5282' : '#cbd5e0'),
+                                        background: p === pageCourante ? '#2c5282' : '#fff',
+                                        color: p === pageCourante ? '#fff' : '#4a5568',
+                                        fontWeight: p === pageCourante ? 700 : 500
+                                    }}>
+                                {p}
+                            </button>
+                        ))}
+                        <button type="button" disabled={pageCourante === totalPages} onClick={() => setPage(pageCourante + 1)}
+                                style={{ padding: '6px 10px', border: '1px solid #cbd5e0', borderRadius: '6px', background: '#fff', cursor: pageCourante === totalPages ? 'not-allowed' : 'pointer', opacity: pageCourante === totalPages ? 0.5 : 1 }}>
+                            Suivant ›
+                        </button>
+                    </div>
+
+                    <label style={{ fontSize: '0.85rem', color: '#4a5568', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Lignes par page
+                        <select value={taillePage} onChange={e => setTaillePage(Number(e.target.value))}
+                                style={{ ...selectStyle, padding: '5px 8px' }}>
+                            {[25, 50, 100, 200].map(n => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                    </label>
                 </div>
             )}
 
