@@ -5,7 +5,10 @@ import {
 } from 'react-icons/fa';
 import './PaquetPanel.css';
 
-const messageErreur = (e) => e.response?.data?.message || 'Erreur';
+// Taille maximale d'un paquet (doit rester identique à MAX_PAQUET dans usePaquet.js)
+const MAX_PAQUET = 20;
+
+const messageErreur = (e) => e.response?.data?.message || e.message || 'Erreur';
 
 // ── Démarrage / progression du paquet ────────────────────────────────────────
 export default function PaquetProgress({ type, paquetCtl, contexte, peutDemarrer, onModifie }) {
@@ -19,7 +22,10 @@ export default function PaquetProgress({ type, paquetCtl, contexte, peutDemarrer
 
     const handleDemarrer = async () => {
         const n = parseInt(total, 10);
-        if (isNaN(n) || n < 1 || n > 500) { setErreur('Indiquez un nombre de copies entre 1 et 500.'); return; }
+        if (isNaN(n) || n < 1 || n > MAX_PAQUET) {
+            setErreur(`Indiquez un nombre de copies entre 1 et ${MAX_PAQUET}.`);
+            return;
+        }
         setErreur(''); setBusy(true);
         try {
             await demarrer({ ...contexte, total: n });
@@ -37,14 +43,19 @@ export default function PaquetProgress({ type, paquetCtl, contexte, peutDemarrer
                     <span className="paquet-required">Obligatoire</span>
                 </div>
                 <p className="paquet-hint">
-                    Indiquez le nombre de copies du paquet avant de commencer. Vos saisies resteront dans votre
+                    Indiquez le nombre de copies du paquet (maximum {MAX_PAQUET}) avant de commencer. Vos saisies resteront dans votre
                     liste d'attente (à vérifier) jusqu'à l'envoi en validation.
                 </p>
                 <div className="paquet-start">
                     <input
-                        type="number" min="1" max="500" placeholder="Nombre de copies"
+                        type="number" min="1" max={MAX_PAQUET} placeholder={`Nombre de copies (max ${MAX_PAQUET})`}
                         value={total}
-                        onChange={e => setTotal(e.target.value)}
+                        onChange={e => {
+                            // Empêche de dépasser le maximum dès la frappe
+                            const v = e.target.value;
+                            if (v !== '' && parseInt(v, 10) > MAX_PAQUET) { setTotal(String(MAX_PAQUET)); return; }
+                            setTotal(v);
+                        }}
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleDemarrer(); } }}
                     />
                     <button className="btn btn-primary" onClick={handleDemarrer} disabled={!peutDemarrer || busy}>
@@ -128,7 +139,10 @@ export default function PaquetProgress({ type, paquetCtl, contexte, peutDemarrer
 
 // ── Liste d'attente : bouton flottant + vérification une par une ─────────────
 export function PaquetListe({ type, paquetCtl, onModifie }) {
-    const { paquet, modifierLigne, supprimerLigne, verifies, marquerVerifie, nonVerifiees, toutVerifie } = paquetCtl;
+    const {
+        paquet, modifierLigne, supprimerLigne, verifies, marquerVerifie,
+        nonVerifiees, toutVerifie, attenteVerif
+    } = paquetCtl;
     const [open, setOpen] = useState(false);
     const [index, setIndex] = useState(0);
     const [editing, setEditing] = useState(false);
@@ -156,7 +170,10 @@ export function PaquetListe({ type, paquetCtl, onModifie }) {
 
     const valider = () => {
         if (!l) return;
-        marquerVerifie(l.id);
+        // 2 secondes minimum entre deux vérifications
+        if (attenteVerif) return;
+        const ok = marquerVerifie(l.id);
+        if (!ok) return;
         const dejaOuIci = (x) => verifies.includes(x.id) || x.id === l.id;
         const suivante = lignes.findIndex((x, k) => k > i && !dejaOuIci(x));
         const premiere = lignes.findIndex(x => !dejaOuIci(x));
@@ -183,6 +200,12 @@ export function PaquetListe({ type, paquetCtl, onModifie }) {
             onModifie && onModifie();
         } catch (e) { setErreur(messageErreur(e)); }
     };
+
+    const libelleValider = estVerifiee
+        ? 'Déjà validée'
+        : attenteVerif
+            ? 'Patientez 2 s...'
+            : (nonVerifiees > 1 ? 'Valider et suivant' : 'Valider');
 
     return (
         <>
@@ -279,8 +302,8 @@ export function PaquetListe({ type, paquetCtl, onModifie }) {
                                     ) : (
                                         <>
                                             <button type="button" className="btn btn-primary" onClick={valider}
-                                                disabled={estVerifiee && toutVerifie}>
-                                                <FaCheck /> {estVerifiee ? 'Déjà validée' : (nonVerifiees > 1 ? 'Valider et suivant' : 'Valider')}
+                                                disabled={attenteVerif || (estVerifiee && toutVerifie)}>
+                                                <FaCheck /> {libelleValider}
                                             </button>
                                             {type === 'note' && (
                                                 <button type="button" className="btn btn-secondary"

@@ -30,9 +30,6 @@ function NoterCopie() {
     const [codeValidation, setCodeValidation] = useState({ status: 'idle', message: '' });
     const [submitMessage, setSubmitMessage] = useState('');
     const [isSubmitError, setIsSubmitError] = useState(false);
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [mesSaisies, setMesSaisies] = useState([]);
-    const [isLoadingModal, setIsLoadingModal] = useState(false);
     const [notification, setNotification] = useState('');
     const [conflictData, setConflictData] = useState(null);
     const [isAdmin, setIsAdmin] = useState(false);
@@ -73,7 +70,7 @@ function NoterCopie() {
 
     const tourSteps = [
         { target: '.compteurs-grid', content: "Bienvenue ! Ces compteurs affichent les notes restantes pour la matière sélectionnée, celles déjà saisies, et le total de vos propres saisies.", placement: 'bottom' },
-        { target: '.vos-saisies-box', content: "Cliquez ici pour voir la liste de vos 100 dernières saisies de notes.", placement: 'top' },
+        { target: '.vos-saisies-box', content: "Ce compteur indique le total de vos propres saisies de notes.", placement: 'top' },
         { target: '.noter-copie-form', content: "Ce formulaire est votre principal outil.", placement: 'top' },
         { target: '#matiere-select', content: "Commencez par choisir la matière.", placement: 'bottom' },
         { target: '#code-input', content: "Entrez les chiffres du code anonyme ici.", placement: 'bottom' },
@@ -381,15 +378,6 @@ function NoterCopie() {
         } catch (error) { setIsSubmitError(true); }
     };
 
-    const handleOpenMesSaisiesModal = async () => {
-        setIsModalOpen(true); setIsLoadingModal(true);
-        try {
-            const res = await axios.get(`${API_BASE_URL}/api/copies/mes-saisies-notes`, getAuthHeaders());
-            setMesSaisies(res.data);
-        } catch (error) { console.error(error); }
-        finally { setIsLoadingModal(false); }
-    };
-
     const handleFetchDetails = async (reclamation) => {
         setSelectedReclamation(reclamation);
         const matiere = matieres.find(m => m.nom_matiere === reclamation.nom_matiere);
@@ -505,7 +493,8 @@ function NoterCopie() {
             <div className="compteurs-grid">
                 <div className="stat-box large"><span className="stat-label">Notes Restantes</span><Counter value={stats.manquantes} places={[1000, 100, 10, 1]} fontSize={56} /></div>
                 <div className="stat-box"><span className="stat-label">Notes Déjà Saisies</span><Counter value={stats.deja} places={[1000, 100, 10, 1]} fontSize={48} /></div>
-                <div className="stat-box clickable vos-saisies-box" onClick={handleOpenMesSaisiesModal}><span className="stat-label">Vos Saisies (Examen)</span><Counter value={stats.mesSaisies} places={[1000, 100, 10, 1]} fontSize={48} /></div>
+                {/* Non cliquable : la liste « Mes saisies » ne peut plus être ouverte */}
+                <div className="stat-box vos-saisies-box"><span className="stat-label">Vos Saisies (Examen)</span><Counter value={stats.mesSaisies} places={[1000, 100, 10, 1]} fontSize={48} /></div>
                 {isAdmin && (<div className="notification-bell" onClick={() => setIsReclamationModalOpen(true)}><FaBell size={32} />{reclamations.length > 0 && (<span className="notification-badge">{reclamations.length}</span>)}</div>)}
             </div>
 
@@ -660,21 +649,6 @@ function NoterCopie() {
             </div>
 
             <PaquetListe type="note" paquetCtl={paquetCtl} onModifie={fetchStats} />
-
-            {isModalOpen && (
-                <div className="modal-overlay">
-                    <div className="modal-content">
-                        <h2>Mes Saisies</h2>
-                        {isLoadingModal ? <p>...</p> : (
-                            <table>
-                                <thead><tr><th>Matière</th><th>Code</th><th>Note</th></tr></thead>
-                                <tbody>{mesSaisies.map(s => (<tr key={s.id}><td>{s.nom_matiere}</td><td>{s.code_anonyme}</td><td>{s.note}</td></tr>))}</tbody>
-                            </table>
-                        )}
-                        <button onClick={() => setIsModalOpen(false)}>Fermer</button>
-                    </div>
-                </div>
-            )}
 
             {isMilestoneModalOpen && (
                 <div className="modal-overlay">

@@ -6175,9 +6175,11 @@ app.post('/api/paquets', authenticateToken, checkRole(ROLES_SAISIE), async (req,
         const type = type_saisie === 'liaison' ? 'liaison' : 'note';
         if (!peutSaisir(req.user, type)) return res.status(403).json({ message: "Permissions insuffisantes." });
 
+       const MAX_PAQUET = 20;
+
         const totalNum = parseInt(total, 10);
-        if (!type_examen || !matiere_id || isNaN(totalNum) || totalNum < 1 || totalNum > 500) {
-            return res.status(400).json({ message: "Promotion, examen, matière et un nombre de copies entre 1 et 500 sont requis." });
+        if (!type_examen || !matiere_id || isNaN(totalNum) || totalNum < 1 || totalNum > MAX_PAQUET) {
+            return res.status(400).json({ message: `Promotion, examen, matière et un nombre de copies entre 1 et ${MAX_PAQUET} sont requis.` });
         }
         const [existant] = await db.query(
             "SELECT id FROM paquets_saisie WHERE utilisateur_id = ? AND type_saisie = ? AND statut = 'en_cours'", [req.user.id, type]);
