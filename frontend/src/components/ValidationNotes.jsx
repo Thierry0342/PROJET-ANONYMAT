@@ -41,14 +41,18 @@ const TYPES_VALIDEES = [
     { id: 'anonyme',       label: 'Code + note (non liées)' },
     { id: 'lie',           label: 'Code + élève (liées)' },
     { id: 'lie_sans_note', label: 'Code + élève sans note' },
+    { id: 'non_lie',       label: 'Élèves non liés à un code' },
     { id: 'directe',       label: 'Saisie directe' }
 ];
 
-const typeDe = (r) => (!r.code_anonyme ? 'directe' : r.eleve_id ? 'lie' : 'anonyme');
+const typeDe = (r) => (r.non_lie_eleve
+    ? 'non_lie'
+    : (!r.code_anonyme ? 'directe' : r.eleve_id ? 'lie' : 'anonyme'));
 const sansNote = (r) => r.note === null || r.note === undefined;
 
 const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
     const [rows, setRows] = useState([]);
+    const [nonLies, setNonLies] = useState([]);
     const [matieres, setMatieres] = useState([]);
     const [examens, setExamens] = useState([]);
     const [matieresExamen, setMatieresExamen] = useState(null);
@@ -114,23 +118,55 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                 }
             });
             setRows(res.data);
+
+            // Élèves non liés à un code : uniquement si un examen ET une matière sont choisis
+            if (examen && matiereId) {
+                const r2 = await axios.get('/api/copies/eleves-non-lies', {
+                    ...cfg(),
+                    params: {
+                        matiereId,
+                        typeExamen: examen,
+                        promotion: promotion || undefined,
+                        q: qEnvoye || undefined
+                    }
+                });
+                const nomMatiere = (matieresExamen ?? matieres)
+                    .find(m => String(m.id) === String(matiereId))?.nom_matiere || '';
+                setNonLies((r2.data || []).map(e => ({
+                    ...e,
+                    copie_id: `nl-${e.eleve_id}`,
+                    non_lie_eleve: true,
+                    code_anonyme: null,
+                    note: null,
+                    type_examen: examen,
+                    nom_matiere: nomMatiere,
+                    saisi_par: null,
+                    note_saisie_a: null
+                })));
+            } else {
+                setNonLies([]);
+            }
+
             setEditId(null);
         } catch (e) {
             setRows([]);
+            setNonLies([]);
             setErreur(e.response?.data?.message || "Impossible de charger les saisies validées.");
         } finally { setLoading(false); }
-    }, [matiereId, examen, qEnvoye, promotion, typeFiltre]);
+    }, [matiereId, examen, qEnvoye, promotion, typeFiltre, matieresExamen, matieres]);
 
     useEffect(() => { charger(); }, [charger]);
 
-    const affichees = useMemo(
-        () => rows.filter(r => {
+    const affichees = useMemo(() => {
+        const base = rows.filter(r => {
             if (typeFiltre === 'tous') return true;
+            if (typeFiltre === 'non_lie') return false;
             if (typeFiltre === 'lie_sans_note') return typeDe(r) === 'lie' && sansNote(r);
             return typeDe(r) === typeFiltre;
-        }),
-        [rows, typeFiltre]
-    );
+        });
+        const ajout = (typeFiltre === 'tous' || typeFiltre === 'non_lie') ? nonLies : [];
+        return [...base, ...ajout];
+    }, [rows, nonLies, typeFiltre]);
 
     // ── Pagination (côté client : toutes les lignes sont chargées) ──
     const totalPages = Math.max(1, Math.ceil(affichees.length / taillePage));
@@ -142,7 +178,7 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
     );
 
     // Retour à la page 1 quand les données ou les filtres changent
-    useEffect(() => { setPage(1); }, [rows, typeFiltre, taillePage]);
+    useEffect(() => { setPage(1); }, [rows, nonLies, typeFiltre, taillePage]);
 
     // Liste de pages à afficher : 1 … 4 5 [6] 7 8 … 20
     const pagesVisibles = useMemo(() => {
@@ -250,6 +286,12 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                 </span>
             </div>
 
+            {(typeFiltre === 'non_lie' && !(examen && matiereId)) && (
+                <div style={{ color: '#d69e2e', fontWeight: 600, marginBottom: '10px', fontSize: '0.9rem' }}>
+                    Sélectionnez un examen et une matière pour afficher les élèves non liés à un code.
+                </div>
+            )}
+
             {erreur && <div style={{ color: '#dc3545', fontWeight: 600, marginBottom: '10px' }}>{erreur}</div>}
 
             {loading ? <p>Chargement...</p> : (
@@ -295,13 +337,16 @@ const ValideesPanel = ({ canModifier, canAgir, promotion, onChange }) => {
                                                            onChange={e => setEditMotif(e.target.value)}
                                                            style={{ width: '150px' }} />
                                                 </div>
-                                            ) : sansNote(r)
+                                            ) : r.non_lie_eleve
+                                                ? <em style={{ color: '#d69e2e' }}>— non lié à un code —</em>
+                                            : sansNote(r)
                                                 ? <em style={{ color: '#718096' }}>— pas de note —</em>
                                                 : `${parseFloat(r.note).toFixed(2)} / 20`}
                                         </td>
                                         <td>{r.saisi_par || '—'}</td>
                                         <td>{r.note_saisie_a ? new Date(r.note_saisie_a).toLocaleString('fr-FR') : '—'}</td>
-                                        {canAgir && (
+                                        {canAgir && r.non_lie_eleve && <td></td>}
+                                        {canAgir && !r.non_lie_eleve && (
                                             <td style={{ display: 'flex', gap: '6px' }}>
                                                 {enEdition ? (
                                                     <>

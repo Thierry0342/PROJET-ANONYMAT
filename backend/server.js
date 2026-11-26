@@ -6195,6 +6195,42 @@ app.post('/api/paquets', authenticateToken, checkRole(ROLES_SAISIE), async (req,
         res.status(500).json({ message: "Erreur lors de la création du paquet." });
     }
 });
+// Élèves sans liaison de code (ni note) pour un examen + une matière
+app.get('/api/copies/eleves-non-lies', authenticateToken, checkRole(['admin', 'controleur']), async (req, res) => {
+    try {
+        const { matiereId, typeExamen, promotion, q } = req.query;
+        if (!matiereId || !typeExamen) return res.json([]);
+
+        let sql = `
+            SELECT e.id AS eleve_id, e.nom, e.prenom, e.numero_incorporation,
+                   e.escadron, e.peloton, e.promotion
+            FROM eleves e
+            WHERE NOT EXISTS (
+                    SELECT 1 FROM copies c
+                    WHERE c.eleve_id = e.id AND c.matiere_id = ? AND c.type_examen = ?
+                      AND (c.note IS NOT NULL OR c.code_anonyme IS NOT NULL))
+              AND NOT EXISTS (
+                    SELECT 1 FROM absences a
+                    WHERE a.eleve_id = e.id AND a.matiere_id = ?)
+        `;
+        const params = [matiereId, typeExamen, matiereId];
+
+        if (promotion && promotion !== 'all') { sql += " AND e.promotion = ?"; params.push(promotion); }
+        if (q && q.trim()) {
+            const like = `%${q.trim()}%`;
+            sql += ` AND (e.nom LIKE ? OR e.prenom LIKE ? OR e.numero_incorporation LIKE ?
+                          OR CONCAT(e.nom,' ',e.prenom) LIKE ? OR CONCAT(e.prenom,' ',e.nom) LIKE ?)`;
+            params.push(like, like, like, like, like);
+        }
+        sql += " ORDER BY e.escadron, e.peloton, CAST(e.numero_incorporation AS UNSIGNED) ASC";
+
+        const [rows] = await db.query(sql, params);
+        res.json(rows);
+    } catch (err) {
+        console.error("Erreur GET /api/copies/eleves-non-lies:", err);
+        res.status(500).json({ message: "Erreur lors de la récupération des élèves non liés." });
+    }
+});
 
 // Ajouter une saisie dans la liste d'attente du paquet
 app.post('/api/paquets/:id/lignes', authenticateToken, checkRole(ROLES_SAISIE), async (req, res) => {
