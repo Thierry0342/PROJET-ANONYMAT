@@ -673,7 +673,7 @@ app.put('/api/eleves/:id', authenticateToken, checkRole(['admin', 'controleur'])
     }
 });
 
-app.delete('/api/eleves/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
+app.delete('/api/eleves/:id', authenticateToken, checkRole(['controleur']), async (req, res) => {
     try {
         const { id } = req.params;
         const [eleves] = await db.query("SELECT nom, prenom, numero_incorporation FROM eleves WHERE id = ?", [id]);
